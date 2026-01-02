@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.env
+.venv
+
+# Logs
+logs/
+*.log
+
+# Certs & Secrets
+certs/
+*.pem
+*.key
+
+# VS Code
+.vscode/

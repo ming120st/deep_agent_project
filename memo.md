@@ -1,0 +1,1 @@
+uvicorn src.core:app --host 0.0.0.0 --port 80 --ssl-keyfile=certs/privKey.pem --ssl-certfile=certs/cert.pem
