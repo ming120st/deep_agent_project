@@ -37,7 +37,7 @@ def send_real_response(space_name: str, user_message: str, thread_name: str = No
         # 일반 def 함수이므로 time.sleep을 써도 FastAPI 메인 스레드를 블로킹하지 않아!
         time.sleep(1.5) 
 
-        real_response = f"처리된 답변: {user_message}"
+        real_response = f"echo: {user_message}"
         body = {"text": real_response}
         
         # 3. 스레드 정보가 있으면 유저가 말 건 스레드에 그대로 답장하도록 설정
