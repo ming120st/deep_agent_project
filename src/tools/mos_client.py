@@ -3,8 +3,8 @@ import hashlib
 import requests
 from datetime import datetime, timezone
 from typing import List, Dict
-from logger import logger
-
+from dotenv import load_dotenv
+import os
 
 class DeviceDayUsageClient:
     def __init__(
@@ -114,21 +114,19 @@ class DeviceDayUsageClient:
     def get_usage_by_date_range(
         self,
         imeis: List[str],
-        start_yyyymmdd: str,
-        end_yyyymmdd: str,
+        start_yyyymmdd: str, #"yyyymmdd"
+        end_yyyymmdd: str, #"yyyymmdd"
         goods_id: int = None,
-    ) -> Dict[str, Dict[str, float]]:
+    ) -> str:
         """
         반환 형태:
-        {
-          "imei1": {
-              "20240314": 0.458,
-              "20240315": 11.219
-          },
-          "imei2": {
-              ...
-          }
-        }
+        (String)
+        [일자별 데이터 사용량 조회 결과]
+        
+        기기번호(ICCID/IMEI): 866837042039311
+          - 2025-11-30: 0.0 MB
+          - 2025-12-01: 0.5 MB
+        ...
         """
 
         months = self._month_range(start_yyyymmdd, end_yyyymmdd)
@@ -145,26 +143,53 @@ class DeviceDayUsageClient:
                     )
                     result[imei].update(filtered)
 
-        return result
+        # 결과 포맷팅
+        lines = ["[일자별 데이터 사용량 조회 결과]"]
+        for imei, daily_usage in result.items():
+            lines.append(f"\n기기번호(ICCID/IMEI): {imei}")
+            if not daily_usage:
+                lines.append("  (조회된 데이터가 없습니다.)")
+                continue
+
+            sorted_dates = sorted(daily_usage.keys())
+            for date_str in sorted_dates:
+                # 20251130 -> 2025-11-30 변환
+                formatted_date = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:]}"
+                usage_mb = daily_usage[date_str]
+                lines.append(f"  - {formatted_date}: {usage_mb} MB")
+
+        return "\n".join(lines)
+
+load_dotenv()
+mos_client = DeviceDayUsageClient(
+    base_url=os.getenv("MOS_BASE_URL"),
+    channel_id=os.getenv("MOS_CHANNEL_ID"),
+    channel_secret=os.getenv("MOS_CHANNEL_SECRET"),
+)
+
+
+# -----------------------
+# 테스트 코드
+# -----------------------
 
 if __name__ == "__main__":
     # 간단 테스트
     client = DeviceDayUsageClient(
-        base_url="http://macaroon-app.dev.vipwifi.com/",
-        channel_id="macaroon",
-        channel_secret="5EA7404608E801AC1921661BAD45C84C",
+        base_url="https://mcrmgr.umacaroon.com/",
+        channel_id="widemobilewifi",
+        channel_secret="EAy716D6w2ZmjsqDgTBQL9yfFgDgzoLR",
     )
 
     # 문서에 있는 테스트용 IMEI (이건 무조건 되어야 함)
-    imeis = ["867809060003361"]
+    imeis = ["866837042039311"]
     
     # 문서에 데이터가 있는 날짜 범위 (2024년 3월)
-    start_date = "20240301"
-    end_date = "20240305"
+    start_date = "20251130"
+    end_date = "20251205"
 
-    logger.info(f"Testing IMEI: {imeis} from {start_date} to {end_date}")
+    print(f"Testing IMEI: {imeis} from {start_date} to {end_date}")
     try:
         usage_data = client.get_usage_by_date_range(imeis, start_date, end_date)
-        logger.info(json.dumps(usage_data, indent=2))
+        print(json.dumps(usage_data, indent=2))
     except Exception as e:
-        logger.error(f"Error occurred: {e}")
+        print(f"Error occurred: {e}")

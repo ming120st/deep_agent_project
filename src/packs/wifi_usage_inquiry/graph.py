@@ -1,0 +1,106 @@
+from typing import Literal
+from langgraph.graph import StateGraph, END
+from workflow.graph_infra.state import GraphState
+from src.packs.wifi_usage_inquiry.node import (
+    confirm_intent, # 의도 확인
+    request_imei_list, # IMEI 리스트 요청
+    request_date_range, # 기간 정보 요청
+    fetch_usage, # 사용량 조회
+    confirm_email_sending, # 이메일 전송 희망 여부 확인
+    request_email_address, # 이메일 주소 요청
+    send_usage_email, # 이메일 전송
+)
+
+def route_wifi_usage_inquiry(state: GraphState) -> Literal[
+    "confirm_intent",
+    "request_imei_list",
+    "request_date_range",
+    "fetch_usage",
+    "confirm_email_sending",
+    "request_email_address",
+    "send_usage_email",
+    "end"
+]:
+
+    parameters = getattr(state, "collected_parameters", {}) or {}
+    response = getattr(state, "response", {}) or {}
+
+    # 1. 의도(업무) 확인
+    if not parameters.get("intent_confirmed"):
+        return "confirm_intent"
+
+    # 2. IMEI 리스트 확인
+    if not parameters.get("imei_list"):
+        return "request_imei_list"
+
+    # 3. 조회 기간 확인
+    if not parameters.get("start_date") or not parameters.get("end_date"):
+        return "request_date_range"
+
+    # 4. 사용량 조회
+    if "usage_data" not in response:
+        return "fetch_usage"
+
+    # 5. 이메일 발송 여부 확인
+    if parameters.get("email_sending_confirmed") is None:
+        return "confirm_email_sending"
+
+    # 6. 이메일 발송 주소 확인 및 발송
+    if parameters.get("email_sending_confirmed") is True:
+        if not parameters.get("email_address"):
+            return "request_email_address"
+        return "send_usage_email"
+
+    return "end"
+
+workflow = StateGraph(GraphState)
+
+# 노드 등록
+workflow.add_node("confirm_intent", confirm_intent)
+workflow.add_node("request_imei_list", request_imei_list)
+workflow.add_node("request_date_range", request_date_range)
+workflow.add_node("fetch_usage", fetch_usage)
+workflow.add_node("confirm_email_sending", confirm_email_sending)
+workflow.add_node("request_email_address", request_email_address)
+workflow.add_node("send_usage_email", send_usage_email)
+
+# 조건부 진입점
+workflow.set_conditional_entry_point(
+    route_wifi_usage_inquiry, 
+    {
+        "confirm_intent": "confirm_intent",
+        "request_imei_list": "request_imei_list",
+        "request_date_range": "request_date_range",
+        "fetch_usage": "fetch_usage",
+        "confirm_email_sending": "confirm_email_sending",
+        "request_email_address": "request_email_address",
+        "send_usage_email": "send_usage_email",
+        "end": END
+    }
+)
+
+# 노드 종료 후 처리 (fetch_usage는 자동 진행, 나머지는 사용자 입력 대기)
+workflow.add_edge("confirm_intent", END)
+workflow.add_edge("request_imei_list", END)
+workflow.add_edge("request_date_range", END)
+
+workflow.add_conditional_edges(
+    "fetch_usage",
+    route_wifi_usage_inquiry,
+    {
+        "confirm_intent": "confirm_intent", # Should happen if params somehow missing
+        "request_imei_list": "request_imei_list",
+        "request_date_range": "request_date_range",
+        "fetch_usage": "fetch_usage",
+        "confirm_email_sending": "confirm_email_sending", # Expected path
+        "request_email_address": "request_email_address",
+        "send_usage_email": "send_usage_email",
+        "end": END
+    }
+)
+
+workflow.add_edge("confirm_email_sending", END)
+workflow.add_edge("request_email_address", END)
+workflow.add_edge("send_usage_email", END)
+
+app = workflow.compile()
