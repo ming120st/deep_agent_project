@@ -15,7 +15,6 @@ SESSION_TIMEOUT_SECONDS = 3600  # 세션 타임아웃 1시간
 
 # 인메모리 세션 저장소
 _sessions: Dict[str, GraphState] = {}
-_session_timestamps: Dict[str, float] = {}  # 세션 마지막 활동 시간
 
 # 세션관리 함수
 async def get_or_create_state(user_id: str) -> GraphState:
@@ -23,25 +22,16 @@ async def get_or_create_state(user_id: str) -> GraphState:
     
     async with session_lock:
         state = _sessions.get(user_id)
-        last_activity = _session_timestamps.get(user_id)
         
-        if state:
-            # 타임아웃 체크
-            if last_activity and (current_time - last_activity > SESSION_TIMEOUT_SECONDS):
-                print("세션 타임아웃 -> 새로 초기화")
-                state = GraphState(user_id=user_id, last_activity_time=current_time)
-                _sessions[user_id] = state
-            else:
-                print("기존 세션 유지")
-                # 객체가 이미 메모리에 있으므로 별도 로드 필요 없음
-        else:
-            # 상태가 없으면 새로 생성
-            print("새로운 세션 생성")
+        # 세션이 없거나, 있어도 타임아웃이면 새로 생성
+        if not state or (state.last_activity_time and current_time - state.last_activity_time > SESSION_TIMEOUT_SECONDS):
+            print("새로운 세션 생성" if not state else "세션 타임아웃 -> 새로 초기화")
             state = GraphState(user_id=user_id, last_activity_time=current_time)
             _sessions[user_id] = state
+        else:
+            print("기존 세션 유지")
         
         # 마지막 활동 시간 갱신
-        _session_timestamps[user_id] = current_time
         state.last_activity_time = current_time
 
         return state
@@ -50,7 +40,6 @@ async def get_or_create_state(user_id: str) -> GraphState:
 async def save_state(user_id: str, state: GraphState):
     async with session_lock:
         _sessions[user_id] = state
-        _session_timestamps[user_id] = int(time.time())
 
 def today():
     korea = pytz.timezone('Asia/Seoul') 
