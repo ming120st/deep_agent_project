@@ -44,10 +44,11 @@ def send_real_response(space_name: str, user_message: str, thread_name: str = No
         if thread_name:
             body["thread"] = {"name": thread_name}
 
-        chat_service.spaces().messages().create(
-            parent=space_name,
-            body=body
-        ).execute()
+        for i in range(2):
+            chat_service.spaces().messages().create(
+                parent=space_name,
+                body=body
+            ).execute()
         print(f"Successfully sent response to {space_name}")
     except Exception as e:
         print(f"Error sending response: {e}")
@@ -88,9 +89,7 @@ async def receive_message(request: Request, background_tasks: BackgroundTasks):
     # 백그라운드 태스크에 thread_name도 같이 전달
     background_tasks.add_task(send_real_response, space_name, message_text, thread_name)
 
-    return {
-        "text": "답변을 생성하고 있습니다. 잠시만 기다려주세요..."
-    }
+    return {}
 
 if __name__ == "__main__":
     uvicorn.run("src.main:app", host="0.0.0.0", port=8080, reload=True)
