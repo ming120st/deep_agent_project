@@ -16,10 +16,9 @@ pandas
 pymongo
 certifi
 azure-storage-blob
-redis
-redis
 google-apps-chat
 google-api-python-client
 google-auth
 google-auth-httplib2
 google-auth-oauthlib
+dill

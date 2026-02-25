@@ -1,93 +1,46 @@
 import os
 import json
-import time  # 지연을 주기 위해 추가
 from fastapi import FastAPI, Request, BackgroundTasks
-from google.oauth2 import service_account
-from googleapiclient.discovery import build
-from dotenv import load_dotenv
 import uvicorn
-
+from dotenv import load_dotenv
 load_dotenv()
+from src.orchestrator import orchestrate_chat_event
+from src.core.session import get_or_create_state
 
 app = FastAPI()
-
-SCOPES = ["https://www.googleapis.com/auth/chat.bot"]
-
-key_path_or_content = os.getenv("GOOGLE_SERVICE_ACCOUNT_KEY_PATH")
-
-if not key_path_or_content:
-    raise KeyError("GOOGLE_SERVICE_ACCOUNT_KEY_PATH environment variable is not set.")
-
-try:
-    service_account_info = json.loads(key_path_or_content)
-except json.JSONDecodeError as e:
-    raise ValueError(f"GOOGLE_SERVICE_ACCOUNT_KEY_PATH 환경변수가 유효한 JSON이 아닙니다: {e}")
-
-credentials = service_account.Credentials.from_service_account_info(
-    service_account_info,
-    scopes=SCOPES
-)
-
-chat_service = build("chat", "v1", credentials=credentials)
-
-# 1. thread_name 파라미터 추가
-def send_real_response(space_name: str, user_message: str, thread_name: str = None):
-    try:
-        # 2. 첫 동기 응답이 구글 서버에 무사히 도착하고 화면에 렌더링되도록 1~2초 대기 (Race Condition 방지)
-        # 일반 def 함수이므로 time.sleep을 써도 FastAPI 메인 스레드를 블로킹하지 않아!
-        time.sleep(1.5) 
-
-        real_response = f"echo: {user_message}"
-        body = {"text": real_response}
-        
-        # 3. 스레드 정보가 있으면 유저가 말 건 스레드에 그대로 답장하도록 설정
-        if thread_name:
-            body["thread"] = {"name": thread_name}
-
-        for i in range(2):
-            chat_service.spaces().messages().create(
-                parent=space_name,
-                body=body
-            ).execute()
-        print(f"Successfully sent response to {space_name}")
-    except Exception as e:
-        print(f"Error sending response: {e}")
 
 @app.post("/chat")
 async def receive_message(request: Request, background_tasks: BackgroundTasks):
     event = await request.json()
-    print(f"Received event: {json.dumps(event)}")
+    # print(f"Received event: {json.dumps(event, ensure_ascii=False)}")
 
-    if event.get("type") in ("ADDED_TO_SPACE", "REMOVED_FROM_SPACE"):
+    # space 추가/삭제 이벤트는 무시하고 빈 응답 반환
+    if event.get("chat").get("removedFromSpacePayload") or event.get("chat").get("addedToSpacePayload"):
         return {}
 
-    chat_payload = event.get("chat", {})
-    message_payload = chat_payload.get("messagePayload", {})
+    # 주요 데이터 추출
+    event_time = event.get("chat", {}).get("eventTime", {})
+    user_name = event.get("chat", {}).get("user", {}).get("displayName")
+    user_id = event.get("chat", {}).get("user", {}).get("email")
+    message = event.get("chat", {}).get("messagePayload", {}).get("message", {}).get("text") or ""
+    space_name = event.get("chat", {}).get("messagePayload", {}).get("space", {}).get("name") or ""
+    thread_name = event.get("chat", {}).get("messagePayload", {}).get("message", {}).get("thread", {}).get("name")
+    quoted_message = event.get("chat", {}).get("messagePayload", {}).get("message", {}).get("quotedMessageMetadata", {}).get("quotedMessageSnapshot", {}).get("text")
+    quoted_message_sender = event.get("chat", {}).get("messagePayload", {}).get("message", {}).get("quotedMessageMetadata", {}).get("quotedMessageSnapshot", {}).get("sender", {})
 
-    message_text = (
-        event.get("message", {}).get("text") or
-        message_payload.get("message", {}).get("text") or
-        message_payload.get("argumentText") or
-        ""
-    )
-    
-    space_name = (
-        event.get("space", {}).get("name") or
-        event.get("message", {}).get("space", {}).get("name") or
-        message_payload.get("space", {}).get("name") or
-        message_payload.get("message", {}).get("space", {}).get("name") or
-        ""
-    )
+    state = await get_or_create_state(user_id)
+    state.chat_context = {
+        "user_id": user_id,
+        "user_name": user_name,
+        "space_name": space_name,
+        "thread_name": thread_name,
+        "quoted_message": quoted_message,
+        "quoted_message_sender": quoted_message_sender,
+        "event_time": event_time
+    }
+    state.add_user_message(message)
 
-    # 4. 스레드(Thread) 이름 추출 추가
-    thread_name = event.get("message", {}).get("thread", {}).get("name")
-
-    if not space_name:
-        print("Missing space name in event")
-        return {"text": "오류: 공간 정보를 찾을 수 없습니다."}
-
-    # 백그라운드 태스크에 thread_name도 같이 전달
-    background_tasks.add_task(send_real_response, space_name, message_text, thread_name)
+    background_tasks.add_task(orchestrate_chat_event, state)
 
     return {}
 
