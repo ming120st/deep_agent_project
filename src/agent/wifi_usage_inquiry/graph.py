@@ -1,8 +1,9 @@
 from typing import Literal
 from langgraph.graph import StateGraph, END
-from workflow.graph_infra.state import GraphState
-from src.packs.wifi_usage_inquiry.node import (
+from src.workflow.graph_infra.state import GraphState
+from src.agent.wifi_usage_inquiry.node import (
     confirm_intent, # 의도 확인
+    cancel_inquiry, # 업무 취소
     request_imei_list, # IMEI 리스트 요청
     request_date_range, # 기간 정보 요청
     fetch_usage, # 사용량 조회
@@ -13,6 +14,7 @@ from src.packs.wifi_usage_inquiry.node import (
 
 def route_wifi_usage_inquiry(state: GraphState) -> Literal[
     "confirm_intent",
+    "cancel_inquiry",
     "request_imei_list",
     "request_date_range",
     "fetch_usage",
@@ -22,12 +24,16 @@ def route_wifi_usage_inquiry(state: GraphState) -> Literal[
     "end"
 ]:
 
-    parameters = getattr(state, "collected_parameters", {}) or {}
+    # 현재 에이전트의 파라미터만 가져오도록 수정
+    all_parameters = getattr(state, "collected_parameters", {}) or {}
+    parameters = all_parameters.get("wifi_usage_inquiry", {})
     response = getattr(state, "response", {}) or {}
 
     # 1. 의도(업무) 확인
-    if not parameters.get("intent_confirmed"):
+    if parameters.get("intent_confirmed") is None:
         return "confirm_intent"
+    elif parameters.get("intent_confirmed") is False:
+        return "cancel_inquiry"
 
     # 2. IMEI 리스트 확인
     if not parameters.get("imei_list"):
@@ -49,7 +55,8 @@ def route_wifi_usage_inquiry(state: GraphState) -> Literal[
     if parameters.get("email_sending_confirmed") is True:
         if not parameters.get("email_address"):
             return "request_email_address"
-        return "send_usage_email"
+        if not parameters.get("email_sent"):  # 이중 발송 방지
+            return "send_usage_email"
 
     return "end"
 
@@ -57,6 +64,7 @@ workflow = StateGraph(GraphState)
 
 # 노드 등록
 workflow.add_node("confirm_intent", confirm_intent)
+workflow.add_node("cancel_inquiry", cancel_inquiry)
 workflow.add_node("request_imei_list", request_imei_list)
 workflow.add_node("request_date_range", request_date_range)
 workflow.add_node("fetch_usage", fetch_usage)
@@ -69,6 +77,7 @@ workflow.set_conditional_entry_point(
     route_wifi_usage_inquiry, 
     {
         "confirm_intent": "confirm_intent",
+        "cancel_inquiry": "cancel_inquiry",
         "request_imei_list": "request_imei_list",
         "request_date_range": "request_date_range",
         "fetch_usage": "fetch_usage",
@@ -81,6 +90,7 @@ workflow.set_conditional_entry_point(
 
 # 노드 종료 후 처리 (fetch_usage는 자동 진행, 나머지는 사용자 입력 대기)
 workflow.add_edge("confirm_intent", END)
+workflow.add_edge("cancel_inquiry", END)
 workflow.add_edge("request_imei_list", END)
 workflow.add_edge("request_date_range", END)
 
@@ -89,6 +99,7 @@ workflow.add_conditional_edges(
     route_wifi_usage_inquiry,
     {
         "confirm_intent": "confirm_intent", # Should happen if params somehow missing
+        "cancel_inquiry": "cancel_inquiry",
         "request_imei_list": "request_imei_list",
         "request_date_range": "request_date_range",
         "fetch_usage": "fetch_usage",

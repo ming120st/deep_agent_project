@@ -3,21 +3,62 @@ from typing import Dict, Any, List, Optional
 import uuid
 import json
 
-class GraphState(BaseModel):
-    chat_context: Dict[str, Any] = Field(default_factory=dict) # user_id, user_name, space_name, quoted_message 등 구글챗에서 받은 관련 맥락 정보. Dict
-    session_id: str = Field(default_factory=lambda: str(uuid.uuid4())) # 세션 고유 ID. 같은 user_id라도 세션이 바뀌면 다르게 생성된다.
-    last_activity_time: Optional[int] = None
-    messages: List[Dict[str, str]] = Field(default_factory=list)
-    extra_context: Optional[str] = None  # 추가로 모델 응답 요청 시 전달할 컨텍스트 정보. 상품상담 에이전트 결과내용 등을 담아서 후속질문에 답할 수 있게 한다.
-    response: Optional[Dict[str, Any]] = None  # 각 챗봇별 응답에 쓰일 항목들을 담는 딕셔너리. 필요한 파라미터를 key로 담아서 전달해서 꺼내쓴다.
 
-    def add_ai_message(self, content: str):
+class GraphState(BaseModel):
+    # ── 채팅 컨텍스트 ─────────────────────────────────────────────────────────
+    chat_context: Dict[str, Any] = Field(default_factory=dict)
+    # user_id, user_name, space_name, thread_name, quoted_message, event_time 등
+
+    session_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    last_activity_time: Optional[int] = None
+
+    # ── 메시지 히스토리 ───────────────────────────────────────────────────────
+    messages: List[Dict[str, str]] = Field(default_factory=list)
+    # [{"role": "user"|"assistant", "content": "..."}]
+
+    extra_context: Optional[str] = None
+    # 모델 응답 요청 시 추가로 전달할 컨텍스트 (에이전트 실행 결과 등)
+
+    # ── 의도 분류 ─────────────────────────────────────────────────────────────
+
+    action: Dict[str, Any] = Field(default_factory=dict)
+    # action_classifier의 결과 (action, agent_name, parameters 등)
+
+    # ── 에이전트 상태 ─────────────────────────────────────────────────────────
+    current_agent: Optional[str] = None
+    # 현재 활성화된 에이전트 이름 (멀티턴 대화 유지용)
+
+    collected_parameters: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
+    # 에이전트별 수집된 파라미터 (예: {"wifi_usage_inquiry": {"imei_list": [...], "start_date": "..."}})
+
+    response: Dict[str, Any] = Field(default_factory=dict)
+    # 에이전트 실행 결과 (usage_data 등)
+
+    # ── 에러 처리 ─────────────────────────────────────────────────────────────
+    error_message: Optional[str] = None
+
+    # ── 헬퍼 메서드 ──────────────────────────────────────────────────────────
+    def add_ai_message(self, content: str) -> None:
         self.messages.append({"role": "assistant", "content": content})
-    
-    def add_user_message(self, content: str):
-        self.messages.append({"role":"user", "content": content})
-    
-    def print_state(self):
-        state_dict = self.model_dump()  # 모델 데이터를 딕셔너리 형태로 변환
+
+    def add_user_message(self, content: str) -> None:
+        self.messages.append({"role": "user", "content": content})
+
+    def get_last_user_message(self) -> Optional[str]:
+        return next(
+            (m["content"] for m in reversed(self.messages) if m["role"] == "user"),
+            None,
+        )
+
+    def get_recent_history_text(self, n: int = 10) -> str:
+        """최근 n개 메시지를 텍스트로 반환합니다."""
+        recent = self.messages[-n:] if len(self.messages) > n else self.messages
+        return "\n".join(
+            f"{'사용자' if m['role'] == 'user' else 'AI'}: {m['content']}"
+            for m in recent
+        )
+
+    def print_state(self) -> None:
+        state_dict = self.model_dump()
         state_json = json.dumps(state_dict, indent=4, ensure_ascii=False)
-        print(f"state는: {state_json}")
+        print(f"[State]\n{state_json}")
