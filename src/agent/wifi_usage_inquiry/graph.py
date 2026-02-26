@@ -114,4 +114,4 @@ workflow.add_edge("confirm_email_sending", END)
 workflow.add_edge("request_email_address", END)
 workflow.add_edge("send_usage_email", END)
 
-app = workflow.compile()
+wifi_usage_inquiry_graph = workflow.compile()

@@ -37,7 +37,7 @@ from langgraph.graph import StateGraph, START, END
 from src.workflow.graph_infra.state import GraphState
 from src.workflow.main_graph.nodes.action_classifier import classify_agent_action
 from src.workflow.main_graph.nodes.response_sender import send_response
-from src.agent.wifi_usage_inquiry.graph import app as wifi_usage_inquiry_graph
+from src.agent.agent_config import AGENT_REGISTRY
 
 # ── 임시 노드 (틀) ─────────────────────────────────────────────────────────────
 
@@ -59,6 +59,7 @@ def handle_error(state: GraphState):
     state.add_ai_message("시스템 처리 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.")
     return state
 
+# ── 파라미터 업데이트 노드 ─────────────────────────────────────────────────────────────
 def update_parameters(state: GraphState):
     action_data = getattr(state, "action", {})
     
@@ -116,20 +117,18 @@ def route_by_action(state: GraphState):
 
 def route_after_update_parameters(state: GraphState):
     agent_name = state.current_agent
-    if agent_name == "wifi_usage_inquiry":
-        return "execute_wifi_usage_inquiry"
-    # 다른 에이전트가 추가되면 여기에 분기 추가
+    # 다음을 위해 반드시 에이전트 이름과 노드 이름이 일치해야 함
+    if agent_name in AGENT_REGISTRY:
+        return agent_name
     return "handle_error"
 
 # ── 그래프 빌더 ───────────────────────────────────────────────────────────────
 
 def build_main_graph():
-    """메인 대화 그래프를 구성하고 컴파일하여 반환합니다."""
     workflow = StateGraph(GraphState)
 
-    # ── 노드 등록 ──────────────────────────────────────────────────────────
+    # ── 고정 노드 등록 ──────────────────────────────────────────────
     workflow.add_node("classify_agent_action", classify_agent_action)
-    workflow.add_node("execute_wifi_usage_inquiry", wifi_usage_inquiry_graph)
     workflow.add_node("execute_rag", execute_rag)
     workflow.add_node("execute_light_response", execute_light_response)
     workflow.add_node("update_parameters", update_parameters)
@@ -137,10 +136,15 @@ def build_main_graph():
     workflow.add_node("handle_error", handle_error)
     workflow.add_node("send_response", send_response)
 
-    # ── 엣지: START → 의도 분류 (항상) ────────────────────────────────────
+    # ── 에이전트 노드 자동 등록 (AGENT_REGISTRY 기반) ────────────────
+    for agent_name, agent_info in AGENT_REGISTRY.items():
+        workflow.add_node(agent_name, agent_info["graph"])  # AGENT_REGISTRY에 graph 필드 추가 필요
+        workflow.add_edge(agent_name, "send_response")      # 엣지도 자동 등록
+
+    # ── 엣지: START → 의도 분류 ────────────────────────────────────
     workflow.add_edge(START, "classify_agent_action")
 
-    # ── 엣지: 의도 분류 → 실행 노드 ───────────────────────────────────────
+    # ── 엣지: 의도 분류 → 실행 노드 ───────────────────────────────
     workflow.add_conditional_edges(
         "classify_agent_action",
         route_by_action,
@@ -153,27 +157,15 @@ def build_main_graph():
         },
     )
 
-    # ── 엣지: 파라미터 업데이트 → 에이전트 실행 ────────────────────────────
-    workflow.add_conditional_edges(
-        "update_parameters",
-        route_after_update_parameters,
-        {
-            "execute_wifi_usage_inquiry": "execute_wifi_usage_inquiry",
-            "handle_error": "handle_error",
-        }
-    )
+    # ── 엣지: 파라미터 업데이트 → 에이전트 실행 (자동) ────────────
+    agent_routing = {name: name for name in AGENT_REGISTRY}
+    agent_routing["handle_error"] = "handle_error"
+    workflow.add_conditional_edges("update_parameters", route_after_update_parameters, agent_routing)
 
-    # ── 엣지: 모든 실행/처리 노드 → 응답 전송 ────────────────────────────
-    for node_name in [
-        "execute_wifi_usage_inquiry",
-        "execute_rag",
-        "execute_light_response",
-        "handle_unclear",
-        "handle_error",
-    ]:
+    # ── 고정 엣지 ──────────────────────────────────────────────────
+    for node_name in ["execute_rag", "execute_light_response", "handle_unclear", "handle_error"]:
         workflow.add_edge(node_name, "send_response")
 
-    # ── 엣지: 응답 전송 → END ─────────────────────────────────────────────
     workflow.add_edge("send_response", END)
 
     return workflow.compile()
