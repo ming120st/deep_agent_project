@@ -6,6 +6,7 @@ Google Chat 메시지를 받아 메인 대화 그래프를 실행합니다.
 """
 from src.workflow.graph_infra.state import GraphState
 from src.workflow.main_graph.graph import main_graph
+from src.core.session import save_state
 
 
 async def orchestrate_chat_event(state: GraphState) -> None:
@@ -21,7 +22,13 @@ async def orchestrate_chat_event(state: GraphState) -> None:
     예외 발생 시 사용자에게 오류 안내 메시지를 직접 전송합니다.
     """
     try:
-        await main_graph.ainvoke(state)
+        result = await main_graph.ainvoke(state)
+        # LangGraph는 ainvoke 결과로 새로운 state 딕셔너리를 반환합니다.
+        # 반환된 state를 세션에 저장해야 messages(assistant 응답 포함)가 다음 턴에 유지됩니다.
+        updated_state = GraphState(**result) if isinstance(result, dict) else result
+        user_id = updated_state.chat_context.get("user_id")
+        if user_id:
+            await save_state(user_id, updated_state)
 
     except Exception as e:
         print(f"[Orchestrator] 오류: {e}")
