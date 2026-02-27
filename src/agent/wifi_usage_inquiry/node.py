@@ -73,6 +73,6 @@ async def send_usage_email(state: GraphState) -> GraphState:
         state.collected_parameters["wifi_usage_inquiry"] = {}
     state.collected_parameters["wifi_usage_inquiry"]["email_sent"] = True  # 이중 발송 방지
     
-    ai_response = "사용량 조회 결과를 이메일로 전송했습니다."
+    ai_response = f"사용량 조회 결과를 이메일로 전송했습니다. \n\n{to_email}\n\n{message}"
     state.add_ai_message(ai_response)
     return state

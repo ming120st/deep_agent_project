@@ -59,5 +59,6 @@ AGENT_NAMES = list(AGENT_REGISTRY.keys())
 AGENT_DESCRIPTIONS = {name: info["description"] for name, info in AGENT_REGISTRY.items()}
 
 def get_current_agent_spec(agent_name: str) -> Dict[str, Any]:
-    """현재 에이전트의 상세 스펙을 반환하는 헬퍼 함수입니다."""
-    return AGENT_REGISTRY.get(agent_name, {})
+    """현재 에이전트의 상세 스펙을 반환하는 헬퍼 함수입니다. (graph 객체 제외)"""
+    spec = AGENT_REGISTRY.get(agent_name, {})
+    return {k: v for k, v in spec.items() if k != "graph"}

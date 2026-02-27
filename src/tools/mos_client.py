@@ -103,6 +103,7 @@ class DeviceDayUsageClient:
         resp.raise_for_status()
 
         data = resp.json()
+        print(json.dumps(data, indent=2, ensure_ascii=False))  # 응답 로깅
         if data.get("tradeCode") != 1000:
             raise RuntimeError(f"API Error: {data}")
 
@@ -152,11 +153,16 @@ class DeviceDayUsageClient:
                 continue
 
             sorted_dates = sorted(daily_usage.keys())
+            total_mb = 0.0
             for date_str in sorted_dates:
                 # 20251130 -> 2025-11-30 변환
                 formatted_date = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:]}"
                 usage_mb = daily_usage[date_str]
-                lines.append(f"  - {formatted_date}: {usage_mb} MB")
+                total_mb += usage_mb
+                lines.append(f"  - {formatted_date}: {round(usage_mb)} MB")
+
+            total_gb = round(total_mb / 1024, 2)
+            lines.append(f"  합계: {total_gb} GB")
 
         return "\n".join(lines)
 
@@ -190,6 +196,6 @@ if __name__ == "__main__":
     print(f"Testing IMEI: {imeis} from {start_date} to {end_date}")
     try:
         usage_data = client.get_usage_by_date_range(imeis, start_date, end_date)
-        print(json.dumps(usage_data, indent=2))
+        print(json.dumps(usage_data, indent=2, ensure_ascii=False))
     except Exception as e:
         print(f"Error occurred: {e}")

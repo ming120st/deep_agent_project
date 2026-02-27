@@ -62,4 +62,3 @@ class GraphState(BaseModel):
         state_dict = self.model_dump()
         state_json = json.dumps(state_dict, indent=4, ensure_ascii=False)
         print(f"[State]\n{state_json}")
-        print(f"[State]\n{state_json}")
