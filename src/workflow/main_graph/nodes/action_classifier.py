@@ -19,6 +19,7 @@ class actionResult(BaseModel):
     action: Literal["parameter", "new_agent", "rag", "light_response"]
     agent_name: Optional[str] = None
     parameters: Optional[Dict[str, Any]] = None
+    new_task: Optional[bool] = False
 
 # ── 프롬프트 ──────────────────────────────────────────────────────────────────
 # pydantic 파서

@@ -34,6 +34,9 @@ class GraphState(BaseModel):
     response: Dict[str, Any] = Field(default_factory=dict)
     # 에이전트 실행 결과 (usage_data 등)
 
+    task_id: Optional[str] = None
+    # 현재 진행 중인 작업 ID (있을 경우) - 작업 관리 시스템과 연동 시 사용
+
     # ── 에러 처리 ─────────────────────────────────────────────────────────────
     error_message: Optional[str] = None
 

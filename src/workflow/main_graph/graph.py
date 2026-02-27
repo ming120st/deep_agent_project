@@ -38,6 +38,7 @@ from src.workflow.graph_infra.state import GraphState
 from src.workflow.main_graph.nodes.action_classifier import classify_agent_action
 from src.workflow.main_graph.nodes.response_sender import send_response
 from src.agent.agent_config import AGENT_REGISTRY
+from src.core.task_manager import create_task, TaskStatus
 
 # ── 임시 노드 (틀) ─────────────────────────────────────────────────────────────
 
@@ -60,35 +61,45 @@ def handle_error(state: GraphState):
     return state
 
 # ── 파라미터 업데이트 노드 ─────────────────────────────────────────────────────────────
-def update_parameters(state: GraphState):
+async def update_parameters(state: GraphState):
     action_data = getattr(state, "action", {})
     
     updates = {}
     
-    # agent_name 업데이트
     agent_name = action_data.get("agent_name")
     current_agent = state.current_agent
     if agent_name:
         current_agent = agent_name
         updates["current_agent"] = current_agent
     
-    # 현재 에이전트가 설정되어 있고 파라미터가 있다면 업데이트
-    if current_agent and isinstance(action_data, dict) and action_data.get("parameters"):
-        # 기존 파라미터 복사 (LangGraph 상태 업데이트를 위해)
+    if current_agent and isinstance(action_data, dict):
         collected_parameters = dict(state.collected_parameters)
         
-        # 해당 에이전트의 파라미터 딕셔너리가 없으면 초기화
         if current_agent not in collected_parameters:
             collected_parameters[current_agent] = {}
         else:
-            # 내부 딕셔너리도 복사하여 안전하게 업데이트
             collected_parameters[current_agent] = dict(collected_parameters[current_agent])
             
-        # 파라미터 병합
-        collected_parameters[current_agent].update(action_data["parameters"])
+        if action_data.get("parameters"):
+            collected_parameters[current_agent].update(action_data["parameters"])
+
+        if action_data.get("action") == "new_agent":
+            collected_parameters[current_agent].setdefault("intent_confirmed", True)
+
         updates["collected_parameters"] = collected_parameters
-    
-    # 상태 업데이트를 위해 딕셔너리 반환
+
+    # ── new_task True이면 task 생성 ──────────────────────────────
+    if action_data.get("new_task") is True:
+        agent_info = AGENT_REGISTRY.get(current_agent, {})
+        task_id = await create_task(
+            user_id=state.chat_context.get("user_id", ""),
+            user_name=state.chat_context.get("user_name", ""),
+            agent_name=current_agent,
+            agent_display_name=agent_info.get("display_name", current_agent),
+        )
+        updates["task_id"] = task_id
+        print(f"[Task] 새 task 생성: {task_id} ({current_agent})")
+
     return updates
 
 # ── 라우팅 함수 ───────────────────────────────────────────────────────────────

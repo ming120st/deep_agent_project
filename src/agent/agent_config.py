@@ -10,6 +10,7 @@ from src.agent.wifi_usage_inquiry.graph import wifi_usage_inquiry_graph
 
 AGENT_REGISTRY = {
     "wifi_usage_inquiry": {
+        "display_name": "와이파이 사용량 조회",
         "description": "와이파이도시락 데이터 사용량을 조회하여 알려주는 에이전트입니다.",
         "graph": wifi_usage_inquiry_graph,
         "parameters": {
