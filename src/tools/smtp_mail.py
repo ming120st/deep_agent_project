@@ -3,10 +3,10 @@ import smtplib
 from email.mime.text import MIMEText
 from dotenv import load_dotenv
 
-def send_mail(to_list: list, message: str, subject: str, sender: str = 'rpa@widemobile.com') -> None:
+def send_mail(to_list: list, message: str, subject: str, sender: str = 'info@widemobile.com') -> None:
     # .env에서 환경변수 로드
     load_dotenv()
-    gmail_app_pw = os.getenv('GMAIL_APP_PW')
+    gmail_app_pw = os.getenv('GMAIL_APP_PW_INFO') # info메일의 Gmail 앱 비밀번호
 
     try:
         # Gmail SMTP 서버 연결
@@ -23,7 +23,7 @@ def send_mail(to_list: list, message: str, subject: str, sender: str = 'rpa@wide
 
         # 메일 전송
         smtp.sendmail(msg['From'], to_list, msg.as_string())
-        print("메일 전송 완료!")
+        print("메일 전송 완료")
     except Exception as e:
         print("메일 전송 실패:", e)
     finally:
