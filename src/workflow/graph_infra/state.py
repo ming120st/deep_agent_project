@@ -31,6 +31,12 @@ class GraphState(BaseModel):
     collected_parameters: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
     # 에이전트별 수집된 파라미터 (예: {"wifi_usage_inquiry": {"imei_list": [...], "start_date": "..."}})
 
+    current_sop: Optional[str] = None
+    # 현재 실행 중인 에이전트의 SOP 내용
+
+    current_experience: Optional[str] = None
+    # 현재 실행 중인 에이전트의 관련 경험(메모리) 내용
+
     response: Dict[str, Any] = Field(default_factory=dict)
     # 에이전트 실행 결과 (usage_data 등)
 

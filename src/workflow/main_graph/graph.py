@@ -39,6 +39,7 @@ from src.workflow.main_graph.nodes.action_classifier import classify_agent_actio
 from src.workflow.main_graph.nodes.response_sender import send_response
 from src.agent.agent_config import AGENT_REGISTRY
 from src.core.task_manager import create_task, TaskStatus
+from src.core.mongo_client import boa_sops_collection # SOP 조회를 위해 추가
 
 # ── 임시 노드 (틀) ─────────────────────────────────────────────────────────────
 
@@ -108,22 +109,16 @@ def route_by_action(state: GraphState):
     action_data = getattr(state, "action", {})
     if not isinstance(action_data, dict):
         return "handle_unclear"
-        
+
     action_type = action_data.get("action")
-    
+
     if action_type == "rag":
         return "execute_rag"
     elif action_type == "light_response":
         return "execute_light_response"
-    elif action_type == "new_agent":
-        agent_name = action_data.get("agent_name")
-        if agent_name:
-            # new_agent인 경우, 해당 에이전트를 현재 에이전트로 설정하고 파라미터 업데이트 노드로 보냄
-            return "update_parameters"
-        return "handle_error"
-    elif action_type == "parameter":
-        return "update_parameters"
-        
+    elif action_type in ("new_agent", "continue_task"):
+        return "extract_parameters"  # ← 파라미터 추출 노드로
+
     return "handle_unclear"
 
 def route_after_update_parameters(state: GraphState):
@@ -136,10 +131,18 @@ def route_after_update_parameters(state: GraphState):
 # ── 그래프 빌더 ───────────────────────────────────────────────────────────────
 
 def build_main_graph():
+    from langgraph.graph import StateGraph, START, END
+    from src.workflow.graph_infra.state import GraphState
+    from src.workflow.main_graph.nodes.action_classifier import classify_agent_action
+    from src.workflow.main_graph.nodes.parameter_extractor import extract_parameters
+    from src.workflow.main_graph.nodes.response_sender import send_response
+    from src.agent.agent_config import AGENT_REGISTRY
+
     workflow = StateGraph(GraphState)
 
     # ── 고정 노드 등록 ──────────────────────────────────────────────
     workflow.add_node("classify_agent_action", classify_agent_action)
+    workflow.add_node("extract_parameters", extract_parameters)       # ← 추가
     workflow.add_node("execute_rag", execute_rag)
     workflow.add_node("execute_light_response", execute_light_response)
     workflow.add_node("update_parameters", update_parameters)
@@ -147,33 +150,33 @@ def build_main_graph():
     workflow.add_node("handle_error", handle_error)
     workflow.add_node("send_response", send_response)
 
-    # ── 에이전트 노드 자동 등록 (AGENT_REGISTRY 기반) ────────────────
+    # ── 에이전트 노드 자동 등록 ─────────────────────────────────────
     for agent_name, agent_info in AGENT_REGISTRY.items():
-        workflow.add_node(agent_name, agent_info["graph"])  # AGENT_REGISTRY에 graph 필드 추가 필요
-        workflow.add_edge(agent_name, "send_response")      # 엣지도 자동 등록
+        workflow.add_node(agent_name, agent_info["graph"])
+        workflow.add_edge(agent_name, "send_response")
 
-    # ── 엣지: START → 의도 분류 ────────────────────────────────────
+    # ── 엣지 ──────────────────────────────────────────────────────
     workflow.add_edge(START, "classify_agent_action")
 
-    # ── 엣지: 의도 분류 → 실행 노드 ───────────────────────────────
     workflow.add_conditional_edges(
         "classify_agent_action",
         route_by_action,
         {
+            "extract_parameters": "extract_parameters",  # ← new_agent, continue_task 둘 다
             "execute_rag": "execute_rag",
             "execute_light_response": "execute_light_response",
-            "update_parameters": "update_parameters",
             "handle_unclear": "handle_unclear",
-            "handle_error": "handle_error",
         },
     )
 
-    # ── 엣지: 파라미터 업데이트 → 에이전트 실행 (자동) ────────────
+    # extract_parameters → update_parameters (항상)
+    workflow.add_edge("extract_parameters", "update_parameters")
+
+    # update_parameters → 에이전트 (자동 라우팅)
     agent_routing = {name: name for name in AGENT_REGISTRY}
     agent_routing["handle_error"] = "handle_error"
     workflow.add_conditional_edges("update_parameters", route_after_update_parameters, agent_routing)
 
-    # ── 고정 엣지 ──────────────────────────────────────────────────
     for node_name in ["execute_rag", "execute_light_response", "handle_unclear", "handle_error"]:
         workflow.add_edge(node_name, "send_response")
 
