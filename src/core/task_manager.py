@@ -8,11 +8,13 @@ from bson import ObjectId
 from src.core.mongo_client import boa_tasks_collection
 
 # ── 상태 상수 ─────────────────────────────────────────────────────────────────
+# 단계별로 기록되는 상태값 정의
 class TaskStatus:
-    PROCESSING  = "처리중"   # 사용자 메시지 인입 시
-    WAITING     = "대기중"   # HIL (사용자 컨펌 대기 시)
-    COMPLETED   = "완료"
-    CANCELLED   = "취소"
+    PROCESSING  = "처리중"   # 노드 안에서 업무 처리 중. 노드 시작 지점에 PROCESSING으로 기록, 노드 내에서 처리 결과에 따라 WAITING/COMPLETED/ERROR로 업데이트
+    WAITING     = "대기중"   # HIL (사용자 답변 대기 시)
+    COMPLETED   = "완료"     # 단계 처리 완료 시
+    CANCELLED   = "취소"     # 사용자가 업무 취소 시
+    ERROR       = "오류"     # 작업 처리 중 에러 발생 시
 
 
 # ── 생성 ──────────────────────────────────────────────────────────────────────
@@ -30,20 +32,15 @@ async def create_task(user_id: str, user_name: str, agent_name: str, agent_displ
         # 업무
         "agent_name": agent_name,
         "agent_display_name": agent_display_name,
-        "parameters": {},
 
         # 상태
         "status": TaskStatus.PROCESSING,
-        "status_history": [
-            {"status": TaskStatus.PROCESSING, "changed_at": now, "changed_by": "system"}
+        "task_history": [
+            {"status": TaskStatus.PROCESSING, "changed_at": now, "changed_by": "agent"}
         ],
 
-        # human-in-the-loop
-        "pending_reason": None,
-        "admin_memo": None,
-
         # 결과
-        "result": None,
+        "result": "시작",
     }
     result = boa_tasks_collection.insert_one(doc)
     return str(result.inserted_id)
@@ -53,7 +50,7 @@ async def create_task(user_id: str, user_name: str, agent_name: str, agent_displ
 async def update_task_status(
     task_id: str,
     status: str,
-    changed_by: str = "system",
+    changed_by: str = "agent",
     pending_reason: Optional[str] = None,
     admin_memo: Optional[str] = None,
     result: Optional[str] = None,
@@ -68,18 +65,22 @@ async def update_task_status(
     if admin_memo is not None:
         update_fields["admin_memo"] = admin_memo
     if result is not None:
-        update_fields["result"] = result
+        update_fields["result"] = result # 최종 업무 처리 결과
+    
+    task_history_entry = {
+        "status": status,
+        "changed_at": now,
+        "changed_by": changed_by
+        }
+    if result is not None:
+        task_history_entry["result"] = result
 
     boa_tasks_collection.update_one(
         {"_id": ObjectId(task_id)},
         {
             "$set": update_fields,
             "$push": {
-                "status_history": {
-                    "status": status,
-                    "changed_at": now,
-                    "changed_by": changed_by
-                }
+                "task_history": task_history_entry
             }
         }
     )

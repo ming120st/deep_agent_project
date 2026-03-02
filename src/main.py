@@ -5,9 +5,22 @@ import uvicorn
 from dotenv import load_dotenv
 load_dotenv()
 from src.orchestrator import orchestrate_chat_event
-from src.core.session import get_or_create_state
+from src.core.session_manager import get_or_create_state
+from starlette.middleware.sessions import SessionMiddleware
+from src.dashboard.auth import router as auth_router, get_current_user, require_login
+# HTML 렌더링을 위한 템플릿 엔진
+from src.dashboard.router import router as dashboard_router
 
 app = FastAPI()
+
+# ── 세션 미들웨어 (OAuth에 필수) ──────────────────────────────
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=os.getenv("SESSION_SECRET_KEY", "SEI8209H4VNJSQW3DMW490G3NMIWKRENDV8204")
+)
+
+app.include_router(auth_router)
+app.include_router(dashboard_router)
 
 @app.post("/chat")
 async def receive_message(request: Request, background_tasks: BackgroundTasks):

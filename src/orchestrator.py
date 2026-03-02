@@ -6,7 +6,7 @@ Google Chat 메시지를 받아 메인 대화 그래프를 실행합니다.
 """
 from src.workflow.graph_infra.state import GraphState
 from src.workflow.main_graph.graph import main_graph
-from src.core.session import save_state
+from src.core.session_manager import save_state
 
 
 async def orchestrate_chat_event(state: GraphState) -> None:

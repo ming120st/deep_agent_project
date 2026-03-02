@@ -37,6 +37,10 @@ class GraphState(BaseModel):
     task_id: Optional[str] = None
     # 현재 진행 중인 작업 ID (있을 경우) - 작업 관리 시스템과 연동 시 사용
 
+    task_status: Optional[str] = None
+    # 작업 상태 (예: "waiting", "in_progress", "completed", "cancelled", "error") - 에이전트 작업 중 상태를 관리하는데 활용. graph분기 등에 사용 (선택 사항)
+    # 에이전트 작업 중 상태를 관리하는데 활용. graph분기 등에 사용 (선택 사항)
+
     # ── 에러 처리 ─────────────────────────────────────────────────────────────
     error_message: Optional[str] = None
 
