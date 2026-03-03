@@ -11,11 +11,14 @@ from src.workflow.graph_infra.state import GraphState
 from src.workflow.main_graph.graph import main_graph
 from starlette.middleware.sessions import SessionMiddleware
 from src.dashboard.auth import router as auth_router
-from src.dashboard.router import router as dashboard_router
+from src.dashboard.task_router import router as dashboard_router
 import time
 import asyncio
+from src.dashboard.knowledge_router import router as knowledge_router
 
 app = FastAPI()
+
+app.include_router(knowledge_router)
 
 app.add_middleware(
     SessionMiddleware,

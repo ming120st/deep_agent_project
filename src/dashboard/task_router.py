@@ -124,6 +124,13 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   .user-avatar { width: 28px; height: 28px; border-radius: 50%; border: 1px solid var(--border); }
   .user-name { font-size: 13px; color: var(--text); }
   .admin-badge { background: var(--accent-dim); color: #60a5fa; font-family: 'IBM Plex Mono', monospace; font-size: 10px; padding: 2px 8px; border-radius: 4px; border: 1px solid var(--accent); }
+  
+  /* 네비게이션 링크 */
+  .header-nav { display: flex; align-items: center; gap: 4px; }
+  .nav-link { padding: 6px 14px; border-radius: 6px; font-size: 13px; color: var(--text-dim); text-decoration: none; transition: all .15s; }
+  .nav-link:hover { color: var(--text); background: var(--bg3); }
+  .nav-link.active { color: var(--accent); background: var(--accent-dim); }
+
   .btn-logout { background: none; border: 1px solid var(--border); border-radius: 6px; padding: 5px 12px; color: var(--text-dim); font-size: 12px; cursor: pointer; transition: all .15s; }
   .btn-logout:hover { border-color: var(--red); color: var(--red); }
   .live-badge { display: flex; align-items: center; gap: 6px; font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: var(--text-dim); }
@@ -212,6 +219,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
 <header>
   <div class="logo">BOA <span>//</span> 업무 대시보드</div>
+  <nav class="header-nav">
+    <a href="/dashboard" class="nav-link active">업무 대시보드</a>
+    <a href="/knowledge" class="nav-link">지식베이스</a>
+  </nav>
   <div class="header-right">
     <div class="live-badge"><div class="live-dot"></div><span id="last-updated">—</span></div>
     <div class="user-info">
