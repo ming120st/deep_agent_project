@@ -102,14 +102,14 @@ async def extract_parameters(state: GraphState):
     collected_parameters_str = json.dumps(current_params, indent=2, ensure_ascii=False)
 
     # ── SOP 조회 (MongoDB) ────────────────────────────────────────
-    sop_doc = boa_sops_collection.find_one({"agent_name": current_agent})
+    sop_doc = await boa_sops_collection.find_one({"agent_name": current_agent})
     sop = sop_doc.get("content", "없음") if sop_doc else "없음"
     if sop_doc:
         print(f"[ExtractParameters] SOP 주입: {current_agent}")
 
     # ── experience 조회 (MongoDB) ─────────────────────────────────
     # 가장 최근 경험 1건 조회 (추후 유사도 검색으로 고도화 가능)
-    exp_doc = boa_memories_collection.find_one(
+    exp_doc = await boa_memories_collection.find_one(
         {"agent_name": current_agent},
         sort=[("created_at", -1)]
     )

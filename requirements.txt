@@ -13,7 +13,6 @@ openai
 langgraph
 cryptography
 pandas
-pymongo
 certifi
 azure-storage-blob
 google-apps-chat
@@ -25,3 +24,4 @@ dill
 authlib
 httpx
 itsdangerous
+motor # MongoDB 비동기 드라이버

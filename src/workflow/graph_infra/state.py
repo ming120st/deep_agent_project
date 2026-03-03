@@ -6,9 +6,6 @@ import json
 
 class GraphState(BaseModel):
 
-    # 구글 이메일 주소
-    user_id: str
-
     # ── 채팅 컨텍스트 ─────────────────────────────────────────────────────────
     chat_context: Dict[str, Any] = Field(default_factory=dict)
     # user_name, space_name, thread_name, quoted_message, event_time 등

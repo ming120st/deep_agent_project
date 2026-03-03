@@ -42,7 +42,7 @@ async def create_task(user_id: str, user_name: str, agent_name: str, agent_displ
         # 결과
         "result": "시작",
     }
-    result = boa_tasks_collection.insert_one(doc)
+    result = await boa_tasks_collection.insert_one(doc)
     return str(result.inserted_id)
 
 
@@ -75,7 +75,7 @@ async def update_task_status(
     if result is not None:
         task_history_entry["result"] = result
 
-    boa_tasks_collection.update_one(
+    await boa_tasks_collection.update_one(
         {"_id": ObjectId(task_id)},
         {
             "$set": update_fields,
@@ -89,7 +89,7 @@ async def update_task_status(
 # ── 파라미터 업데이트 ──────────────────────────────────────────────────────────
 async def update_task_parameters(task_id: str, parameters: dict):
     """수집된 파라미터 스냅샷 업데이트"""
-    boa_tasks_collection.update_one(
+    await boa_tasks_collection.update_one(
         {"_id": ObjectId(task_id)},
         {"$set": {
             "parameters": parameters,
@@ -100,13 +100,14 @@ async def update_task_parameters(task_id: str, parameters: dict):
 
 # ── 조회 ──────────────────────────────────────────────────────────────────────
 async def get_task(task_id: str) -> Optional[dict]:
-    doc = boa_tasks_collection.find_one({"_id": ObjectId(task_id)})
+    doc = await boa_tasks_collection.find_one({"_id": ObjectId(task_id)})
     if doc:
         doc["task_id"] = str(doc.pop("_id"))
     return doc
 
 async def get_tasks_by_user(user_id: str) -> list:
-    docs = boa_tasks_collection.find({"user_id": user_id}).sort("created_at", -1)
+    cursor = boa_tasks_collection.find({"user_id": user_id}).sort("created_at", -1)
+    docs = await cursor.to_list(length=None)  # 모든 문서 가져오기
     result = []
     for doc in docs:
         doc["task_id"] = str(doc.pop("_id"))
@@ -115,7 +116,8 @@ async def get_tasks_by_user(user_id: str) -> list:
 
 async def get_all_tasks(status: Optional[str] = None) -> list:
     query = {"status": status} if status else {}
-    docs = boa_tasks_collection.find(query).sort("created_at", -1)
+    cursor = boa_tasks_collection.find(query).sort("created_at", -1)
+    docs = await cursor.to_list(length=None)  # 모든 문서 가져오기
     result = []
     for doc in docs:
         doc["task_id"] = str(doc.pop("_id"))

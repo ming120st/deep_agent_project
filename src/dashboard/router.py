@@ -17,8 +17,8 @@ from src.core.mongo_client import boa_admins_collection
 router = APIRouter()
 
 # ── 관리자 확인 ───────────────────────────────────────────────────────────────
-def is_admin(email: str) -> bool:
-    return boa_admins_collection.find_one({"email": email}) is not None
+async def is_admin(email: str) -> bool:
+    return await boa_admins_collection.find_one({"email": email}) is not None
 
 # ── 직렬화 헬퍼 ───────────────────────────────────────────────────────────────
 def serialize_tasks(tasks: list) -> list:
@@ -42,7 +42,7 @@ async def api_me(request: Request):
         raise HTTPException(status_code=401, detail="로그인 필요")
     return {
         **user,
-        "is_admin": is_admin(user["email"])
+        "is_admin": await is_admin(user["email"])
     }
 
 @router.get("/api/tasks")
@@ -51,7 +51,7 @@ async def api_get_tasks(request: Request, status: Optional[str] = None):
     if not user:
         raise HTTPException(status_code=401, detail="로그인 필요")
 
-    if is_admin(user["email"]):
+    if await is_admin(user["email"]):
         tasks = await get_all_tasks(status=status)
     else:
         tasks = await get_tasks_by_user(user["email"])
@@ -69,7 +69,7 @@ async def api_update_task_status(task_id: str, body: StatusUpdateRequest, reques
     user = get_current_user(request)
     if not user:
         raise HTTPException(status_code=401, detail="로그인 필요")
-    if not is_admin(user["email"]):
+    if not await is_admin(user["email"]):
         raise HTTPException(status_code=403, detail="관리자만 상태를 변경할 수 있습니다")
     try:
         await update_task_status(
