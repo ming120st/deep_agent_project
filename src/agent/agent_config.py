@@ -17,31 +17,37 @@ AGENT_REGISTRY = {
             "intent_confirmed": {
                 "type": "bool",
                 "description": "사용자가 와이파이도시락 사용량 조회 업무를 요청한 것이 맞는지 확인 여부 (긍정이면 true, 부정이면 false)",
+                "display_name": "와이파이 사용량 조회 의도 확인 여부",
                 "required": True,
             },
             "imei_list": {
                 "type": "list[str]",
                 "description": "조회할 단말의 IMEI 리스트",
+                "display_name": "IMEI 번호 리스트",
                 "required": True,
             },
             "start_date": {
                 "type": "str",
                 "description": "조회 시작 날짜 (YYYYMMDD 형식)",
+                "display_name": "조회 시작 날짜",
                 "required": True,
             },
             "end_date": {
                 "type": "str",
                 "description": "조회 종료 날짜 (YYYYMMDD 형식)",
+                "display_name": "조회 종료 날짜",
                 "required": True,
             },
             "email_sending_confirmed": {
                 "type": "bool",
                 "description": "조회 결과를 이메일로 받을지 여부 (긍정이면 true, 부정이면 false)",
+                "display_name": "이메일 발송 의사 확인",
                 "required": True,
             },
             "email_address": {
                 "type": "str",
                 "description": "조회 결과를 받을 이메일 주소",
+                "display_name": "이메일 주소",
                 "required": False,
             },
         },

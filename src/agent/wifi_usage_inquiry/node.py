@@ -14,15 +14,18 @@ from typing import Optional
 # ── 헬퍼. 다른 에이전트에서도 동일하게 사용가능 ─────────────────────────────────
 async def _set_waiting(state: GraphState, result: Optional[str] = None):
     if state.task_id:
-        await update_task_status(task_id=state.task_id, status=TaskStatus.WAITING, result=result)
+        params = state.collected_parameters.get(state.current_agent or "", {})
+        await update_task_status(task_id=state.task_id, status=TaskStatus.WAITING, result=result, parameters=params)
 
 async def _set_completed(state: GraphState, result: Optional[str] = None):
     if state.task_id:
-        await update_task_status(task_id=state.task_id, status=TaskStatus.COMPLETED, result=result)
+        params = state.collected_parameters.get(state.current_agent or "", {})
+        await update_task_status(task_id=state.task_id, status=TaskStatus.COMPLETED, result=result, parameters=params)
 
 async def _set_cancelled(state: GraphState, result: Optional[str] = None):
     if state.task_id:
-        await update_task_status(task_id=state.task_id, status=TaskStatus.CANCELLED, result=result)
+        params = state.collected_parameters.get(state.current_agent or "", {})
+        await update_task_status(task_id=state.task_id, status=TaskStatus.CANCELLED, result=result, parameters=params)
 
 # ── 노드 ─────────────────────────────────────────────────────────────────────
 
@@ -75,7 +78,8 @@ async def fetch_usage(state: GraphState) -> GraphState:
             await update_task_status(
                 task_id=state.task_id,
                 status=TaskStatus.ERROR,
-                result=f"사용량 조회 실패: {str(e)}"
+                result=f"사용량 조회 실패: {str(e)}",
+                parameters=state.collected_parameters.get(state.current_agent or "", {})
             )
 
         # 🔴 반드시 종료 처리

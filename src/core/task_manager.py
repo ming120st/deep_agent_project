@@ -18,7 +18,7 @@ class TaskStatus:
 
 
 # ── 생성 ──────────────────────────────────────────────────────────────────────
-async def create_task(user_id: str, user_name: str, agent_name: str, agent_display_name: str) -> str:
+async def create_task(user_id: str, user_name: str, agent_name: str, agent_display_name: str, parameters: Optional[dict] = None) -> str:
     """새 task 생성. 생성된 task_id(str) 반환"""
     now = datetime.utcnow()
     doc = {
@@ -32,6 +32,9 @@ async def create_task(user_id: str, user_name: str, agent_name: str, agent_displ
         # 업무
         "agent_name": agent_name,
         "agent_display_name": agent_display_name,
+
+        # 파라미터
+        "parameters": parameters or {},
 
         # 상태
         "status": TaskStatus.PROCESSING,
@@ -54,6 +57,7 @@ async def update_task_status(
     pending_reason: Optional[str] = None,
     admin_memo: Optional[str] = None,
     result: Optional[str] = None,
+    parameters: Optional[dict] = None,
 ):
     now = datetime.utcnow()
     update_fields = {
@@ -66,6 +70,8 @@ async def update_task_status(
         update_fields["admin_memo"] = admin_memo
     if result is not None:
         update_fields["result"] = result # 최종 업무 처리 결과
+    if parameters is not None:
+        update_fields["parameters"] = parameters
     
     task_history_entry = {
         "status": status,

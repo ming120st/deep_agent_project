@@ -13,6 +13,7 @@ from datetime import datetime
 from src.core.task_manager import get_all_tasks, get_tasks_by_user, update_task_status
 from src.dashboard.auth import require_login, get_current_user
 from src.core.mongo_client import boa_admins_collection
+from src.agent.agent_config import AGENT_REGISTRY
 
 router = APIRouter()
 
@@ -34,6 +35,17 @@ def serialize_tasks(tasks: list) -> list:
     return tasks
 
 # ── API 엔드포인트 ─────────────────────────────────────────────────────────────
+
+@router.get("/api/agents")
+async def api_get_agents():
+    """에이전트별 파라미터 display_name 맵 반환"""
+    result = {}
+    for agent_name, agent_info in AGENT_REGISTRY.items():
+        result[agent_name] = {
+            key: param.get("display_name", key)
+            for key, param in agent_info.get("parameters", {}).items()
+        }
+    return result
 
 @router.get("/api/me")
 async def api_me(request: Request):
@@ -268,13 +280,20 @@ let currentFilter = null;
 let currentTaskId = null;
 let currentUser = null;
 let prevWaitingCount = 0;
+let agentParamLabels = {};
 
 // ── 초기화 ──
 async function init() {
   await loadMe();
+  await loadAgents();
   await loadTasks();
   requestBrowserNotifPermission();
   setInterval(loadTasks, 30000);
+}
+
+async function loadAgents() {
+  const res = await fetch('/api/agents');
+  agentParamLabels = await res.json();
 }
 
 // ── 유저 정보 로드 ──
@@ -351,6 +370,15 @@ function closeBanner() {
   document.getElementById('notif-banner').classList.remove('show');
 }
 
+// ── 날짜 포맷 (GMT+9 보정) ──
+function adjustToKST(iso) {
+  if (!iso) return null;
+  const date = new Date(iso);
+  // UTC/GMT 시간에서 9시간을 더함
+  date.setHours(date.getHours() + 9);
+  return date;
+}
+
 // ── 필터 ──
 function filterByStatus(status, el) {
   currentFilter = status;
@@ -399,7 +427,21 @@ function openModal(taskId) {
   currentTaskId = taskId;
   document.getElementById('modal-title').textContent = task.agent_display_name || task.agent_name;
 
-  const params = task.parameters ? JSON.stringify(task.parameters, null, 2) : '없음';
+  let paramsHtml = '<div style="color:var(--text-dim);font-style:italic">수집된 정보 없음</div>';
+  if (task.parameters && Object.keys(task.parameters).length > 0) {
+    const labelMap = agentParamLabels[task.agent_name] || {};
+    paramsHtml = Object.entries(task.parameters).filter(([key]) => labelMap[key]).map(([key, val]) => {
+      const label = labelMap[key] || key;
+      const displayVal = formatParamValue(val);
+      return `
+        <div class="detail-row" style="margin-bottom:6px;align-items:flex-start">
+          <div class="detail-key" style="min-width:160px;color:var(--accent)">${label}</div>
+          <div class="detail-val" style="color:var(--text)">${displayVal}</div>
+        </div>
+      `;
+    }).join('');
+  }
+
   const history = (task.task_history || []).slice().reverse();
   const isAdmin = currentUser?.is_admin;
 
@@ -415,7 +457,9 @@ function openModal(taskId) {
     </div>
     <div class="detail-section">
       <div class="detail-section-title">수집된 파라미터</div>
-      <pre style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--text);background:var(--bg3);padding:12px;border-radius:6px;overflow-x:auto;white-space:pre-wrap">${params}</pre>
+      <div style="background:var(--bg3);padding:16px;border-radius:6px;border:1px solid var(--border)">
+        ${paramsHtml}
+      </div>
     </div>
     <div class="detail-section">
       <div class="detail-section-title">진행 이력</div>
@@ -462,8 +506,35 @@ async function saveStatus() {
 
 function closeModal() { document.getElementById('modal-overlay').classList.remove('open'); currentTaskId = null; }
 function closeModalOutside(e) { if (e.target === document.getElementById('modal-overlay')) closeModal(); }
-function formatDate(iso) { if (!iso) return '—'; const d = new Date(iso); return d.toLocaleDateString('ko-KR',{month:'2-digit',day:'2-digit'})+' '+d.toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit'}); }
-function formatDateFull(iso) { if (!iso) return '—'; return new Date(iso).toLocaleString('ko-KR'); }
+function formatDate(iso) { 
+  if (!iso) return '—'; 
+  const d = adjustToKST(iso);
+  return d.toLocaleDateString('ko-KR',{month:'2-digit',day:'2-digit'})+' '+d.toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit'}); 
+}
+function formatDateFull(iso) { 
+  if (!iso) return '—'; 
+  return adjustToKST(iso).toLocaleString('ko-KR'); 
+}
+function formatParamValue(val) {
+  if (val === null || val === undefined) return '—';
+  if (typeof val === 'boolean') return val ? '✓ 예' : '✗ 아니오';
+  if (Array.isArray(val)) {
+    if (val.length === 1) return String(val[0]);  // 1개면 그냥 텍스트
+    return val.map(v =>
+      `<div style="padding-left:8px">· ${v}</div>`  // 여러개면 목록
+    ).join('');
+  }
+  if (typeof val === 'object') {
+    return Object.entries(val).map(([k, v]) =>
+      `<div style="padding-left:12px;color:var(--text-dim)">· ${k}: ${v}</div>`
+    ).join('');
+  }
+  // 날짜 포맷 (YYYYMMDD)
+  if (typeof val === 'string' && /^\d{8}$/.test(val)) {
+    return `${val.slice(0,4)}-${val.slice(4,6)}-${val.slice(6,8)}`;
+  }
+  return String(val);
+}
 
 init();
 </script>

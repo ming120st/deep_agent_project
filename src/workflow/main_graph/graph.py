@@ -97,6 +97,7 @@ async def update_parameters(state: GraphState):
             user_name=state.chat_context.get("user_name", ""),
             agent_name=current_agent,
             agent_display_name=agent_info.get("display_name", current_agent),
+            parameters=collected_parameters.get(current_agent, {}),
         )
         updates["task_id"] = task_id
         print(f"[Task] 새 task 생성: {task_id} ({current_agent})")
