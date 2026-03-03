@@ -68,7 +68,7 @@ async def fetch_usage(state: GraphState) -> GraphState:
         state.response["usage_data"] = usage_data
 
     except Exception as e:
-        error_msg = "사용량 조회 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요."
+        error_msg = "사용량 조회 중 오류가 발생했습니다.\n\n 원인은 다음 중 하나일 수 있습니다:\n1. 잘못된 IMEI 번호\n2. 잘못된 기간 설정\n3. 시스템 오류\n\n잠시 후 다시 시도해주세요."
         state.add_ai_message(error_msg)
 
         state.error_message = str(e)
@@ -82,7 +82,10 @@ async def fetch_usage(state: GraphState) -> GraphState:
                 parameters=state.collected_parameters.get(state.current_agent or "", {})
             )
 
-        # 🔴 반드시 종료 처리
+        # 파라미터 초기화 (다음 턴에 처음부터 다시 수집)
+        collected_parameters = dict(state.collected_parameters)
+        collected_parameters.pop("wifi_usage_inquiry", None)
+        state.collected_parameters = collected_parameters
         state.current_agent = None
 
     return state
