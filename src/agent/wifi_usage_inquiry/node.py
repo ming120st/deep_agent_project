@@ -123,7 +123,7 @@ async def send_usage_email(state: GraphState) -> GraphState:
         state.collected_parameters["wifi_usage_inquiry"] = {}
     state.collected_parameters["wifi_usage_inquiry"]["email_sent"] = True
 
-    state.add_ai_message("사용량 조회 결과를 이메일로 전송했습니다.")
+    state.add_ai_message(f"사용량 조회 결과를 {to_email}로 전송했습니다.\n\n{message}")
     await _set_completed(state, result="사용량 조회 결과 이메일 전송 완료")
     # 현재 에이전트 초기화
     state.current_agent = None
