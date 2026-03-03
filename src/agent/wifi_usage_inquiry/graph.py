@@ -1,7 +1,7 @@
 from typing import Literal
 from langgraph.graph import StateGraph, END
 from src.workflow.graph_infra.state import GraphState
-from agent.wifi_usage_inquiry.node import (
+from src.agent.wifi_usage_inquiry.node import (
     confirm_intent, # 의도 확인
     cancel_inquiry, # 업무 취소
     request_imei_list, # IMEI 리스트 요청
