@@ -40,6 +40,7 @@ from src.workflow.main_graph.nodes.response_sender import send_response
 from src.agent.agent_config import AGENT_REGISTRY
 from src.core.task_manager import create_task, TaskStatus
 from src.core.mongo_client import boa_sops_collection # SOP 조회를 위해 추가
+from src.core.mongo_client import checkpointer
 
 # ── 임시 노드 (틀) ─────────────────────────────────────────────────────────────
 
@@ -183,7 +184,7 @@ def build_main_graph():
 
     workflow.add_edge("send_response", END)
 
-    return workflow.compile()
+    return workflow.compile(checkpointer=checkpointer)
 
 
 # ── 싱글톤 그래프 인스턴스 ────────────────────────────────────────────────────

@@ -1,17 +1,21 @@
-from motor.motor_asyncio import AsyncIOMotorClient
-import datetime
+from motor.motor_asyncio import AsyncIOMotorClient  # 기존 컬렉션용 (async)
+from pymongo import MongoClient                      # checkpointer용 (sync)
+from langgraph.checkpoint.mongodb import MongoDBSaver
 import certifi
 import os
 from dotenv import load_dotenv
 
-# 환경 변수 로드
 load_dotenv()
 MONGODB_URI = os.getenv("MONGODB_URI")
 
-# MongoDB 연결
-client = AsyncIOMotorClient(MONGODB_URI, tlsCAFile=certifi.where())
-db = client["boa_db"]  # 사용할 데이터베이스 이름
-boa_tasks_collection = db["boa_tasks"]  # task 로그를 저장할 컬렉션
-boa_admins_collection = db["boa_admins"] # 관리자 정보 저장 컬렉션
-boa_sops_collection = db["boa_sops"] # SOP 정보 저장 컬렉션
-boa_memories_collection = db["boa_memories"] # 에피소드 기억 저장 컬렉션
+# 기존 Motor 클라이언트 (task, sop, memory 등 비동기 작업용)
+async_client = AsyncIOMotorClient(MONGODB_URI, tlsCAFile=certifi.where())
+db = async_client["boa_db"]
+boa_tasks_collection = db["boa_tasks"]
+boa_admins_collection = db["boa_admins"]
+boa_sops_collection = db["boa_sops"]
+boa_memories_collection = db["boa_memories"]
+
+# checkpointer용 동기 pymongo 클라이언트
+sync_client = MongoClient(MONGODB_URI, tlsCAFile=certifi.where())
+checkpointer = MongoDBSaver(sync_client, db_name="boa_db")
