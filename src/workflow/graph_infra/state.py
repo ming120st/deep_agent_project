@@ -5,9 +5,13 @@ import json
 
 
 class GraphState(BaseModel):
+
+    # 구글 이메일 주소
+    user_id: str
+
     # ── 채팅 컨텍스트 ─────────────────────────────────────────────────────────
     chat_context: Dict[str, Any] = Field(default_factory=dict)
-    # user_id, user_name, space_name, thread_name, quoted_message, event_time 등
+    # user_name, space_name, thread_name, quoted_message, event_time 등
 
     session_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     last_activity_time: Optional[int] = None

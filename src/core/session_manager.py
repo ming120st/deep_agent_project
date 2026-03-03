@@ -26,7 +26,7 @@ async def get_or_create_state(user_id: str) -> GraphState:
         # 세션이 없거나, 있어도 타임아웃이면 새로 생성
         if not state or (state.last_activity_time and current_time - state.last_activity_time > SESSION_TIMEOUT_SECONDS):
             print("새로운 세션 생성" if not state else "세션 타임아웃 -> 새로 초기화")
-            state = GraphState(user_id=user_id, last_activity_time=current_time)
+            state = GraphState(last_activity_time=current_time)
             _sessions[user_id] = state
         else:
             print("기존 세션 유지")
