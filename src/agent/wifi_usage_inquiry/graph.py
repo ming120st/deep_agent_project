@@ -30,6 +30,10 @@ def route_wifi_usage_inquiry(state: GraphState) -> Literal[
     all_parameters = getattr(state, "collected_parameters", {}) or {}
     parameters = all_parameters.get("wifi_usage_inquiry", {})
     response = getattr(state, "response", {}) or {}
+    
+    # 0. 에러 발생 시 즉시 종료 (이미 에러 메시지 보냄)
+    if state.error_message:
+        return "end"
 
     # 1. 의도(업무) 확인
     if parameters.get("intent_confirmed") is None:
