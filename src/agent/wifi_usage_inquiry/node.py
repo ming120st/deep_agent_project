@@ -54,29 +54,54 @@ async def request_date_range(state: GraphState) -> GraphState:
 # 사용량 조회
 async def fetch_usage(state: GraphState) -> GraphState:
     params = state.collected_parameters.get("wifi_usage_inquiry", {})
+
     try:
         usage_data = mos_client.get_usage_by_date_range(
             imeis=params.get("imei_list", []),
             start_yyyymmdd=params.get("start_date", ""),
             end_yyyymmdd=params.get("end_date", ""),
         )
+
         state.response["usage_data"] = usage_data
-        state.task_status = "success"
+
     except Exception as e:
+        error_msg = "사용량 조회 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요."
+        state.add_ai_message(error_msg)
+
         state.error_message = str(e)
         state.task_status = "error"
+
         if state.task_id:
             await update_task_status(
-                state.task_id,
-                TaskStatus.ERROR,
+                task_id=state.task_id,
+                status=TaskStatus.ERROR,
                 result=f"사용량 조회 실패: {str(e)}"
             )
+
+        # 🔴 반드시 종료 처리
+        state.current_agent = None
+
     return state
 
 # 이메일 전송 희망 여부 확인
 async def confirm_email_sending(state: GraphState) -> GraphState:
     state.add_ai_message("조회된 사용량을 이메일로 발송할까요?")
     await _set_waiting(state, result="이메일 발송 여부 확인")
+    return state
+
+# 채팅창에 사용량 결과 전송
+async def send_usage_chat(state: GraphState) -> GraphState:
+    usage_data = state.response.get("usage_data", "")
+    ai_response = f"요청하신 와이파이도시락 사용량 조회 결과입니다.\n\n{usage_data}"
+    state.add_ai_message(ai_response)
+    
+    if "wifi_usage_inquiry" not in state.collected_parameters:
+        state.collected_parameters["wifi_usage_inquiry"] = {}
+    state.collected_parameters["wifi_usage_inquiry"]["chat_sent"] = True  # 이중 발송 방지
+    await _set_completed(state, result="사용량 조회 결과 채팅 전송 완료")
+    
+    # 현재 에이전트 초기화
+    state.current_agent = None
     return state
 
 # 이메일 주소 요청
@@ -100,4 +125,6 @@ async def send_usage_email(state: GraphState) -> GraphState:
 
     state.add_ai_message("사용량 조회 결과를 이메일로 전송했습니다.")
     await _set_completed(state, result="사용량 조회 결과 이메일 전송 완료")
+    # 현재 에이전트 초기화
+    state.current_agent = None
     return state

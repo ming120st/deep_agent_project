@@ -1,7 +1,7 @@
 from typing import Literal
 from langgraph.graph import StateGraph, END
 from src.workflow.graph_infra.state import GraphState
-from src.agent.wifi_usage_inquiry.node import (
+from agent.wifi_usage_inquiry.node import (
     confirm_intent, # 의도 확인
     cancel_inquiry, # 업무 취소
     request_imei_list, # IMEI 리스트 요청
@@ -10,6 +10,7 @@ from src.agent.wifi_usage_inquiry.node import (
     confirm_email_sending, # 이메일 전송 희망 여부 확인
     request_email_address, # 이메일 주소 요청
     send_usage_email, # 이메일 전송
+    send_usage_chat, # 채팅창에 사용량 결과 전송
 )
 
 def route_wifi_usage_inquiry(state: GraphState) -> Literal[
@@ -21,6 +22,7 @@ def route_wifi_usage_inquiry(state: GraphState) -> Literal[
     "confirm_email_sending",
     "request_email_address",
     "send_usage_email",
+    "send_usage_chat",
     "end"
 ]:
 
@@ -57,6 +59,9 @@ def route_wifi_usage_inquiry(state: GraphState) -> Literal[
             return "request_email_address"
         if not parameters.get("email_sent"):  # 이중 발송 방지
             return "send_usage_email"
+    elif parameters.get("email_sending_confirmed") is False:
+        if not parameters.get("chat_sent"):
+            return "send_usage_chat"
 
     return "end"
 
@@ -71,6 +76,7 @@ workflow.add_node("fetch_usage", fetch_usage)
 workflow.add_node("confirm_email_sending", confirm_email_sending)
 workflow.add_node("request_email_address", request_email_address)
 workflow.add_node("send_usage_email", send_usage_email)
+workflow.add_node("send_usage_chat", send_usage_chat)
 
 # 조건부 진입점
 workflow.set_conditional_entry_point(
@@ -84,6 +90,7 @@ workflow.set_conditional_entry_point(
         "confirm_email_sending": "confirm_email_sending",
         "request_email_address": "request_email_address",
         "send_usage_email": "send_usage_email",
+        "send_usage_chat": "send_usage_chat",
         "end": END
     }
 )
@@ -106,6 +113,7 @@ workflow.add_conditional_edges(
         "confirm_email_sending": "confirm_email_sending", # Expected path
         "request_email_address": "request_email_address",
         "send_usage_email": "send_usage_email",
+        "send_usage_chat": "send_usage_chat",
         "end": END
     }
 )
@@ -113,5 +121,6 @@ workflow.add_conditional_edges(
 workflow.add_edge("confirm_email_sending", END)
 workflow.add_edge("request_email_address", END)
 workflow.add_edge("send_usage_email", END)
+workflow.add_edge("send_usage_chat", END)
 
 wifi_usage_inquiry_graph = workflow.compile()
