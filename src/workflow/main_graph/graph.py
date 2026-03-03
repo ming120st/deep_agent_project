@@ -49,11 +49,6 @@ def execute_rag(state: GraphState):
     state.add_ai_message("RAG 검색 결과를 바탕으로 답변드립니다. (구현 예정)")
     return state
 
-def execute_light_response(state: GraphState):
-    # TODO: Light Response 로직 구현
-    state.add_ai_message("가벼운 응답입니다. (구현 예정)")
-    return state
-
 def handle_unclear(state: GraphState):
     state.add_ai_message("죄송합니다. 말씀하신 내용을 정확히 이해하지 못했습니다. 다시 한 번 말씀해 주시겠어요?")
     return state
@@ -137,6 +132,7 @@ def build_main_graph():
     from src.workflow.graph_infra.state import GraphState
     from src.workflow.main_graph.nodes.action_classifier import classify_agent_action
     from src.workflow.main_graph.nodes.parameter_extractor import extract_parameters
+    from src.workflow.main_graph.nodes.light_response import execute_light_response
     from src.workflow.main_graph.nodes.response_sender import send_response
     from src.agent.agent_config import AGENT_REGISTRY
 
