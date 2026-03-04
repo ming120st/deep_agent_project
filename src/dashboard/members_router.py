@@ -133,11 +133,20 @@ async def members_page(request: Request):
       --text: #e2e8f0; --muted: #64748b; --accent: #6366f1;
       --green: #22c55e; --red: #ef4444;
     }
-    body { font-family: 'IBM Plex Sans KR', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; padding: 32px 24px; }
+    body { font-family: 'IBM Plex Sans KR', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
+    /* 상단 네비게이션 바 */
+    .top-nav { background: #13161b; border-bottom: 1px solid #252931; padding: 0 28px; height: 56px; display: flex; align-items: center; justify-content: space-between; position: sticky; top: 0; z-index: 100; }
+    .logo { font-family: monospace; font-weight: 600; font-size: 16px; color: #eef1f6; letter-spacing: .05em; }
+    .logo span { color: #3b82f6; }
+    .nav-links { display: flex; align-items: center; gap: 4px; }
+    .nav-link { padding: 6px 14px; border-radius: 6px; font-size: 13px; color: var(--muted); text-decoration: none; transition: all .15s; }
+    .nav-link:hover { color: var(--text); background: #1a1e25; }
+    .nav-link.active { color: #3b82f6; background: #1d3d6e; }
+    .btn-logout { background: none; border: 1px solid #252931; border-radius: 6px; padding: 5px 12px; color: var(--muted); font-size: 12px; cursor: pointer; text-decoration: none; transition: all .15s; }
+    .btn-logout:hover { border-color: #ef4444; color: #ef4444; }
+    .page-body { padding: 32px 24px; }
     .header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 28px; }
     .header h1 { font-size: 20px; font-weight: 600; }
-    .back { color: var(--muted); text-decoration: none; font-size: 14px; }
-    .back:hover { color: var(--text); }
     .stats { display: flex; gap: 16px; margin-bottom: 24px; flex-wrap: wrap; }
     .stat-card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 16px 24px; min-width: 140px; }
     .stat-card .label { font-size: 12px; color: var(--muted); margin-bottom: 6px; }
@@ -164,9 +173,20 @@ async def members_page(request: Request):
   </style>
 </head>
 <body>
+<nav class="top-nav">
+  <div class="logo">BOA <span>//</span> 구성원 관리</div>
+  <div class="nav-links">
+    <a href="/dashboard" class="nav-link">업무 대시보드</a>
+    <a href="/knowledge" class="nav-link">지식베이스</a>
+    <a href="/agents" class="nav-link">에이전트</a>
+    <a href="/spaces" class="nav-link">스페이스</a>
+    <a href="/members" class="nav-link active">구성원</a>
+  </div>
+  <a href="/auth/logout" class="btn-logout">로그아웃</a>
+</nav>
+<div class="page-body">
 <div class="header">
   <h1>👥 구성원 관리</h1>
-  <a href="/dashboard" class="back">← 대시보드</a>
 </div>
 <div class="stats" id="stats">
   <div class="stat-card"><div class="label">전체 구성원</div><div class="value" id="totalCount">—</div></div>
@@ -280,5 +300,6 @@ async def members_page(request: Request):
 
   load();
 </script>
+</div>
 </body>
 </html>""")

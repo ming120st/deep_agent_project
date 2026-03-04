@@ -222,6 +222,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   <nav class="header-nav">
     <a href="/dashboard" class="nav-link active">업무 대시보드</a>
     <a href="/knowledge" class="nav-link">지식베이스</a>
+    <a href="/agents" class="nav-link">에이전트</a>
+    <a href="/spaces" class="nav-link">스페이스</a>
+    <a href="/members" class="nav-link">구성원</a>
   </nav>
   <div class="header-right">
     <div class="live-badge"><div class="live-dot"></div><span id="last-updated">—</span></div>
