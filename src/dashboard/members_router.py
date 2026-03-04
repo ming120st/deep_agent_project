@@ -1,8 +1,17 @@
 """
 구성원 관리 라우터 (members_router.py)
 
-페이지 전체 및 API 모두 boa_admins 전용.
+[settings 스키마 동적 렌더링]
+  MEMBER_SETTINGS_SCHEMA 리스트에 항목 추가하면
+  → /api/members/schema API로 프론트에 내려감
+  → UI가 자동으로 토글 컬럼 추가
+  → HTML 수정 불필요
+
+새 설정 추가 방법:
+  MEMBER_SETTINGS_SCHEMA에 한 줄 추가
+  {"key": "new_setting", "label": "새 설정 이름"}
 """
+import json
 from datetime import datetime
 from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -15,9 +24,18 @@ router = APIRouter()
 boa_members_collection = db["boa_members"]
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# 설정 스키마 — 여기에만 추가하면 UI 자동 반영
+# ══════════════════════════════════════════════════════════════════════════════
+MEMBER_SETTINGS_SCHEMA = [
+    {"key": "report_daily",  "label": "일일 리포트"},
+    {"key": "alert_waiting", "label": "대기 알림"},   # 예시: 추가 시 주석 해제
+    # {"key": "report_weekly", "label": "주간 리포트"}, # 예시: 추가 시 주석 해제
+]
+
+
 # ── 관리자 체크 ───────────────────────────────────────────────────────────────
 async def require_admin(request: Request) -> dict:
-    """관리자가 아니면 403. 로그인 안 했으면 로그인 페이지로."""
     user = request.session.get("user")
     if not user:
         raise HTTPException(status_code=401)
@@ -30,6 +48,13 @@ async def require_admin(request: Request) -> dict:
 # ══════════════════════════════════════════════════════════════════════════════
 # API
 # ══════════════════════════════════════════════════════════════════════════════
+
+@router.get("/api/members/schema")
+async def get_members_schema(request: Request):
+    """설정 스키마 반환 — 프론트에서 동적 렌더링에 사용"""
+    await require_admin(request)
+    return MEMBER_SETTINGS_SCHEMA
+
 
 @router.get("/api/members")
 async def get_members(request: Request):
@@ -52,6 +77,12 @@ class SettingsUpdate(BaseModel):
 @router.patch("/api/members/settings")
 async def update_member_settings(request: Request, body: SettingsUpdate):
     await require_admin(request)
+
+    # 스키마에 없는 key는 거부
+    valid_keys = {s["key"] for s in MEMBER_SETTINGS_SCHEMA}
+    if body.key not in valid_keys:
+        raise HTTPException(status_code=400, detail=f"유효하지 않은 설정 키: {body.key}")
+
     result = await boa_members_collection.update_one(
         {"email": body.email},
         {"$set": {
@@ -65,8 +96,19 @@ async def update_member_settings(request: Request, body: SettingsUpdate):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 페이지 — 관리자만 접근
+# 페이지
 # ══════════════════════════════════════════════════════════════════════════════
+
+FORBIDDEN_HTML = """
+<html><body style="font-family:sans-serif;display:flex;align-items:center;
+justify-content:center;height:100vh;background:#0f1117;color:#e2e8f0;">
+<div style="text-align:center">
+  <div style="font-size:48px">🔒</div>
+  <h2 style="margin:16px 0 8px">접근 권한 없음</h2>
+  <p style="color:#64748b">관리자만 접근할 수 있는 페이지입니다.</p>
+  <a href="/dashboard" style="color:#6366f1;margin-top:16px;display:inline-block">← 대시보드로</a>
+</div></body></html>
+"""
 
 @router.get("/members", response_class=HTMLResponse)
 async def members_page(request: Request):
@@ -75,16 +117,7 @@ async def members_page(request: Request):
         return RedirectResponse("/auth/login")
     doc = await boa_admins_collection.find_one({"email": user["email"]})
     if not doc:
-        return HTMLResponse("""
-            <html><body style="font-family:sans-serif;display:flex;align-items:center;
-            justify-content:center;height:100vh;background:#0f1117;color:#e2e8f0;">
-            <div style="text-align:center">
-              <div style="font-size:48px">🔒</div>
-              <h2 style="margin:16px 0 8px">접근 권한 없음</h2>
-              <p style="color:#64748b">관리자만 접근할 수 있는 페이지입니다.</p>
-              <a href="/dashboard" style="color:#6366f1;margin-top:16px;display:inline-block">← 대시보드로</a>
-            </div></body></html>
-        """, status_code=403)
+        return HTMLResponse(FORBIDDEN_HTML, status_code=403)
 
     return HTMLResponse("""<!DOCTYPE html>
 <html lang="ko">
@@ -110,11 +143,11 @@ async def members_page(request: Request):
     .stat-card .label { font-size: 12px; color: var(--muted); margin-bottom: 6px; }
     .stat-card .value { font-size: 24px; font-weight: 600; }
     .stat-card .value.green { color: var(--green); }
-    .toolbar { display: flex; gap: 12px; margin-bottom: 20px; }
+    .toolbar { margin-bottom: 20px; }
     .search-bar { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 10px 16px; width: 300px; color: var(--text); font-size: 14px; font-family: inherit; }
     .search-bar:focus { outline: none; border-color: var(--accent); }
     table { width: 100%; border-collapse: collapse; background: var(--surface); border-radius: 12px; overflow: hidden; border: 1px solid var(--border); }
-    th { text-align: left; padding: 14px 20px; font-size: 12px; color: var(--muted); font-weight: 500; border-bottom: 1px solid var(--border); background: rgba(255,255,255,0.02); }
+    th { text-align: left; padding: 14px 20px; font-size: 12px; color: var(--muted); font-weight: 500; border-bottom: 1px solid var(--border); background: rgba(255,255,255,0.02); white-space: nowrap; }
     td { padding: 14px 20px; font-size: 14px; border-bottom: 1px solid rgba(255,255,255,0.04); vertical-align: middle; }
     tr:last-child td { border-bottom: none; }
     tr:hover td { background: rgba(255,255,255,0.02); }
@@ -127,6 +160,7 @@ async def members_page(request: Request):
     input:checked + .slider { background: var(--accent); }
     input:checked + .slider:before { transform: translateX(18px); }
     .empty { text-align: center; padding: 60px; color: var(--muted); }
+    .loading { text-align: center; padding: 60px; color: var(--muted); }
   </style>
 </head>
 <body>
@@ -134,49 +168,97 @@ async def members_page(request: Request):
   <h1>👥 구성원 관리</h1>
   <a href="/dashboard" class="back">← 대시보드</a>
 </div>
-<div class="stats">
+<div class="stats" id="stats">
   <div class="stat-card"><div class="label">전체 구성원</div><div class="value" id="totalCount">—</div></div>
-  <div class="stat-card"><div class="label">일일 리포트 수신</div><div class="value green" id="reportCount">—</div></div>
 </div>
 <div class="toolbar">
   <input class="search-bar" type="text" id="searchInput" placeholder="이름 또는 이메일 검색...">
 </div>
 <table>
-  <thead>
-    <tr><th>이름</th><th>이메일</th><th>Space</th><th>등록일</th><th>일일 리포트</th></tr>
-  </thead>
-  <tbody id="tbody"></tbody>
+  <thead><tr id="thead-row"></tr></thead>
+  <tbody id="tbody"><tr><td class="loading">로딩 중...</td></tr></tbody>
 </table>
+
 <script>
-  let all = [];
+  let all = [], schema = [];
+
   async function load() {
-    const res = await fetch('/api/members');
-    all = await res.json();
-    render(all); stats(all);
+    // 스키마와 데이터 병렬 로드
+    [schema, all] = await Promise.all([
+      fetch('/api/members/schema').then(r => r.json()),
+      fetch('/api/members').then(r => r.json()),
+    ]);
+    buildHeader();
+    buildStats();
+    render(all);
   }
-  function stats(m) {
-    document.getElementById('totalCount').textContent  = m.length;
-    document.getElementById('reportCount').textContent = m.filter(x => x.settings?.report_daily).length;
+
+  function buildHeader() {
+    const tr = document.getElementById('thead-row');
+    const base = ['이름', '이메일', 'Space', '등록일'];
+    const schemaLabels = schema.map(s => s.label);
+    [...base, ...schemaLabels].forEach(label => {
+      const th = document.createElement('th');
+      th.textContent = label;
+      tr.appendChild(th);
+    });
   }
+
+  function buildStats() {
+    const statsEl = document.getElementById('stats');
+    // 전체 카드는 이미 있음, 설정별 카드 동적 추가
+    schema.forEach(s => {
+      const count = all.filter(m => m.settings?.[s.key]).length;
+      const card = document.createElement('div');
+      card.className = 'stat-card';
+      card.id = `stat-${s.key}`;
+      card.innerHTML = `<div class="label">${s.label}</div><div class="value green">${count}</div>`;
+      statsEl.appendChild(card);
+    });
+    document.getElementById('totalCount').textContent = all.length;
+  }
+
+  function updateStats() {
+    document.getElementById('totalCount').textContent = all.length;
+    schema.forEach(s => {
+      const el = document.querySelector(`#stat-${s.key} .value`);
+      if (el) el.textContent = all.filter(m => m.settings?.[s.key]).length;
+    });
+  }
+
   function render(members) {
     const tbody = document.getElementById('tbody');
-    if (!members.length) { tbody.innerHTML = '<tr><td colspan="5" class="empty">등록된 구성원이 없습니다</td></tr>'; return; }
-    tbody.innerHTML = members.map(m => `
-      <tr>
-        <td>${m.name || '—'}</td>
-        <td>${m.email}</td>
-        <td>${m.space_name ? `<span class="space-chip">${m.space_name}</span>` : '<span class="no-space">미등록</span>'}</td>
-        <td>${m.created_at ? m.created_at.slice(0,10) : '—'}</td>
+    const colSpan = 4 + schema.length;
+    if (!members.length) {
+      tbody.innerHTML = `<tr><td colspan="${colSpan}" class="empty">등록된 구성원이 없습니다</td></tr>`;
+      return;
+    }
+    tbody.innerHTML = members.map(m => {
+      const spaceCell = m.space_name
+        ? `<span class="space-chip">${m.space_name}</span>`
+        : '<span class="no-space">미등록</span>';
+      const date = m.created_at ? m.created_at.slice(0, 10) : '—';
+      // 스키마 기반으로 토글 셀 동적 생성
+      const toggleCells = schema.map(s => `
         <td>
           <label class="toggle">
-            <input type="checkbox" ${m.settings?.report_daily ? 'checked' : ''}
-              onchange="toggle('${m.email}', 'report_daily', this.checked)">
+            <input type="checkbox" ${m.settings?.[s.key] ? 'checked' : ''}
+              onchange="toggleSetting('${m.email}', '${s.key}', this.checked)">
             <span class="slider"></span>
           </label>
-        </td>
-      </tr>`).join('');
+        </td>`).join('');
+      return `
+        <tr>
+          <td>${m.name || '—'}</td>
+          <td>${m.email}</td>
+          <td>${spaceCell}</td>
+          <td>${date}</td>
+          ${toggleCells}
+        </tr>`;
+    }).join('');
   }
-  async function toggle(email, key, value) {
+
+  async function toggleSetting(email, key, value) {
     const res = await fetch('/api/members/settings', {
       method: 'PATCH',
       headers: {'Content-Type': 'application/json'},
@@ -185,12 +267,17 @@ async def members_page(request: Request):
     if (!res.ok) { alert('변경 실패'); await load(); return; }
     const m = all.find(x => x.email === email);
     if (m) { m.settings = m.settings || {}; m.settings[key] = value; }
-    stats(all);
+    updateStats();
   }
+
   document.getElementById('searchInput').addEventListener('input', e => {
     const q = e.target.value.toLowerCase();
-    render(all.filter(m => (m.name||'').toLowerCase().includes(q) || m.email.toLowerCase().includes(q)));
+    render(all.filter(m =>
+      (m.name || '').toLowerCase().includes(q) ||
+      m.email.toLowerCase().includes(q)
+    ));
   });
+
   load();
 </script>
 </body>

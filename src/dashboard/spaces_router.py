@@ -1,11 +1,15 @@
 """
 스페이스 관리 라우터 (spaces_router.py)
 
-페이지 전체 및 API 모두 boa_admins 전용.
+[settings 스키마 동적 렌더링]
+  SPACE_SETTINGS_SCHEMA 리스트에 항목 추가하면
+  → /api/spaces/schema API로 프론트에 내려감
+  → UI가 자동으로 토글 컬럼 추가
+  → HTML 수정 불필요
 
-GET   /spaces                  → 스페이스 관리 페이지 (HTML)
-GET   /api/spaces              → 스페이스 목록
-PATCH /api/spaces/settings     → settings 토글 (관리자 전용)
+새 설정 추가 방법:
+  SPACE_SETTINGS_SCHEMA에 한 줄 추가
+  {"key": "new_setting", "label": "새 설정 이름"}
 """
 from datetime import datetime
 from fastapi import APIRouter, Request, HTTPException
@@ -17,6 +21,16 @@ from src.core.mongo_client import db, boa_admins_collection
 
 router = APIRouter()
 boa_spaces_collection = db["boa_spaces"]
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 설정 스키마 — 여기에만 추가하면 UI 자동 반영
+# ══════════════════════════════════════════════════════════════════════════════
+SPACE_SETTINGS_SCHEMA = [
+    {"key": "report_daily",  "label": "일일 리포트"},
+    {"key": "announcement",  "label": "공지 발송"},   # 예시: 추가 시 주석 해제
+    # {"key": "report_weekly", "label": "주간 리포트"}, # 예시: 추가 시 주석 해제
+]
 
 
 # ── 관리자 체크 ───────────────────────────────────────────────────────────────
@@ -33,6 +47,13 @@ async def require_admin(request: Request) -> dict:
 # ══════════════════════════════════════════════════════════════════════════════
 # API
 # ══════════════════════════════════════════════════════════════════════════════
+
+@router.get("/api/spaces/schema")
+async def get_spaces_schema(request: Request):
+    """설정 스키마 반환 — 프론트에서 동적 렌더링에 사용"""
+    await require_admin(request)
+    return SPACE_SETTINGS_SCHEMA
+
 
 @router.get("/api/spaces")
 async def get_spaces(request: Request):
@@ -55,6 +76,12 @@ class SpaceSettingsUpdate(BaseModel):
 @router.patch("/api/spaces/settings")
 async def update_space_settings(request: Request, body: SpaceSettingsUpdate):
     await require_admin(request)
+
+    # 스키마에 없는 key는 거부
+    valid_keys = {s["key"] for s in SPACE_SETTINGS_SCHEMA}
+    if body.key not in valid_keys:
+        raise HTTPException(status_code=400, detail=f"유효하지 않은 설정 키: {body.key}")
+
     result = await boa_spaces_collection.update_one(
         {"space_name": body.space_name},
         {"$set": {
@@ -68,8 +95,19 @@ async def update_space_settings(request: Request, body: SpaceSettingsUpdate):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 페이지 — 관리자만 접근
+# 페이지
 # ══════════════════════════════════════════════════════════════════════════════
+
+FORBIDDEN_HTML = """
+<html><body style="font-family:sans-serif;display:flex;align-items:center;
+justify-content:center;height:100vh;background:#0f1117;color:#e2e8f0;">
+<div style="text-align:center">
+  <div style="font-size:48px">🔒</div>
+  <h2 style="margin:16px 0 8px">접근 권한 없음</h2>
+  <p style="color:#64748b">관리자만 접근할 수 있는 페이지입니다.</p>
+  <a href="/dashboard" style="color:#6366f1;margin-top:16px;display:inline-block">← 대시보드로</a>
+</div></body></html>
+"""
 
 @router.get("/spaces", response_class=HTMLResponse)
 async def spaces_page(request: Request):
@@ -78,16 +116,7 @@ async def spaces_page(request: Request):
         return RedirectResponse("/auth/login")
     doc = await boa_admins_collection.find_one({"email": user["email"]})
     if not doc:
-        return HTMLResponse("""
-            <html><body style="font-family:sans-serif;display:flex;align-items:center;
-            justify-content:center;height:100vh;background:#0f1117;color:#e2e8f0;">
-            <div style="text-align:center">
-              <div style="font-size:48px">🔒</div>
-              <h2 style="margin:16px 0 8px">접근 권한 없음</h2>
-              <p style="color:#64748b">관리자만 접근할 수 있는 페이지입니다.</p>
-              <a href="/dashboard" style="color:#6366f1;margin-top:16px;display:inline-block">← 대시보드로</a>
-            </div></body></html>
-        """, status_code=403)
+        return HTMLResponse(FORBIDDEN_HTML, status_code=403)
 
     return HTMLResponse("""<!DOCTYPE html>
 <html lang="ko">
@@ -114,18 +143,17 @@ async def spaces_page(request: Request):
     .stat-card .value { font-size: 24px; font-weight: 600; }
     .stat-card .value.green  { color: var(--green); }
     .stat-card .value.yellow { color: var(--yellow); }
-    .toolbar { display: flex; gap: 12px; margin-bottom: 20px; }
+    .toolbar { margin-bottom: 20px; }
     .search-bar { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 10px 16px; width: 300px; color: var(--text); font-size: 14px; font-family: inherit; }
     .search-bar:focus { outline: none; border-color: var(--accent); }
     table { width: 100%; border-collapse: collapse; background: var(--surface); border-radius: 12px; overflow: hidden; border: 1px solid var(--border); }
-    th { text-align: left; padding: 14px 20px; font-size: 12px; color: var(--muted); font-weight: 500; border-bottom: 1px solid var(--border); background: rgba(255,255,255,0.02); }
+    th { text-align: left; padding: 14px 20px; font-size: 12px; color: var(--muted); font-weight: 500; border-bottom: 1px solid var(--border); background: rgba(255,255,255,0.02); white-space: nowrap; }
     td { padding: 14px 20px; font-size: 14px; border-bottom: 1px solid rgba(255,255,255,0.04); vertical-align: middle; }
     tr:last-child td { border-bottom: none; }
     tr:hover td { background: rgba(255,255,255,0.02); }
     .badge { display: inline-flex; align-items: center; padding: 3px 10px; border-radius: 20px; font-size: 11px; font-weight: 500; }
-    .badge.group { background: rgba(99,102,241,0.15); color: #818cf8; }
-    .badge.space { background: rgba(245,158,11,0.15); color: var(--yellow); }
-    .badge.room  { background: rgba(245,158,11,0.15); color: var(--yellow); }
+    .badge.group  { background: rgba(99,102,241,0.15); color: #818cf8; }
+    .badge.room   { background: rgba(245,158,11,0.15); color: var(--yellow); }
     .space-chip { font-size: 11px; color: var(--muted); background: rgba(255,255,255,0.05); padding: 2px 8px; border-radius: 4px; font-family: monospace; }
     .toggle { position: relative; display: inline-block; width: 40px; height: 22px; }
     .toggle input { opacity: 0; width: 0; height: 0; }
@@ -134,6 +162,7 @@ async def spaces_page(request: Request):
     input:checked + .slider { background: var(--accent); }
     input:checked + .slider:before { transform: translateX(18px); }
     .empty { text-align: center; padding: 60px; color: var(--muted); }
+    .loading { text-align: center; padding: 60px; color: var(--muted); }
   </style>
 </head>
 <body>
@@ -141,57 +170,103 @@ async def spaces_page(request: Request):
   <h1>💬 스페이스 관리</h1>
   <a href="/dashboard" class="back">← 대시보드</a>
 </div>
-<div class="stats">
+<div class="stats" id="stats">
   <div class="stat-card"><div class="label">전체 등록</div><div class="value" id="totalCount">—</div></div>
   <div class="stat-card"><div class="label">GROUP_CHAT</div><div class="value green" id="groupCount">—</div></div>
-  <div class="stat-card"><div class="label">ROOM (스페이스)</div><div class="value yellow" id="roomCount">—</div></div>
-  <div class="stat-card"><div class="label">일일 리포트 수신</div><div class="value green" id="reportCount">—</div></div>
+  <div class="stat-card"><div class="label">ROOM</div><div class="value yellow" id="roomCount">—</div></div>
 </div>
 <div class="toolbar">
   <input class="search-bar" type="text" id="searchInput" placeholder="이름 또는 space_name 검색...">
 </div>
 <table>
-  <thead>
-    <tr><th>이름</th><th>유형</th><th>Space Name</th><th>등록일</th><th>일일 리포트</th></tr>
-  </thead>
-  <tbody id="tbody"></tbody>
+  <thead><tr id="thead-row"></tr></thead>
+  <tbody id="tbody"><tr><td class="loading">로딩 중...</td></tr></tbody>
 </table>
+
 <script>
-  let all = [];
+  let all = [], schema = [];
+
   async function load() {
-    const res = await fetch('/api/spaces');
-    all = await res.json();
-    render(all); stats(all);
+    [schema, all] = await Promise.all([
+      fetch('/api/spaces/schema').then(r => r.json()),
+      fetch('/api/spaces').then(r => r.json()),
+    ]);
+    buildHeader();
+    buildStats();
+    render(all);
   }
-  function stats(s) {
-    document.getElementById('totalCount').textContent  = s.length;
-    document.getElementById('groupCount').textContent  = s.filter(x => x.space_type === 'GROUP_CHAT').length;
-    document.getElementById('roomCount').textContent   = s.filter(x => x.space_type === 'ROOM' || x.space_type === 'SPACE').length;
-    document.getElementById('reportCount').textContent = s.filter(x => x.settings?.report_daily).length;
+
+  function buildHeader() {
+    const tr = document.getElementById('thead-row');
+    const base = ['이름', '유형', 'Space Name', '등록일'];
+    const schemaLabels = schema.map(s => s.label);
+    [...base, ...schemaLabels].forEach(label => {
+      const th = document.createElement('th');
+      th.textContent = label;
+      tr.appendChild(th);
+    });
   }
+
+  function buildStats() {
+    const statsEl = document.getElementById('stats');
+    // 기본 카운트 업데이트
+    document.getElementById('totalCount').textContent = all.length;
+    document.getElementById('groupCount').textContent = all.filter(s => s.space_type === 'GROUP_CHAT').length;
+    document.getElementById('roomCount').textContent  = all.filter(s => s.space_type === 'ROOM' || s.space_type === 'SPACE').length;
+    // 스키마별 카드 동적 추가
+    schema.forEach(s => {
+      const count = all.filter(x => x.settings?.[s.key]).length;
+      const card = document.createElement('div');
+      card.className = 'stat-card';
+      card.id = `stat-${s.key}`;
+      card.innerHTML = `<div class="label">${s.label}</div><div class="value green">${count}</div>`;
+      statsEl.appendChild(card);
+    });
+  }
+
+  function updateStats() {
+    document.getElementById('totalCount').textContent = all.length;
+    document.getElementById('groupCount').textContent = all.filter(s => s.space_type === 'GROUP_CHAT').length;
+    document.getElementById('roomCount').textContent  = all.filter(s => s.space_type === 'ROOM' || s.space_type === 'SPACE').length;
+    schema.forEach(s => {
+      const el = document.querySelector(`#stat-${s.key} .value`);
+      if (el) el.textContent = all.filter(x => x.settings?.[s.key]).length;
+    });
+  }
+
   function typeBadge(t) {
     const cls = t === 'GROUP_CHAT' ? 'group' : 'room';
     return `<span class="badge ${cls}">${t}</span>`;
   }
+
   function render(spaces) {
     const tbody = document.getElementById('tbody');
-    if (!spaces.length) { tbody.innerHTML = '<tr><td colspan="5" class="empty">등록된 스페이스가 없습니다</td></tr>'; return; }
-    tbody.innerHTML = spaces.map(s => `
-      <tr>
-        <td>${s.display_name || '—'}</td>
-        <td>${typeBadge(s.space_type)}</td>
-        <td><span class="space-chip">${s.space_name}</span></td>
-        <td>${s.created_at ? s.created_at.slice(0,10) : '—'}</td>
+    const colSpan = 4 + schema.length;
+    if (!spaces.length) {
+      tbody.innerHTML = `<tr><td colspan="${colSpan}" class="empty">등록된 스페이스가 없습니다</td></tr>`;
+      return;
+    }
+    tbody.innerHTML = spaces.map(s => {
+      const toggleCells = schema.map(sc => `
         <td>
           <label class="toggle">
-            <input type="checkbox" ${s.settings?.report_daily ? 'checked' : ''}
-              onchange="toggle('${s.space_name}', 'report_daily', this.checked)">
+            <input type="checkbox" ${s.settings?.[sc.key] ? 'checked' : ''}
+              onchange="toggleSetting('${s.space_name}', '${sc.key}', this.checked)">
             <span class="slider"></span>
           </label>
-        </td>
-      </tr>`).join('');
+        </td>`).join('');
+      return `
+        <tr>
+          <td>${s.display_name || '—'}</td>
+          <td>${typeBadge(s.space_type)}</td>
+          <td><span class="space-chip">${s.space_name}</span></td>
+          <td>${s.created_at ? s.created_at.slice(0, 10) : '—'}</td>
+          ${toggleCells}
+        </tr>`;
+    }).join('');
   }
-  async function toggle(space_name, key, value) {
+
+  async function toggleSetting(space_name, key, value) {
     const res = await fetch('/api/spaces/settings', {
       method: 'PATCH',
       headers: {'Content-Type': 'application/json'},
@@ -200,15 +275,17 @@ async def spaces_page(request: Request):
     if (!res.ok) { alert('변경 실패'); await load(); return; }
     const s = all.find(x => x.space_name === space_name);
     if (s) { s.settings = s.settings || {}; s.settings[key] = value; }
-    stats(all);
+    updateStats();
   }
+
   document.getElementById('searchInput').addEventListener('input', e => {
     const q = e.target.value.toLowerCase();
     render(all.filter(s =>
-      (s.display_name||'').toLowerCase().includes(q) ||
+      (s.display_name || '').toLowerCase().includes(q) ||
       s.space_name.toLowerCase().includes(q)
     ));
   });
+
   load();
 </script>
 </body>
