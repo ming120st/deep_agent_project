@@ -29,6 +29,10 @@ from src.dashboard.members_router import router as members_router
 from src.dashboard.spaces_router import router as spaces_router
 from src.proactive.report_runner import run_daily_report, upsert_member
 from src.proactive.spaces_manager import upsert_space
+from src.trigger.check_overdue_tasks import check_overdue_tasks
+from src.agent.registry import SCHEDULE_REGISTRY, TRIGGER_REGISTRY
+from src.agent.sync import sync_registry_to_mongo
+from src.dashboard.agents_router import router as agents_router
 
 
 # ── 스케줄러 ──────────────────────────────────────────────────────────────────
@@ -37,18 +41,46 @@ scheduler = AsyncIOScheduler(timezone="Asia/Seoul")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    scheduler.add_job(
-        run_daily_report,
-        trigger="cron",
-        hour=8, minute=0,
-        id="daily_report",
-        replace_existing=True,
-    )
+
+    # 1. registry → MongoDB sync (앱 시작 시 1회)
+    await sync_registry_to_mongo()
+
+    # 2. 스케줄 에이전트 등록 (SCHEDULE_REGISTRY 기반으로 동적 등록)
+    for agent_id, meta in SCHEDULE_REGISTRY.items():
+        scheduler.add_job(
+            meta["func"],
+            trigger="cron",
+            **meta["cron"],
+            id=agent_id,            # ★ agent_id를 job id로 사용 (토글 시 참조)
+            replace_existing=True,
+        )
+        print(f"[Scheduler] 스케줄 등록: {agent_id}")
+
+    # 3. 트리거 에이전트 등록 (TRIGGER_REGISTRY 기반으로 동적 등록)
+    for agent_id, meta in TRIGGER_REGISTRY.items():
+        scheduler.add_job(
+            meta["func"],
+            trigger="interval",
+            **meta["interval"],
+            id=agent_id,            # ★ agent_id를 job id로 사용 (토글 시 참조)
+            replace_existing=True,
+        )
+        print(f"[Scheduler] 트리거 등록: {agent_id}")
+
+    # 4. MongoDB enabled=False인 job은 시작 시 바로 pause
+    from src.core.mongo_client import db
+    cursor = db["boa_agents"].find({"enabled": False, "type": {"$in": ["schedule", "trigger"]}})
+    disabled = await cursor.to_list(length=None)
+    for agent in disabled:
+        job = scheduler.get_job(agent["agent_id"])
+        if job:
+            job.pause()
+            print(f"[Scheduler] 비활성 상태 유지: {agent['agent_id']}")
+
     scheduler.start()
-    print("[Scheduler] 일일 리포트 등록 완료 (매일 08:00 KST)")
     yield
     scheduler.shutdown()
-    print("[Scheduler] 종료")
+
 
 
 # ── FastAPI 앱 ────────────────────────────────────────────────────────────────
@@ -64,6 +96,7 @@ app.include_router(dashboard_router)
 app.include_router(knowledge_router)
 app.include_router(members_router)
 app.include_router(spaces_router)
+app.include_router(agents_router)
 
 
 # ── Google Chat Webhook ───────────────────────────────────────────────────────
