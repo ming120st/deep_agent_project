@@ -1,24 +1,58 @@
+"""
+main.py — APScheduler + 구성원/스페이스 자동 등록 통합 버전
+
+[자동 등록 로직]
+  space_type == "DM"                    → boa_members upsert  (개인)
+  space_type in ("GROUP_CHAT", "SPACE") → boa_spaces  upsert  (단체)
+"""
 import os
 import json
-from contextlib import asynccontextmanager
-from fastapi import FastAPI, Request, BackgroundTasks
-import uvicorn
-from dotenv import load_dotenv
-load_dotenv()
-from src.orchestrator import orchestrate_chat_event
-from src.core.mongo_client import checkpointer
-from src.workflow.graph_infra.state import GraphState
-from src.workflow.main_graph.graph import main_graph
-from starlette.middleware.sessions import SessionMiddleware
-from src.dashboard.auth import router as auth_router
-from src.dashboard.task_router import router as dashboard_router
 import time
 import asyncio
+from contextlib import asynccontextmanager
+
+import uvicorn
+from fastapi import FastAPI, Request, BackgroundTasks
+from starlette.middleware.sessions import SessionMiddleware
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from dotenv import load_dotenv
+
+load_dotenv()
+
+from src.orchestrator import orchestrate_chat_event
+from src.workflow.graph_infra.state import GraphState
+from src.workflow.main_graph.graph import main_graph
+from src.dashboard.auth import router as auth_router
+from src.dashboard.task_router import router as dashboard_router
 from src.dashboard.knowledge_router import router as knowledge_router
+from src.dashboard.members_router import router as members_router
+from src.dashboard.spaces_router import router as spaces_router
+from src.proactive.report_runner import run_daily_report, upsert_member
+from src.proactive.spaces_manager import upsert_space
 
-app = FastAPI()
 
-app.include_router(knowledge_router)
+# ── 스케줄러 ──────────────────────────────────────────────────────────────────
+scheduler = AsyncIOScheduler(timezone="Asia/Seoul")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    scheduler.add_job(
+        run_daily_report,
+        trigger="cron",
+        hour=8, minute=0,
+        id="daily_report",
+        replace_existing=True,
+    )
+    scheduler.start()
+    print("[Scheduler] 일일 리포트 등록 완료 (매일 08:00 KST)")
+    yield
+    scheduler.shutdown()
+    print("[Scheduler] 종료")
+
+
+# ── FastAPI 앱 ────────────────────────────────────────────────────────────────
+app = FastAPI(lifespan=lifespan)
 
 app.add_middleware(
     SessionMiddleware,
@@ -27,7 +61,12 @@ app.add_middleware(
 
 app.include_router(auth_router)
 app.include_router(dashboard_router)
+app.include_router(knowledge_router)
+app.include_router(members_router)
+app.include_router(spaces_router)
 
+
+# ── Google Chat Webhook ───────────────────────────────────────────────────────
 @app.post("/chat")
 async def receive_message(request: Request, background_tasks: BackgroundTasks):
     event = await request.json()
@@ -35,22 +74,32 @@ async def receive_message(request: Request, background_tasks: BackgroundTasks):
     if event.get("chat").get("removedFromSpacePayload") or event.get("chat").get("addedToSpacePayload"):
         return {}
 
-    event_time = event.get("chat", {}).get("eventTime", {})
-    user_name = event.get("chat", {}).get("user", {}).get("displayName")
-    user_id = event.get("chat", {}).get("user", {}).get("email")
-    message = event.get("chat", {}).get("messagePayload", {}).get("message", {}).get("text") or ""
-    space_name = event.get("chat", {}).get("messagePayload", {}).get("space", {}).get("name") or ""
-    thread_name = event.get("chat", {}).get("messagePayload", {}).get("message", {}).get("thread", {}).get("name")
+    event_time    = event.get("chat", {}).get("eventTime", {})
+    user_name     = event.get("chat", {}).get("user", {}).get("displayName")
+    user_id       = event.get("chat", {}).get("user", {}).get("email")
+    message       = event.get("chat", {}).get("messagePayload", {}).get("message", {}).get("text") or ""
+    space         = event.get("chat", {}).get("messagePayload", {}).get("space", {})
+    space_name    = space.get("name") or ""
+    space_type    = space.get("type") or ""
+    display_name  = space.get("displayName") or ""
+    thread_name   = event.get("chat", {}).get("messagePayload", {}).get("message", {}).get("thread", {}).get("name")
     quoted_message = event.get("chat", {}).get("messagePayload", {}).get("message", {}).get("quotedMessageMetadata", {}).get("quotedMessageSnapshot", {}).get("text")
     quoted_message_sender = event.get("chat", {}).get("messagePayload", {}).get("message", {}).get("quotedMessageMetadata", {}).get("quotedMessageSnapshot", {}).get("sender", {})
 
-    # ── 체크포인터에서 기존 state 로드 ──────────────────────────────
-    config = {"configurable": {"thread_id": user_id}}
+    # ── 공간 유형별 자동 등록 ─────────────────────────────────────────────────
+    if space_type == "DM":
+        # 개인 → boa_members
+        background_tasks.add_task(upsert_member, user_id, user_name, space_name)
+    elif space_type in ("GROUP_CHAT", "SPACE"):
+        # 단체방/스페이스 → boa_spaces
+        background_tasks.add_task(upsert_space, space_name, display_name, space_type)
+
+    # ── 세션 처리 ─────────────────────────────────────────────────────────────
+    config   = {"configurable": {"thread_id": user_id}}
     existing = await asyncio.to_thread(main_graph.get_state, config)
 
     if existing.values:
-        state = GraphState(**existing.values)
-        # 타임아웃 체크
+        state        = GraphState(**existing.values)
         current_time = int(time.time())
         if state.last_activity_time and current_time - state.last_activity_time > 3600:
             print("세션 타임아웃 → 초기화")
@@ -62,21 +111,34 @@ async def receive_message(request: Request, background_tasks: BackgroundTasks):
         print("새로운 세션 생성")
 
     state.last_activity_time = int(time.time())
-
     state.chat_context = {
-        "user_id": user_id,
-        "user_name": user_name,
-        "space_name": space_name,
-        "thread_name": thread_name,
-        "quoted_message": quoted_message,
+        "user_id":               user_id,
+        "user_name":             user_name,
+        "space_name":            space_name,
+        "space_type":            space_type,
+        "thread_name":           thread_name,
+        "quoted_message":        quoted_message,
         "quoted_message_sender": quoted_message_sender,
-        "event_time": event_time
+        "event_time":            event_time,
     }
     state.add_user_message(message)
 
     background_tasks.add_task(orchestrate_chat_event, state, config)
-
     return {}
+
+
+# ── 리포트 수동 실행 (테스트용) ───────────────────────────────────────────────
+@app.post("/report/trigger")
+async def trigger_report(request: Request, background_tasks: BackgroundTasks):
+    """
+    Request body (선택): { "date": "2026-03-01" }
+    생략 시 어제 날짜로 실행
+    """
+    body        = await request.json() if request.headers.get("content-type") == "application/json" else {}
+    target_date = body.get("date")
+    background_tasks.add_task(run_daily_report, target_date)
+    return {"ok": True, "message": f"리포트 실행 시작 (date={target_date or '어제'})"}
+
 
 if __name__ == "__main__":
     uvicorn.run("src.main:app", host="0.0.0.0", port=8080, reload=True)
