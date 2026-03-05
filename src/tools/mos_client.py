@@ -181,9 +181,9 @@ mos_client = DeviceDayUsageClient(
 if __name__ == "__main__":
     # 간단 테스트
     client = DeviceDayUsageClient(
-        base_url="https://mcrmgr.umacaroon.com/",
-        channel_id="widemobilewifi",
-        channel_secret="EAy716D6w2ZmjsqDgTBQL9yfFgDgzoLR",
+        base_url=os.getenv("MOS_BASE_URL"),
+        channel_id=os.getenv("MOS_CHANNEL_ID"),
+        channel_secret=os.getenv("MOS_CHANNEL_SECRET"),
     )
 
     # 문서에 있는 테스트용 IMEI (이건 무조건 되어야 함)

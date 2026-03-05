@@ -104,25 +104,26 @@ app.include_router(spaces_router)
 app.include_router(agents_router)
 
 
-# ── Google Chat Webhook ───────────────────────────────────────────────────────
+    # ── Google Chat Webhook ───────────────────────────────────────────────────────
 @app.post("/chat")
 async def receive_message(request: Request, background_tasks: BackgroundTasks):
     event = await request.json()
 
-    if event.get("chat").get("removedFromSpacePayload") or event.get("chat").get("addedToSpacePayload"):
+    chat_event = event.get("chat")
+    if not chat_event or chat_event.get("removedFromSpacePayload") or chat_event.get("addedToSpacePayload"):
         return {}
 
-    event_time    = event.get("chat", {}).get("eventTime", {})
-    user_name     = event.get("chat", {}).get("user", {}).get("displayName")
-    user_id       = event.get("chat", {}).get("user", {}).get("email")
-    message       = event.get("chat", {}).get("messagePayload", {}).get("message", {}).get("text") or ""
-    space         = event.get("chat", {}).get("messagePayload", {}).get("space", {})
+    event_time    = chat_event.get("eventTime", {})
+    user_name     = chat_event.get("user", {}).get("displayName")
+    user_id       = chat_event.get("user", {}).get("email")
+    message       = chat_event.get("messagePayload", {}).get("message", {}).get("text") or ""
+    space         = chat_event.get("messagePayload", {}).get("space", {})
     space_name    = space.get("name") or ""
     space_type    = space.get("type") or ""
     display_name  = space.get("displayName") or ""
-    thread_name   = event.get("chat", {}).get("messagePayload", {}).get("message", {}).get("thread", {}).get("name")
-    quoted_message = event.get("chat", {}).get("messagePayload", {}).get("message", {}).get("quotedMessageMetadata", {}).get("quotedMessageSnapshot", {}).get("text")
-    quoted_message_sender = event.get("chat", {}).get("messagePayload", {}).get("message", {}).get("quotedMessageMetadata", {}).get("quotedMessageSnapshot", {}).get("sender", {})
+    thread_name   = chat_event.get("messagePayload", {}).get("message", {}).get("thread", {}).get("name")
+    quoted_message = chat_event.get("messagePayload", {}).get("message", {}).get("quotedMessageMetadata", {}).get("quotedMessageSnapshot", {}).get("text")
+    quoted_message_sender = chat_event.get("messagePayload", {}).get("message", {}).get("quotedMessageMetadata", {}).get("quotedMessageSnapshot", {}).get("sender", {})
 
     # ── 공간 유형별 자동 등록 ─────────────────────────────────────────────────
     if space_type == "DM":
