@@ -15,8 +15,7 @@ from datetime import datetime
 from src.core.bigquery_client import get_all_report_data
 from src.agent.schedule.daily_sales_report.report_builder import generate_report
 from src.core.google_chat import send_message
-from src.core.mongo_client import boa_members_collection
-from src.core.members_manager import upsert_member
+from src.core.mongo_client import boa_members_collection, boa_spaces_collection
 
 
 # ══════════════════════════════════════════════════════════════════════════════
