@@ -12,7 +12,7 @@ import json
 
 from src.workflow.graph_infra.state import GraphState
 from src.core.llm_config import llm_light
-from src.agent.agent_config import get_current_agent_spec
+from src.agent.registry import get_current_agent_spec
 from src.core.mongo_client import boa_sops_collection, boa_memories_collection
 
 # ── 출력 스키마 ───────────────────────────────────────────────────────────────

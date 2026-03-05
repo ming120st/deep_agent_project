@@ -48,13 +48,13 @@ async def lifespan(app: FastAPI):
     # 2. 스케줄 에이전트 등록 (SCHEDULE_REGISTRY 기반으로 동적 등록)
     for agent_id, meta in SCHEDULE_REGISTRY.items():
         scheduler.add_job(
-            meta["func"],
-            trigger="cron",
-            **meta["cron"],
-            id=agent_id,            # ★ agent_id를 job id로 사용 (토글 시 참조)
-            replace_existing=True,
+            meta["func"],           # 실행할 함수
+            trigger="cron",         # 특정 시간에 실행하는 cron 트리거
+            **meta["cron"],         # cron 표현식 (예: {"hour": "9", "minute": "0"} → 매일 9:00 실행)
+            id=agent_id,            # agent_id를 고유한 job id로 사용 (토글 시 참조)
+            replace_existing=True,  # 기존에 같은 id의 job이 있으면 덮어쓰기 (업데이트 반영)
             misfire_grace_time=600, # 스케줄 놓쳐도 최대 10분까지는 실행 (서버 재시작 등 상황 대비),
-            coalesce=True, # 이전 스케줄이 아직 실행 중이면 다음 스케줄은 건너뛰고 바로 다음 스케줄로 (중복 실행 방지)
+            coalesce=True,          # 이전 스케줄이 아직 실행 중이면 다음 스케줄은 건너뛰고 바로 다음 스케줄로 (중복 실행 방지)
         )
         print(f"[Scheduler] 스케줄 등록: {agent_id}")
 

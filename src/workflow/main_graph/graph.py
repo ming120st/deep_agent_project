@@ -37,9 +37,8 @@ from langgraph.graph import StateGraph, START, END
 from src.workflow.graph_infra.state import GraphState
 from src.workflow.main_graph.nodes.action_classifier import classify_agent_action
 from src.workflow.main_graph.nodes.response_sender import send_response
-from src.agent.agent_config import AGENT_REGISTRY
+from src.agent.registry import AGENT_REGISTRY
 from src.core.task_manager import create_task, TaskStatus
-from src.core.mongo_client import boa_sops_collection # SOP 조회를 위해 추가
 from src.core.mongo_client import checkpointer
 
 # ── 임시 노드 (틀) ─────────────────────────────────────────────────────────────
@@ -128,13 +127,9 @@ def route_after_update_parameters(state: GraphState):
 # ── 그래프 빌더 ───────────────────────────────────────────────────────────────
 
 def build_main_graph():
-    from langgraph.graph import StateGraph, START, END
-    from src.workflow.graph_infra.state import GraphState
-    from src.workflow.main_graph.nodes.action_classifier import classify_agent_action
     from src.workflow.main_graph.nodes.parameter_extractor import extract_parameters
     from src.workflow.main_graph.nodes.light_response import execute_light_response
-    from src.workflow.main_graph.nodes.response_sender import send_response
-    from src.agent.agent_config import AGENT_REGISTRY
+    from src.agent.registry import AGENT_REGISTRY
 
     workflow = StateGraph(GraphState)
 

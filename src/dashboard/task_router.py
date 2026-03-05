@@ -13,7 +13,7 @@ from datetime import datetime
 from src.core.task_manager import get_all_tasks, get_tasks_by_user, update_task_status
 from src.dashboard.auth import require_login, get_current_user
 from src.core.mongo_client import boa_admins_collection
-from src.agent.agent_config import AGENT_REGISTRY
+from src.agent.registry import AGENT_REGISTRY
 
 router = APIRouter()
 

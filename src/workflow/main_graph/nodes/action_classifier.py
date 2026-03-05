@@ -11,7 +11,7 @@ import json
 
 from src.workflow.graph_infra.state import GraphState
 from src.core.llm_config import llm_light
-from src.agent.agent_config import AGENT_DESCRIPTIONS
+from src.agent.registry import AGENT_DESCRIPTIONS
 
 # ── 출력 스키마 (경량화 - parameters 제거) ────────────────────────────────────
 class ActionResult(BaseModel):
