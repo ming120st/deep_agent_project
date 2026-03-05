@@ -31,7 +31,7 @@ async def orchestrate_chat_event(state: GraphState, config: dict) -> None:
 
 def _send_fallback_error(state: GraphState) -> None:
     """그래프 실행이 완전히 실패했을 때 최후 수단으로 오류 메시지를 전송합니다."""
-    from src.services.google_chat import send_response
+    from core.google_chat import send_response
 
     space_name = state.chat_context.get("space_name", "")
     if space_name:

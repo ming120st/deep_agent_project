@@ -26,9 +26,9 @@ from src.dashboard.task_router import router as dashboard_router
 from src.dashboard.knowledge_router import router as knowledge_router
 from src.dashboard.members_router import router as members_router
 from src.dashboard.spaces_router import router as spaces_router
-from src.proactive.report_runner import run_daily_report, upsert_member
-from src.proactive.spaces_manager import upsert_space
-from src.trigger.check_overdue_tasks import check_overdue_tasks
+from src.agent.schedule.daily_sales_report.report_runner import run_daily_report, upsert_member
+from src.core.spaces_manager import upsert_space
+from src.agent.trigger.check_overdue_tasks import check_overdue_tasks
 from src.agent.registry import SCHEDULE_REGISTRY, TRIGGER_REGISTRY
 from src.agent.sync import sync_registry_to_mongo
 from src.dashboard.agents_router import router as agents_router

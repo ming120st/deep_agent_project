@@ -14,11 +14,11 @@ src/agent/registry.py
 
 from typing import Dict, Any
 
-from src.agent.wifi_usage_inquiry.graph import wifi_usage_inquiry_graph
+from src.agent.chat.wifi_usage_inquiry.graph import wifi_usage_inquiry_graph
 # from src.agent.xxx.graph import xxx_graph  ← graph 쓰는 에이전트 추가할 때마다 import
 
-from src.proactive.report_runner import run_daily_report
-from src.trigger.check_overdue_tasks import check_overdue_tasks
+from src.agent.schedule.daily_sales_report.report_runner import run_daily_report
+from src.agent.trigger.check_overdue_tasks import check_overdue_tasks
 # from src.triggers.xxx import xxx  ← 트리거 추가할 때마다 import
 
 

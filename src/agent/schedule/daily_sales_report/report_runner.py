@@ -12,9 +12,9 @@
 import traceback
 from datetime import datetime
 
-from src.proactive.bigquery_client import get_all_report_data
-from src.proactive.report_builder import generate_report
-from src.proactive.dm_sender import send_dm_to_space
+from src.core.bigquery_client import get_all_report_data
+from src.agent.schedule.daily_sales_report.report_builder import generate_report
+from src.core.google_chat import send_message
 from src.core.mongo_client import boa_members_collection, boa_spaces_collection
 
 
@@ -100,7 +100,7 @@ async def run_daily_report(target_date: str = None) -> None:
         fail_count    = 0
 
         for member in sendable:
-            ok    = send_dm_to_space(member["space_name"], report_text)
+            ok    = await send_message(member["space_name"], report_text)
             label = member.get("name") or member["email"]
             if ok:
                 print(f"  ✓ [개인] {label}")
@@ -114,7 +114,7 @@ async def run_daily_report(target_date: str = None) -> None:
         target_spaces = await space_cursor.to_list(length=None)
 
         for space in target_spaces:
-            ok    = send_dm_to_space(space["space_name"], report_text)
+            ok    = await send_message(space["space_name"], report_text)
             label = space.get("display_name") or space["space_name"]
             if ok:
                 print(f"  ✓ [스페이스] {label}")

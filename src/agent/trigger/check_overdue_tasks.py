@@ -12,7 +12,7 @@ trigger_runner.py — 트리거 기반 에이전트 예시
 """
 from datetime import datetime, timezone
 from src.core.mongo_client import boa_tasks_collection, boa_members_collection
-from src.proactive.dm_sender import send_dm_to_space
+from src.core.google_chat import send_message
 
 
 async def check_overdue_tasks() -> None:
@@ -61,7 +61,7 @@ async def check_overdue_tasks() -> None:
             f"처리가 필요합니다!"
         )
 
-        ok = send_dm_to_space(member["space_name"], msg)
+        ok = await send_message(member["space_name"], msg)
 
         if ok:
             # ★ 핵심: 알림 보냈으면 플래그 세우기 (중복 방지)
