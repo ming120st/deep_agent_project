@@ -1,9 +1,10 @@
 """
 Task Manager (boa_tasks CRUD)
 BOA 에이전트 업무 티켓 관리
+에이전트 업무 수행 시 진행상황을 boa_tasks 컬렉션에 기록합니다.
 """
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Any
 from bson import ObjectId
 from src.core.mongo_client import boa_tasks_collection
 
@@ -17,7 +18,26 @@ class TaskStatus:
     ERROR       = "오류"     # 작업 처리 중 에러 발생 시
 
 
+# ── 에이전트 연동 공통 헬퍼 ──────────────────────────────────────────────────────
+# GraphState와 연동하여 상태를 업데이트합니다. (순환 참조 방지를 위해 Any 타입 사용)
+async def set_waiting(state: Any, result: Optional[str] = None):
+    if state.task_id:
+        params = state.collected_parameters.get(state.current_agent or "", {})
+        await update_task_status(task_id=state.task_id, status=TaskStatus.WAITING, result=result, parameters=params)
+
+async def set_completed(state: Any, result: Optional[str] = None):
+    if state.task_id:
+        params = state.collected_parameters.get(state.current_agent or "", {})
+        await update_task_status(task_id=state.task_id, status=TaskStatus.COMPLETED, result=result, parameters=params)
+
+async def set_cancelled(state: Any, result: Optional[str] = None):
+    if state.task_id:
+        params = state.collected_parameters.get(state.current_agent or "", {})
+        await update_task_status(task_id=state.task_id, status=TaskStatus.CANCELLED, result=result, parameters=params)
+
+
 # ── 생성 ──────────────────────────────────────────────────────────────────────
+# task 문서를 새로 생성하는 함수. 업무 시작 시 호출됩니다. 생성된 task_id(str)를 반환합니다.
 async def create_task(user_id: str, user_name: str, agent_name: str, agent_display_name: str, parameters: Optional[dict] = None) -> str:
     """새 task 생성. 생성된 task_id(str) 반환"""
     now = datetime.utcnow()
@@ -42,7 +62,7 @@ async def create_task(user_id: str, user_name: str, agent_name: str, agent_displ
             {"status": TaskStatus.PROCESSING, "changed_at": now, "changed_by": "agent"}
         ],
 
-        # 결과
+        # 결과 
         "result": "시작",
     }
     result = await boa_tasks_collection.insert_one(doc)
@@ -50,6 +70,7 @@ async def create_task(user_id: str, user_name: str, agent_name: str, agent_displ
 
 
 # ── 상태 변경 ─────────────────────────────────────────────────────────────────
+# boa_tasks 컬렉션의 task_id에 해당하는 문서의 상태를 업데이트하는 함수. 업무 처리 중 상태 변경 시마다 호출.
 async def update_task_status(
     task_id: str,
     status: str,
