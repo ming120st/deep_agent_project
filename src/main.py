@@ -31,7 +31,7 @@ from src.core.members_manager import upsert_member
 from src.core.spaces_manager import upsert_space
 from src.agent.trigger.check_overdue_tasks import check_overdue_tasks
 from src.agent.registry import SCHEDULE_REGISTRY, TRIGGER_REGISTRY
-from src.agent.sync import sync_registry_to_mongo
+from src.agent.sync_registry import sync_registry_to_mongo
 from src.dashboard.agents_router import router as agents_router
 
 
