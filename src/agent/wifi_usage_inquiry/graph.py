@@ -2,8 +2,7 @@ from typing import Literal
 from langgraph.graph import StateGraph, END
 from src.workflow.graph_infra.state import GraphState
 from src.agent.wifi_usage_inquiry.node import (
-    confirm_intent, # 의도 확인
-    cancel_inquiry, # 업무 취소
+    cancel_inquiry, # 조회 업무 취소
     request_imei_list, # IMEI 리스트 요청
     request_date_range, # 기간 정보 요청
     fetch_usage, # 사용량 조회
@@ -14,7 +13,6 @@ from src.agent.wifi_usage_inquiry.node import (
 )
 
 def route_wifi_usage_inquiry(state: GraphState) -> Literal[
-    "confirm_intent",
     "cancel_inquiry",
     "request_imei_list",
     "request_date_range",
@@ -35,10 +33,7 @@ def route_wifi_usage_inquiry(state: GraphState) -> Literal[
     if state.error_message:
         return "end"
 
-    # 1. 의도(업무) 확인
-    if parameters.get("intent_confirmed") is None:
-        return "confirm_intent"
-    elif parameters.get("intent_confirmed") is False:
+    if parameters.get("intent_confirmed") is False:
         return "cancel_inquiry"
 
     # 2. IMEI 리스트 확인
@@ -72,7 +67,6 @@ def route_wifi_usage_inquiry(state: GraphState) -> Literal[
 workflow = StateGraph(GraphState)
 
 # 노드 등록
-workflow.add_node("confirm_intent", confirm_intent)
 workflow.add_node("cancel_inquiry", cancel_inquiry)
 workflow.add_node("request_imei_list", request_imei_list)
 workflow.add_node("request_date_range", request_date_range)
@@ -86,7 +80,6 @@ workflow.add_node("send_usage_chat", send_usage_chat)
 workflow.set_conditional_entry_point(
     route_wifi_usage_inquiry, 
     {
-        "confirm_intent": "confirm_intent",
         "cancel_inquiry": "cancel_inquiry",
         "request_imei_list": "request_imei_list",
         "request_date_range": "request_date_range",
@@ -100,7 +93,6 @@ workflow.set_conditional_entry_point(
 )
 
 # 노드 종료 후 처리 (fetch_usage는 자동 진행, 나머지는 사용자 입력 대기)
-workflow.add_edge("confirm_intent", END)
 workflow.add_edge("cancel_inquiry", END)
 workflow.add_edge("request_imei_list", END)
 workflow.add_edge("request_date_range", END)
@@ -109,7 +101,6 @@ workflow.add_conditional_edges(
     "fetch_usage",
     route_wifi_usage_inquiry,
     {
-        "confirm_intent": "confirm_intent", # Should happen if params somehow missing
         "cancel_inquiry": "cancel_inquiry",
         "request_imei_list": "request_imei_list",
         "request_date_range": "request_date_range",

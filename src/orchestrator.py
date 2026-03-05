@@ -38,7 +38,7 @@ def _send_fallback_error(state: GraphState) -> None:
         try:
             send_response(
                 space_name,
-                "죄송합니다. 시스템 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.",
+                "죄송합니다. 시스템 오류가 발생했습니다. AI팀으로 알려주세요!",
             )
         except Exception as e:
             print(f"[Orchestrator] Fallback 메시지 전송도 실패: {e}")

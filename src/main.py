@@ -1,9 +1,8 @@
 """
-main.py — APScheduler + 구성원/스페이스 자동 등록 통합 버전
-
 [자동 등록 로직]
   space_type == "DM"        → boa_members upsert  (개인)
   space_type == "ROOM"      → boa_spaces  upsert  (단체)
+  SCHEDULE_REGISTRY, TRIGGER_REGISTRY 기반 에이전트 앱 시작 시 스케줄러에 자동 등록 (MongoDB enabled 상태 반영)
 """
 import os
 import json
@@ -45,7 +44,7 @@ async def lifespan(app: FastAPI):
     # 1. registry → MongoDB sync (앱 시작 시 1회)
     await sync_registry_to_mongo()
 
-    # 2. 스케줄 에이전트 등록 (SCHEDULE_REGISTRY 기반으로 동적 등록)
+    # 2. 앱 시작 시 스케줄 에이전트 등록 (SCHEDULE_REGISTRY 기반으로 동적 등록)
     for agent_id, meta in SCHEDULE_REGISTRY.items():
         scheduler.add_job(
             meta["func"],           # 실행할 함수
@@ -58,17 +57,17 @@ async def lifespan(app: FastAPI):
         )
         print(f"[Scheduler] 스케줄 등록: {agent_id}")
 
-    # 3. 트리거 에이전트 등록 (TRIGGER_REGISTRY 기반으로 동적 등록)
+    # 3. 앱 시작 시 트리거 에이전트 등록 (TRIGGER_REGISTRY 기반으로 동적 등록)
     for agent_id, meta in TRIGGER_REGISTRY.items():
         scheduler.add_job(
             meta["func"],
             trigger="interval",
             **meta["interval"],
-            id=agent_id,            # ★ agent_id를 job id로 사용 (토글 시 참조)
+            id=agent_id,
             replace_existing=True,
-            misfire_grace_time=600, # 스케줄 놓쳐도 최대 10분까지는 실행 (서버 재시작 등 상황 대비),
-            coalesce=True, # 이전 스케줄이 아직 실행 중이면 다음 스케줄은 건너뛰고 바로 다음 스케줄로 (중복 실행 방지)
-            max_instances=1, # 트리거는 중복 실행 방지 위해 최대 1개 인스턴스만 허용
+            misfire_grace_time=600,
+            coalesce=True,
+            max_instances=1,        # 트리거는 중복 실행 방지 위해 최대 1개 인스턴스만 허용
         )
         print(f"[Scheduler] 트리거 등록: {agent_id}")
 
@@ -93,15 +92,15 @@ app = FastAPI(lifespan=lifespan)
 
 app.add_middleware(
     SessionMiddleware,
-    secret_key=os.getenv("SESSION_SECRET_KEY", "SEI8209H4VNJSQW3DMW490G3NMIWKRENDV8204")
+    secret_key=os.getenv("SESSION_SECRET_KEY", "")
 )
 
 app.include_router(auth_router)
 app.include_router(dashboard_router)
-app.include_router(knowledge_router)
+app.include_router(agents_router)
 app.include_router(members_router)
 app.include_router(spaces_router)
-app.include_router(agents_router)
+app.include_router(knowledge_router)
 
 
     # ── Google Chat Webhook ───────────────────────────────────────────────────────
@@ -125,20 +124,20 @@ async def receive_message(request: Request, background_tasks: BackgroundTasks):
     quoted_message = chat_event.get("messagePayload", {}).get("message", {}).get("quotedMessageMetadata", {}).get("quotedMessageSnapshot", {}).get("text")
     quoted_message_sender = chat_event.get("messagePayload", {}).get("message", {}).get("quotedMessageMetadata", {}).get("quotedMessageSnapshot", {}).get("sender", {})
 
-    # ── 공간 유형별 자동 등록 ─────────────────────────────────────────────────
+    # ── DM/ROOM 정보 자동 등록 ─────────────────────────────────────────────────
     if space_type == "DM":
         # 개인 → boa_members
         background_tasks.add_task(upsert_member, user_id, user_name, space_name)
-    elif space_type in ("GROUP_CHAT", "SPACE"):
+    elif space_type in ("ROOM", "GROUP_CHAT", "SPACE"):
         # 단체방/스페이스 → boa_spaces
         background_tasks.add_task(upsert_space, space_name, display_name, space_type)
 
     # ── 세션 처리 ─────────────────────────────────────────────────────────────
     config   = {"configurable": {"thread_id": user_id}}
-    existing = await asyncio.to_thread(main_graph.get_state, config)
+    existing = await asyncio.to_thread(main_graph.get_state, config) # MongoDB에서 조회한 StateSnapshot
 
     if existing.values:
-        state        = GraphState(**existing.values)
+        state        = GraphState(**existing.values) # GraphState 객체로 변환
         current_time = int(time.time())
         if state.last_activity_time and current_time - state.last_activity_time > 3600:
             print("세션 타임아웃 → 초기화")
@@ -164,20 +163,6 @@ async def receive_message(request: Request, background_tasks: BackgroundTasks):
 
     background_tasks.add_task(orchestrate_chat_event, state, config)
     return {}
-
-
-# ── 리포트 수동 실행 (테스트용) ───────────────────────────────────────────────
-@app.post("/report/trigger")
-async def trigger_report(request: Request, background_tasks: BackgroundTasks):
-    """
-    Request body (선택): { "date": "2026-03-01" }
-    생략 시 어제 날짜로 실행
-    """
-    body        = await request.json() if request.headers.get("content-type") == "application/json" else {}
-    target_date = body.get("date")
-    background_tasks.add_task(run_daily_report, target_date)
-    return {"ok": True, "message": f"리포트 실행 시작 (date={target_date or '어제'})"}
-
 
 if __name__ == "__main__":
     uvicorn.run("src.main:app", host="0.0.0.0", port=8080, reload=True)

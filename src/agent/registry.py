@@ -15,7 +15,7 @@ src/agent/registry.py
 from typing import Dict, Any
 
 from src.agent.wifi_usage_inquiry.graph import wifi_usage_inquiry_graph
-# from src.agent.xxx.graph import xxx_graph  ← 에이전트 추가할 때마다 import
+# from src.agent.xxx.graph import xxx_graph  ← graph 쓰는 에이전트 추가할 때마다 import
 
 from src.proactive.report_runner import run_daily_report
 from src.trigger.check_overdue_tasks import check_overdue_tasks
@@ -33,7 +33,7 @@ AGENT_REGISTRY: dict = {
         "parameters": {
             "intent_confirmed": {
                 "type": "bool",
-                "description": "사용자가 와이파이도시락 사용량 조회 업무를 요청한 것이 맞는지 확인 여부 (긍정이면 true, 부정이면 false)",
+                "description": "사용자의 와이파이도시락 사용량 조회 업무 진행 의사 여부. 사용자가 업무 진행 취소 의사를 표현하면 false로 설정.",
                 "required": True,
             },
             "imei_list": {
@@ -53,7 +53,7 @@ AGENT_REGISTRY: dict = {
             },
             "email_sending_confirmed": {
                 "type": "bool",
-                "description": "조회 결과를 이메일로 받을지 여부 (긍정이면 true, 부정이면 false)",
+                "description": "조회 결과를 이메일로 받을지 여부. 사용자가 긍정하면 true, 부정하면 false",
                 "required": True,
             },
             "email_address": {

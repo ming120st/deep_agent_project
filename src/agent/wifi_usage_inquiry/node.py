@@ -29,13 +29,7 @@ async def _set_cancelled(state: GraphState, result: Optional[str] = None):
 
 # ── 노드 ─────────────────────────────────────────────────────────────────────
 
-# 와이파이도시락 사용량 조회 업무가 맞는지 확인
-async def confirm_intent(state: GraphState) -> GraphState:
-    state.add_ai_message("와이파이도시락 사용량을 조회 업무를 요청하신게 맞나요?")
-    await _set_waiting(state, result="사용량 확인 의도 확인")
-    return state
-
-# 업무 취소
+# 조회 업무 취소
 async def cancel_inquiry(state: GraphState) -> GraphState:
     state.add_ai_message("네, 알겠습니다. 와이파이도시락 사용량 조회 업무를 취소합니다. 다른 도움이 필요하시면 말씀해주세요.")
     state.current_agent = None

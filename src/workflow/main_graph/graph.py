@@ -13,17 +13,17 @@ Google Chat 메시지 수신부터 응답 전송까지의 전체 대화 흐름�
   [classify_agent_action]  ←── LLM 의도 분류
     │
     ▼ [route_by_action] — actionResult에 따라 라우팅
-  ┌──────────┬───────────┼──────────────┬──────────────┐
-  │new_agent │ parameter │ rag          │light_response│
-  ▼          ▼           ▼              ▼              
-execute_  update_    execute_rag   execute_light_
-<agent>   parameters               response
-  │          │           │              │              
-  │          ▼           │              │
-  │     [route_after_    │              │
-  │      update_params]  │              │
-  │          │           │              │
-  └──────────┴───────────┴──────────────┴──────────────┘
+  ┌──────────┬───────────────┼──────────────┬──────────────┐
+  │new_agent │ continue_task │     rag      │light_response│
+       ▼           ▼                ▼              ▼       │
+     execute_   update_        execute_rag  execute_light_ │
+     <agent>  parameters                       response    │
+  │          │               │              │              │
+  │                ▼         │              │              │              
+  │           [route_after_  │              │              │
+  │           update_params] │              │              │
+  │          │               │              │              │
+  └──────────┴───────────────┴──────────────┴──────────────┘
                               │
                         [send_response]
                               │
@@ -117,9 +117,10 @@ def route_by_action(state: GraphState):
 
     return "handle_unclear"
 
+# llm이 의도 분류 후 반환하는 에이전트 이름이 AGENT_REGISTRY에 등록된 이름과 일치해야 extract_parameters → update_parameters → 세부 에이전트 노드로 라우팅됨
 def route_after_update_parameters(state: GraphState):
     agent_name = state.current_agent
-    # 다음을 위해 반드시 에이전트 이름과 노드 이름이 일치해야 함
+    # 다음을 위해 반드시 세부 에이전트 이름과 노드 이름이 일치해야 함
     if agent_name in AGENT_REGISTRY:
         return agent_name
     return "handle_error"
@@ -127,15 +128,17 @@ def route_after_update_parameters(state: GraphState):
 # ── 그래프 빌더 ───────────────────────────────────────────────────────────────
 
 def build_main_graph():
+    # 순환참조 방지 위해 그래프 빌더 내부에서 임포트
     from src.workflow.main_graph.nodes.parameter_extractor import extract_parameters
     from src.workflow.main_graph.nodes.light_response import execute_light_response
     from src.agent.registry import AGENT_REGISTRY
 
+    # 그래프 인스턴스 생성
     workflow = StateGraph(GraphState)
 
     # ── 고정 노드 등록 ──────────────────────────────────────────────
     workflow.add_node("classify_agent_action", classify_agent_action)
-    workflow.add_node("extract_parameters", extract_parameters)       # ← 추가
+    workflow.add_node("extract_parameters", extract_parameters)
     workflow.add_node("execute_rag", execute_rag)
     workflow.add_node("execute_light_response", execute_light_response)
     workflow.add_node("update_parameters", update_parameters)
@@ -143,10 +146,10 @@ def build_main_graph():
     workflow.add_node("handle_error", handle_error)
     workflow.add_node("send_response", send_response)
 
-    # ── 에이전트 노드 자동 등록 ─────────────────────────────────────
+    # ── 에이전트 노드/엣지 자동 등록 ─────────────────────────────────────
     for agent_name, agent_info in AGENT_REGISTRY.items():
-        workflow.add_node(agent_name, agent_info["graph"])
-        workflow.add_edge(agent_name, "send_response")
+        workflow.add_node(agent_name, agent_info["graph"]) # 각 세부 에이전트의 이름으로 StateGraph를 노드에 등록
+        workflow.add_edge(agent_name, "send_response") # 세부 에이전트 실행 후 응답 노드로 연결
 
     # ── 엣지 ──────────────────────────────────────────────────────
     workflow.add_edge(START, "classify_agent_action")
@@ -166,9 +169,10 @@ def build_main_graph():
     workflow.add_edge("extract_parameters", "update_parameters")
 
     # update_parameters → 에이전트 (자동 라우팅)
-    agent_routing = {name: name for name in AGENT_REGISTRY}
+    agent_routing = {name: name for name in AGENT_REGISTRY} # AGENT_REGISTRY에 등록된 에이전트 이름을 노드 이름으로 라우팅
     agent_routing["handle_error"] = "handle_error"
     workflow.add_conditional_edges("update_parameters", route_after_update_parameters, agent_routing)
+    # 위 3줄은 그 위의 add_conditional_edges와 사실 같은 방식으로 라우팅 하고 있는건데, 에이전트 레지스트리 기반으로 자동 라우팅하기 위해 표현이 달라진 것뿐임.
 
     for node_name in ["execute_rag", "execute_light_response", "handle_unclear", "handle_error"]:
         workflow.add_edge(node_name, "send_response")

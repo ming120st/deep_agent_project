@@ -29,6 +29,7 @@ CLASSIFY_PROMPT = """
 
 [행동(action) 분류 기준]
 1. new_agent: 사용자가 새로운 업무(에이전트)를 시작하려고 할 때.
+   - 에이전트 종류는 agent_list를 참고하여 분류하세요.
    - agent_name에 해당 에이전트 이름을 넣으세요.
    - 항상 new_task: true로 설정하세요.
 
@@ -41,7 +42,7 @@ CLASSIFY_PROMPT = """
 4. light_response: 단순 인사, 감정 표현, 위 분류에 해당하지 않는 가벼운 대화.
 
 [new_task 판단 기준]
-- new_agent: 항상 True
+- action이 new_agent일 때: new_task는 항상 True
 - 동일 에이전트 진행 중이지만 이전 업무 완료 후 새 건 요청: True
 - 진행 중인 업무 이어가기: False
 - rag, light_response: False
