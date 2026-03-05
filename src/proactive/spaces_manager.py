@@ -17,9 +17,7 @@ main.py /chat 핸들러에서 space_type이 DM이 아닐 때 호출됩니다.
 }
 """
 from datetime import datetime
-from src.core.mongo_client import db
-
-boa_spaces_collection = db["boa_spaces"]
+from src.core.mongo_client import boa_spaces_collection
 
 MANAGED_SPACE_TYPES = {"GROUP_CHAT", "SPACE", "ROOM"}  # space의 type이 "SPACE"가 아니라 "ROOM"인 경우도 존재하여 둘 다 처리
 

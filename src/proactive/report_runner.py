@@ -15,10 +15,7 @@ from datetime import datetime
 from src.proactive.bigquery_client import get_all_report_data
 from src.proactive.report_builder import generate_report
 from src.proactive.dm_sender import send_dm_to_space
-from src.core.mongo_client import db
-
-boa_members_collection = db["boa_members"]
-boa_spaces_collection  = db["boa_spaces"]
+from src.core.mongo_client import boa_members_collection, boa_spaces_collection
 
 
 # ══════════════════════════════════════════════════════════════════════════════

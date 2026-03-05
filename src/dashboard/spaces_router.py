@@ -17,10 +17,9 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel
 from typing import Any
 
-from src.core.mongo_client import db, boa_admins_collection
+from src.core.mongo_client import boa_spaces_collection, boa_admins_collection
 
 router = APIRouter()
-boa_spaces_collection = db["boa_spaces"]
 
 
 # ══════════════════════════════════════════════════════════════════════════════

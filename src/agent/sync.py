@@ -8,10 +8,7 @@ src/agent/sync.py
 """
 from datetime import datetime
 from src.agent.registry import ALL_REGISTRIES
-from src.core.mongo_client import db
-
-# MongoDB 에이전트 컬렉션
-boa_agents_collection = db["boa_agents"]
+from src.core.mongo_client import boa_agents_collection
 
 # 앱 시작 시 registry → MongoDB sync
 async def sync_registry_to_mongo() -> None:

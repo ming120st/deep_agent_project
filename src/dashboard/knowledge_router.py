@@ -13,12 +13,9 @@ from typing import Optional, List
 from datetime import datetime
 import uuid
 from src.dashboard.auth import require_login, get_current_user
-from src.core.mongo_client import db
-from src.core.mongo_client import boa_admins_collection
+from src.core.mongo_client import boa_knowledge_collection, boa_admins_collection
 
 router = APIRouter()
-
-boa_knowledge_collection = db["boa_knowledge"]
 
 CATEGORIES = ["SOP", "정책", "이벤트", "가이드", "기타"]
 

@@ -5,9 +5,7 @@ boa_report_recipients 컬렉션에 리포트 수신자를 등록합니다.
 BOA 대시보드에 관리 UI를 붙이기 전까지는 이 스크립트로 직접 등록하세요.
 """
 import asyncio
-from src.core.mongo_client import db
-
-recipients_collection = db["boa_report_recipients"]
+from src.core.mongo_client import recipients_collection
 
 
 # ── 수신자 등록 ───────────────────────────────────────────────────────────────

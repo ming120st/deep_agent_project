@@ -14,11 +14,10 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel
 
-from src.core.mongo_client import db, boa_admins_collection
+from src.core.mongo_client import boa_agents_collection, boa_admins_collection
 from src.agent.registry import ALL_REGISTRIES
 
 router = APIRouter()
-boa_agents_collection = db["boa_agents"]
 
 
 # ── 관리자 체크 ───────────────────────────────────────────────────────────────

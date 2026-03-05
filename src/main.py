@@ -72,8 +72,8 @@ async def lifespan(app: FastAPI):
         print(f"[Scheduler] 트리거 등록: {agent_id}")
 
     # 4. MongoDB enabled=False인 job은 시작 시 바로 pause
-    from src.core.mongo_client import db
-    cursor = db["boa_agents"].find({"enabled": False, "type": {"$in": ["schedule", "trigger"]}})
+    from src.core.mongo_client import boa_agents_collection
+    cursor = boa_agents_collection.find({"enabled": False, "type": {"$in": ["schedule", "trigger"]}})
     disabled = await cursor.to_list(length=None)
     for agent in disabled:
         job = scheduler.get_job(agent["agent_id"])

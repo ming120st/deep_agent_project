@@ -11,11 +11,8 @@ trigger_runner.py — 트리거 기반 에이전트 예시
   - 실행: 담당자에게 Google Chat DM 발송
 """
 from datetime import datetime, timezone
-from src.core.mongo_client import db
+from src.core.mongo_client import boa_tasks_collection, boa_members_collection
 from src.proactive.dm_sender import send_dm_to_space
-
-boa_tasks_collection   = db["boa_tasks"]
-boa_members_collection = db["boa_members"]
 
 
 async def check_overdue_tasks() -> None:
