@@ -15,41 +15,8 @@ from datetime import datetime
 from src.core.bigquery_client import get_all_report_data
 from src.agent.schedule.daily_sales_report.report_builder import generate_report
 from src.core.google_chat import send_message
-from src.core.mongo_client import boa_members_collection, boa_spaces_collection
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# /chat 핸들러에서 호출
-# ══════════════════════════════════════════════════════════════════════════════
-async def upsert_member(user_id: str, user_name: str, space_name: str) -> None:
-    """
-    BOA에 DM(space_type="DM")이 올 때마다 호출.
-    처음이면 생성 (settings 기본값), 있으면 name/space_name만 갱신.
-    settings는 덮어쓰지 않음 — 대시보드에서 설정한 값 유지.
-    """
-    if not user_id or not space_name:
-        return
-
-    await boa_members_collection.update_one(
-        {"email": user_id},
-        {
-            "$set": {
-                "name":       user_name,
-                "email":      user_id,
-                "space_name": space_name,
-                "updated_at": datetime.utcnow(),
-            },
-            "$setOnInsert": {
-                "settings": {
-                    "report_daily": False,   # 기본값: 리포트 미발송
-                },
-                "group_ids":  [],
-                "created_at": datetime.utcnow(),
-            }
-        },
-        upsert=True
-    )
-    print(f"[Members] upsert: {user_id} → {space_name}")
+from src.core.mongo_client import boa_members_collection
+from src.core.members_manager import upsert_member
 
 
 # ══════════════════════════════════════════════════════════════════════════════
