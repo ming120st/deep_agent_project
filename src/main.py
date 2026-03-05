@@ -2,8 +2,8 @@
 main.py — APScheduler + 구성원/스페이스 자동 등록 통합 버전
 
 [자동 등록 로직]
-  space_type == "DM"                    → boa_members upsert  (개인)
-  space_type in ("GROUP_CHAT", "SPACE") → boa_spaces  upsert  (단체)
+  space_type == "DM"        → boa_members upsert  (개인)
+  space_type == "ROOM"      → boa_spaces  upsert  (단체)
 """
 import os
 import json
