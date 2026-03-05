@@ -544,7 +544,7 @@ function formatParamValue(val) {
     ).join('');
   }
   // 날짜 포맷 (YYYYMMDD)
-  if (typeof val === 'string' && /^\d{8}$/.test(val)) {
+  if (typeof val === 'string' && /^\\d{8}$/.test(val)) {
     return `${val.slice(0,4)}-${val.slice(4,6)}-${val.slice(6,8)}`;
   }
   return String(val);
