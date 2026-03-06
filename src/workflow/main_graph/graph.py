@@ -40,6 +40,7 @@ from src.workflow.main_graph.nodes.response_sender import send_response
 from src.agent.registry import AGENT_REGISTRY
 from src.core.task_manager import create_task, TaskStatus
 from src.core.mongo_client import checkpointer
+from src.core.mongo_client import boa_agents_collection
 
 # ── 임시 노드 (틀) ─────────────────────────────────────────────────────────────
 
@@ -59,8 +60,9 @@ def handle_error(state: GraphState):
 # ── 파라미터 업데이트 노드 ─────────────────────────────────────────────────────────────
 async def update_parameters(state: GraphState):
     action_data = getattr(state, "action", {})
-    
     updates = {}
+
+    collected_parameters = dict(state.collected_parameters)  # 기존 파라미터 복사
     
     agent_name = action_data.get("agent_name")
     current_agent = state.current_agent
@@ -68,9 +70,7 @@ async def update_parameters(state: GraphState):
         current_agent = agent_name
         updates["current_agent"] = current_agent
     
-    if current_agent and isinstance(action_data, dict):
-        collected_parameters = dict(state.collected_parameters)
-        
+    if current_agent and isinstance(action_data, dict):        
         if current_agent not in collected_parameters:
             collected_parameters[current_agent] = {}
         else:
@@ -84,8 +84,21 @@ async def update_parameters(state: GraphState):
 
         updates["collected_parameters"] = collected_parameters
 
+    if action_data.get("action") == "new_agent":
+
+        agent_doc = await boa_agents_collection.find_one({"agent_id": current_agent})
+        if agent_doc and not agent_doc.get("enabled", True):
+            msg = "죄송합니다. 현재 해당 에이전트는 사용이 중지되어 있습니다. AI팀에 문의해 주세요."
+            state.add_ai_message(msg)  # state.messages 뮤테이션
+            return {
+                "messages": state.messages,  # 뮤테이션된 messages 전체를 반환에 포함
+                "current_agent": None,       # 라우팅 차단
+            }
+
     # ── new_task True이면 task 생성 ──────────────────────────────
     if action_data.get("new_task") is True:
+        updates["error_message"] = None # 새로운 업무 시작이므로 기존 오류 메시지 초기화. 안하면 그래프 시작과 동시에 에러로 라우팅 됨
+        updates["task_status"] = None
         agent_info = AGENT_REGISTRY.get(current_agent, {})
         task_id = await create_task(
             user_id=state.chat_context.get("user_id", ""),

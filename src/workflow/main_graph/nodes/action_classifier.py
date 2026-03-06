@@ -11,7 +11,8 @@ import json
 
 from src.workflow.graph_infra.state import GraphState
 from src.core.llm_config import llm_light
-from src.agent.registry import AGENT_DESCRIPTIONS
+from src.agent.registry import AGENT_REGISTRY
+from src.agent.registry import get_enabled_agent_descriptions
 
 # ── 출력 스키마 (경량화 - parameters 제거) ────────────────────────────────────
 class ActionResult(BaseModel):
@@ -85,7 +86,13 @@ async def classify_agent_action(state: GraphState):
     user_query = state.get_last_user_message() or ""
     messages = json.dumps(state.messages, indent=2, ensure_ascii=False)
     current_agent = state.current_agent or "None"
-    agent_list = json.dumps(AGENT_DESCRIPTIONS, indent=2, ensure_ascii=False)
+
+    # MongoDB에서 enabled=True인 chat 에이전트의 이름과 설명을 가져와서 프롬프트에 포함 (action_classifier 프롬프트용)
+    if state.current_agent and state.current_agent in AGENT_REGISTRY:
+        descriptions = {state.current_agent: AGENT_REGISTRY[state.current_agent]["description"]}
+    else:
+        descriptions = await get_enabled_agent_descriptions()
+    agent_list = json.dumps(descriptions, indent=2, ensure_ascii=False)
 
     result = await action_classify_chain.ainvoke({
         "classify_prompt": CLASSIFY_PROMPT,

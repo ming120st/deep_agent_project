@@ -21,6 +21,7 @@ from src.agent.schedule.daily_sales_report.report_runner import run_daily_report
 from src.agent.trigger.check_overdue_tasks import check_overdue_tasks
 # from src.triggers.xxx import xxx  ← 트리거 추가할 때마다 import
 
+from src.core.mongo_client import boa_agents_collection
 
 # ── 대화형 에이전트 ────────────────────────────────────────────────────────────
 AGENT_REGISTRY: dict = {
@@ -101,13 +102,25 @@ ALL_REGISTRIES: dict = {
 # 에이전트 이름 리스트
 AGENT_NAMES: list = list(AGENT_REGISTRY.keys())
 
-# 에이전트 이름 + 설명 딕셔너리 (action_classifier 프롬프트용)
+# 에이전트 이름 + 설명 딕셔너리 (action_classifier 프롬프트용). MongoDB에서 enabled=True인 chat 에이전트만 포함하도록 get_enabled_agent_descriptions() 함수로 대체중임.
 AGENT_DESCRIPTIONS: dict = {
     name: info["description"] for name, info in AGENT_REGISTRY.items()
 }
-
 
 def get_current_agent_spec(agent_name: str) -> Dict[str, Any]:
     """에이전트 상세 스펙 반환 (graph 객체 제외). parameter_extractor 프롬프트용."""
     spec = AGENT_REGISTRY.get(agent_name, {})
     return {k: v for k, v in spec.items() if k != "graph"}
+
+# MongoDB에서 enabled=True인 chat 에이전트의 이름과 설명 반환하는 함수 (action_classifier 프롬프트용)
+async def get_enabled_agent_descriptions() -> dict:
+    enabled = await boa_agents_collection.find(
+        {"type": "chat", "enabled": True},
+        {"_id": 0, "agent_id": 1}
+    ).to_list(None)
+    enabled_names = {doc["agent_id"] for doc in enabled}
+    return {
+        name: info["description"]
+        for name, info in AGENT_REGISTRY.items()
+        if name in enabled_names
+    }

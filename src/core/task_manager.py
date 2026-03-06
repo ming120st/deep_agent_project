@@ -113,18 +113,6 @@ async def update_task_status(
     )
 
 
-# ── 파라미터 업데이트 ──────────────────────────────────────────────────────────
-async def update_task_parameters(task_id: str, parameters: dict):
-    """수집된 파라미터 스냅샷 업데이트"""
-    await boa_tasks_collection.update_one(
-        {"_id": ObjectId(task_id)},
-        {"$set": {
-            "parameters": parameters,
-            "updated_at": datetime.utcnow()
-        }}
-    )
-
-
 # ── 조회 ──────────────────────────────────────────────────────────────────────
 async def get_task(task_id: str) -> Optional[dict]:
     doc = await boa_tasks_collection.find_one({"_id": ObjectId(task_id)})

@@ -3,6 +3,7 @@ from src.tools.mos_client import mos_client # MOS 클라이언트
 from src.tools.smtp_mail import send_mail # 이메일 전송 함수
 from src.core.task_manager import update_task_status, TaskStatus, set_waiting, set_completed, set_cancelled
 from typing import Optional
+import asyncio
 
 ################################################################################
 #                        와이파이 사용량 조회 업무
@@ -60,13 +61,13 @@ async def fetch_usage(state: GraphState) -> GraphState:
                 parameters=state.collected_parameters.get(state.current_agent or "", {})
             )
 
+        await set_cancelled(state, result="사용량 조회 실패")  # 아래 파라미터 초기화 전에 몽고db에 상태 저장
+
         # 파라미터 초기화 (다음 턴에 처음부터 다시 수집)
         collected_parameters = dict(state.collected_parameters)
         collected_parameters.pop("wifi_usage_inquiry", None)
         state.collected_parameters = collected_parameters
         state.current_agent = None
-
-        await set_cancelled(state, result="사용량 조회 실패")  # 업무 취소 처리
 
     return state
 
@@ -82,9 +83,9 @@ async def send_usage_chat(state: GraphState) -> GraphState:
     ai_response = f"요청하신 와이파이도시락 사용량 조회 결과입니다.\n\n{usage_data}"
     state.add_ai_message(ai_response)
     
-    if "wifi_usage_inquiry" not in state.collected_parameters:
-        state.collected_parameters["wifi_usage_inquiry"] = {}
-    state.collected_parameters["wifi_usage_inquiry"]["chat_sent"] = True  # 이중 발송 방지
+    if state.current_agent not in state.collected_parameters:
+        state.collected_parameters[state.current_agent] = {}
+    state.collected_parameters[state.current_agent]["chat_sent"] = True  # 이중 발송 방지
     await set_completed(state, result="사용량 조회 결과 채팅 전송 완료")
     
     # 현재 에이전트 초기화
@@ -99,16 +100,16 @@ async def request_email_address(state: GraphState) -> GraphState:
 
 # 이메일 전송
 async def send_usage_email(state: GraphState) -> GraphState:
-    params = state.collected_parameters.get("wifi_usage_inquiry", {})
+    params = state.collected_parameters.get(state.current_agent, {})
     to_email = params.get("email_address")
     usage_data = state.response.get("usage_data", "")
     subject = "와이파이도시락 사용량 조회 결과"
     message = f"안녕하세요, 고객님.\n아래는 요청하신 와이파이도시락 사용량 조회 결과입니다. \n\n{usage_data}"
-    send_mail(to_list=[to_email], message=message, subject=subject)
+    await asyncio.to_thread(send_mail,to_list=[to_email], message=message, subject=subject)
     
-    if "wifi_usage_inquiry" not in state.collected_parameters:
-        state.collected_parameters["wifi_usage_inquiry"] = {}
-    state.collected_parameters["wifi_usage_inquiry"]["email_sent"] = True
+    if state.current_agent not in state.collected_parameters:
+        state.collected_parameters[state.current_agent] = {}
+    state.collected_parameters[state.current_agent]["email_sent"] = True
 
     state.add_ai_message(f"사용량 조회 결과를 {to_email}로 전송했습니다.\n\n{message}")
     await set_completed(state, result="사용량 조회 결과 이메일 전송 완료")

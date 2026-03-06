@@ -1,5 +1,5 @@
 from typing import Literal
-from langgraph.graph import StateGraph, END
+from langgraph.graph import StateGraph, START, END
 from src.workflow.graph_infra.state import GraphState
 from src.agent.chat.wifi_usage_inquiry.node import (
     cancel_inquiry, # 조회 업무 취소
@@ -77,7 +77,8 @@ workflow.add_node("send_usage_email", send_usage_email)
 workflow.add_node("send_usage_chat", send_usage_chat)
 
 # 조건부 진입점
-workflow.set_conditional_entry_point(
+workflow.add_conditional_edges(
+    START,
     route_wifi_usage_inquiry, 
     {
         "cancel_inquiry": "cancel_inquiry",

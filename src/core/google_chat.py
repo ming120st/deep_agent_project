@@ -54,6 +54,8 @@ async def send_message(space_name: str, message: str) -> bool:
     space_name으로 메시지를 전송합니다.
     일반 space, 그룹 채팅, DM space 구분 없이 동일하게 사용합니다.
 
+    대화형 리액티브 에이전트의 응답 전송은 send_message를 사용하지 않고 ResponseSender 노드의 send_response()에서 직접 호출하는 형태로 구현되어 있습니다.
+
     Args:
         space_name: Google Chat space 리소스명 (예: "spaces/XXXXXXXXXX")
         message:    전송할 텍스트 메시지

@@ -26,17 +26,17 @@ async def orchestrate_chat_event(state: GraphState, config: dict) -> None:
 
     except Exception as e:
         print(f"[Orchestrator] 오류: {e}")
-        _send_fallback_error(state)
+        await _send_fallback_error(state)
 
 
-def _send_fallback_error(state: GraphState) -> None:
+async def _send_fallback_error(state: GraphState) -> None:
     """그래프 실행이 완전히 실패했을 때 최후 수단으로 오류 메시지를 전송합니다."""
-    from core.google_chat import send_response
-
+    from src.core.google_chat import send_message
     space_name = state.chat_context.get("space_name", "")
     if space_name:
         try:
-            send_response(
+            state.add_ai_message("죄송합니다. 시스템 오류가 발생했습니다. AI팀으로 알려주세요!")
+            await send_message(
                 space_name,
                 "죄송합니다. 시스템 오류가 발생했습니다. AI팀으로 알려주세요!",
             )
