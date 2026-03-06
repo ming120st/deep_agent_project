@@ -1,3 +1,4 @@
+import time
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.output_parsers import StrOutputParser
 from src.core.llm_config import llm_light
@@ -18,6 +19,9 @@ light_response_chain = light_response_prompt | llm_light | StrOutputParser()
 
 async def execute_light_response(state: GraphState):
     """ActionResult가 light_response일 때 호출되어 가벼운 대화 응답을 생성합니다."""
+    start_time = time.time()
+    print(f"[Node] Start: execute_light_response")
+    
     # 상태 객체의 messages를 LLM에 전달 가능한 형식으로 변환
     messages = [(m["role"], m["content"]) for m in state.messages]
     
@@ -27,5 +31,8 @@ async def execute_light_response(state: GraphState):
     # 생성된 응답을 상태에 추가 (기존 리스트 복제 후 추가하여 덮어쓰기)
     new_messages = list(state.messages)
     new_messages.append({"role": "assistant", "content": response_content})
+    
+    end_time = time.time()
+    print(f"[Node] End: execute_light_response | Duration: {end_time - start_time:.2f}s")
     
     return {"messages": new_messages}

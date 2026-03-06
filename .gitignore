@@ -24,3 +24,4 @@ certs/
 # 기타
 src.zip
 test.py
+reset_session_test.py

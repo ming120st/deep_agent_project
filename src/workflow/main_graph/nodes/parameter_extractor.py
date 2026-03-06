@@ -3,6 +3,7 @@
 SOP + 경험(experience) + agent_spec을 풀로 주입하여 파라미터를 추출합니다.
 action_classifier 이후, update_parameters 이전에 실행됩니다.
 """
+import time
 from pydantic import BaseModel
 from typing import Optional, Dict, Any
 from langchain_core.prompts import ChatPromptTemplate
@@ -14,6 +15,8 @@ from src.workflow.graph_infra.state import GraphState
 from src.core.llm_config import llm_light
 from src.agent.registry import get_current_agent_spec
 from src.core.mongo_client import boa_sops_collection, boa_memories_collection
+from src.core.google_chat import send_message
+from src.agent.registry import AGENT_REGISTRY
 
 # ── 출력 스키마 ───────────────────────────────────────────────────────────────
 class ParameterResult(BaseModel):
@@ -83,6 +86,16 @@ extract_chain: Runnable = (
 
 # ── 메인 노드 ─────────────────────────────────────────────────────────────────
 async def extract_parameters(state: GraphState):
+
+    """ 해보니까 구려서 주석처리함
+    # 파라미터 추출 중임을 알림
+    space_name = state.chat_context.get("space_name", "")
+    agent_name = AGENT_REGISTRY.get(state.current_agent, {}).get("display_name", "")
+    await send_message(space_name, f"에이전트가 '{agent_name}'작업에 필요한 정보를 확인 중입니다...")
+    """
+
+    start_time = time.time()
+    print(f"[Node] Start: extract_parameters")
     action_data = state.action or {}
     current_agent = action_data.get("agent_name") or state.current_agent
 
@@ -126,6 +139,8 @@ async def extract_parameters(state: GraphState):
         "experience": experience,
     })
 
+    end_time = time.time()
+    print(f"[Node] End: extract_parameters | Duration: {end_time - start_time:.2f}s")
     print(f"[ExtractParameters] {result}")
 
     # action에 파라미터 결과 머지해서 반환 (update_parameters 노드가 그대로 활용)

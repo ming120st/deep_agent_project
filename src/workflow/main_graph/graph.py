@@ -99,13 +99,21 @@ async def update_parameters(state: GraphState):
     if action_data.get("new_task") is True:
         updates["error_message"] = None # 새로운 업무 시작이므로 기존 오류 메시지 초기화. 안하면 그래프 시작과 동시에 에러로 라우팅 됨
         updates["task_status"] = None
+        updates["response"] = {}
+
+        # 새 태스크니까 이전 플래그(chat_sent, email_sent 등) 초기화
+        collected_parameters[current_agent] = {}
+        if action_data.get("parameters"):
+            collected_parameters[current_agent].update(action_data["parameters"])
+        updates["collected_parameters"] = collected_parameters
+
         agent_info = AGENT_REGISTRY.get(current_agent, {})
         task_id = await create_task(
             user_id=state.chat_context.get("user_id", ""),
             user_name=state.chat_context.get("user_name", ""),
             agent_name=current_agent,
             agent_display_name=agent_info.get("display_name", current_agent),
-            parameters=collected_parameters.get(current_agent, {}),
+            parameters={},
         )
         updates["task_id"] = task_id
         print(f"[Task] 새 task 생성: {task_id} ({current_agent})")

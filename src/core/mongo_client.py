@@ -23,4 +23,4 @@ boa_knowledge_collection = db["boa_knowledge"]
 
 # checkpointer용 동기 pymongo 클라이언트
 sync_client = MongoClient(MONGODB_URI, tlsCAFile=certifi.where())
-checkpointer = MongoDBSaver(sync_client, db_name="boa_db", ttl=604800)  # TTL 7일 (초 단위)
+checkpointer = MongoDBSaver(sync_client, db_name="boa_db", ttl=60*60*24)  # TTL 1일 (초 단위)

@@ -2,6 +2,7 @@
 의도 분류 노드 (Action Classifier Node) - 경량화 버전
 라우팅만 담당. 파라미터 추출은 extract_parameters 노드에서 처리.
 """
+import time
 from pydantic import BaseModel
 from typing import Literal, Optional
 from langchain_core.prompts import ChatPromptTemplate
@@ -13,6 +14,9 @@ from src.workflow.graph_infra.state import GraphState
 from src.core.llm_config import llm_light
 from src.agent.registry import AGENT_REGISTRY
 from src.agent.registry import get_enabled_agent_descriptions
+
+# 대화이력 남기지 않고 중간과정 노티만 보낼 때 사용
+from src.core.google_chat import send_message
 
 # ── 출력 스키마 (경량화 - parameters 제거) ────────────────────────────────────
 class ActionResult(BaseModel):
@@ -83,6 +87,15 @@ action_classify_chain: Runnable = (
 
 # ── 메인 노드 ─────────────────────────────────────────────────────────────────
 async def classify_agent_action(state: GraphState):
+
+    """ 해보니까 구려서 주석처리함
+    # 의도 분석 중임을 알림
+    space_name = state.chat_context.get("space_name", "")
+    await send_message(space_name, "에이전트가 해야 할 일을 분석 중입니다...")
+    """
+
+    start_time = time.time()
+    print(f"[Node] Start: classify_agent_action")
     user_query = state.get_last_user_message() or ""
     messages = json.dumps(state.messages, indent=2, ensure_ascii=False)
     current_agent = state.current_agent or "None"
@@ -103,5 +116,7 @@ async def classify_agent_action(state: GraphState):
         "agent_list": agent_list,
     })
 
+    end_time = time.time()
+    print(f"[Node] End: classify_agent_action | Duration: {end_time - start_time:.2f}s")
     print(f"[ActionClassifier] {result}")
     return {"action": result.dict()}

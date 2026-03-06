@@ -3,6 +3,7 @@ Task Manager (boa_tasks CRUD)
 BOA 에이전트 업무 티켓 관리
 에이전트 업무 수행 시 진행상황을 boa_tasks 컬렉션에 기록합니다.
 """
+import time
 from datetime import datetime
 from typing import Optional, Any
 from bson import ObjectId
@@ -40,6 +41,8 @@ async def set_cancelled(state: Any, result: Optional[str] = None):
 # task 문서를 새로 생성하는 함수. 업무 시작 시 호출됩니다. 생성된 task_id(str)를 반환합니다.
 async def create_task(user_id: str, user_name: str, agent_name: str, agent_display_name: str, parameters: Optional[dict] = None) -> str:
     """새 task 생성. 생성된 task_id(str) 반환"""
+    start_time = time.time()
+    print(f"[MongoDB] Start: create_task for {agent_name}")
     now = datetime.utcnow()
     doc = {
         "created_at": now,
@@ -66,6 +69,8 @@ async def create_task(user_id: str, user_name: str, agent_name: str, agent_displ
         "result": "시작",
     }
     result = await boa_tasks_collection.insert_one(doc)
+    end_time = time.time()
+    print(f"[MongoDB] End: create_task | Duration: {end_time - start_time:.2f}s")
     return str(result.inserted_id)
 
 
@@ -80,6 +85,8 @@ async def update_task_status(
     result: Optional[str] = None,
     parameters: Optional[dict] = None,
 ):
+    start_time = time.time()
+    print(f"[MongoDB] Start: update_task_status (id: {task_id}, status: {status})")
     now = datetime.utcnow()
     update_fields = {
         "status": status,
@@ -111,25 +118,37 @@ async def update_task_status(
             }
         }
     )
+    end_time = time.time()
+    print(f"[MongoDB] End: update_task_status | Duration: {end_time - start_time:.2f}s")
 
 
 # ── 조회 ──────────────────────────────────────────────────────────────────────
 async def get_task(task_id: str) -> Optional[dict]:
+    start_time = time.time()
+    print(f"[MongoDB] Start: get_task (id: {task_id})")
     doc = await boa_tasks_collection.find_one({"_id": ObjectId(task_id)})
     if doc:
         doc["task_id"] = str(doc.pop("_id"))
+    end_time = time.time()
+    print(f"[MongoDB] End: get_task | Duration: {end_time - start_time:.2f}s")
     return doc
 
 async def get_tasks_by_user(user_id: str) -> list:
+    start_time = time.time()
+    print(f"[MongoDB] Start: get_tasks_by_user (user: {user_id})")
     cursor = boa_tasks_collection.find({"user_id": user_id}).sort("created_at", -1)
     docs = await cursor.to_list(length=None)  # 모든 문서 가져오기
     result = []
     for doc in docs:
         doc["task_id"] = str(doc.pop("_id"))
         result.append(doc)
+    end_time = time.time()
+    print(f"[MongoDB] End: get_tasks_by_user | Duration: {end_time - start_time:.2f}s")
     return result
 
 async def get_all_tasks(status: Optional[str] = None) -> list:
+    start_time = time.time()
+    print(f"[MongoDB] Start: get_all_tasks (status: {status})")
     query = {"status": status} if status else {}
     cursor = boa_tasks_collection.find(query).sort("created_at", -1)
     docs = await cursor.to_list(length=None)  # 모든 문서 가져오기
@@ -137,4 +156,6 @@ async def get_all_tasks(status: Optional[str] = None) -> list:
     for doc in docs:
         doc["task_id"] = str(doc.pop("_id"))
         result.append(doc)
+    end_time = time.time()
+    print(f"[MongoDB] End: get_all_tasks | Duration: {end_time - start_time:.2f}s")
     return result

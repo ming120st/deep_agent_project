@@ -1,3 +1,4 @@
+import time
 from langchain_core.runnables import Runnable
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.output_parsers import StrOutputParser
@@ -24,6 +25,8 @@ simple_response_chain: Runnable = RunnableMap({
 
 # 응답 생성 함수
 async def generate_response(instruction_prompt: str, state: GraphState) -> str:
+    start_time = time.time()
+    print(f"[LLM] Start: generate_response")
     result = await simple_response_chain.ainvoke({
         "instruction_prompt": instruction_prompt,
         "userQuery": next(
@@ -31,4 +34,6 @@ async def generate_response(instruction_prompt: str, state: GraphState) -> str:
             "아직 대화가 없습니다."
         )
     })
+    end_time = time.time()
+    print(f"[LLM] End: generate_response | Duration: {end_time - start_time:.2f}s")
     return result
