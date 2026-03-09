@@ -214,7 +214,7 @@ async def members_page(request: Request):
 
   function buildHeader() {
     const tr = document.getElementById('thead-row');
-    const base = ['이름', '이메일', 'Space', '등록일'];
+    const base = ['이름', '부서', '이메일', 'Space', '등록일'];
     const schemaLabels = schema.map(s => s.label);
     [...base, ...schemaLabels].forEach(label => {
       const th = document.createElement('th');
@@ -266,9 +266,13 @@ async def members_page(request: Request):
             <span class="slider"></span>
           </label>
         </td>`).join('');
+      const deptBadge = m.department
+        ? `<span style="background:#1e293b;border:1px solid #334155;padding:2px 8px;border-radius:4px;font-size:12px;color:#94a3b8">${m.department}</span>`
+        : `<span style="background:#2d1515;border:1px solid #7f1d1d;padding:2px 8px;border-radius:4px;font-size:12px;color:#f87171">미설정</span>`;
       return `
         <tr>
           <td>${m.name || '—'}</td>
+          <td>${deptBadge}</td>
           <td>${m.email}</td>
           <td>${spaceCell}</td>
           <td>${date}</td>

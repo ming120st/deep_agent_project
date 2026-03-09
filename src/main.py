@@ -3,6 +3,15 @@
   space_type == "DM"        → boa_members upsert  (개인)
   space_type == "ROOM"      → boa_spaces  upsert  (단체)
   SCHEDULE_REGISTRY, TRIGGER_REGISTRY 기반 에이전트 앱 시작 시 스케줄러에 자동 등록 (MongoDB enabled 상태 반영)
+
+[부서 등록 로직]
+  이 앱은 Google Workspace Events(Pub/Sub) 방식으로 이벤트를 수신합니다.
+  Google Chat은 웹훅에 대해 HTTP 200만 기대하므로, 모든 메시지는
+  Chat REST API를 통해 비동기로 전송합니다. (return {} 후 background_tasks로 처리)
+
+  DM 수신 시 upsert_member → department 미설정이면 send_department_card() 비동기 발송
+  카드 등록 버튼 클릭 → commonEventObject.invokedFunction == "submitDepartment"
+                      → formInputs에서 선택된 부서 파싱 → MongoDB 저장 → 완료 메시지
 """
 import os
 import json
@@ -27,8 +36,9 @@ from src.dashboard.knowledge_router import router as knowledge_router
 from src.dashboard.members_router import router as members_router
 from src.dashboard.spaces_router import router as spaces_router
 from src.agent.schedule.daily_sales_report.report_runner import run_daily_report
-from src.core.members_manager import upsert_member
+from src.core.members_manager import upsert_member, update_member_department
 from src.core.spaces_manager import upsert_space
+from src.core.google_chat import send_message, send_department_card
 from src.agent.trigger.check_overdue_tasks import check_overdue_tasks
 from src.agent.registry import SCHEDULE_REGISTRY, TRIGGER_REGISTRY
 from src.agent.sync_registry import sync_registry_to_mongo
@@ -48,13 +58,13 @@ async def lifespan(app: FastAPI):
     # 2. 앱 시작 시 스케줄 에이전트 등록 (SCHEDULE_REGISTRY 기반으로 동적 등록)
     for agent_id, meta in SCHEDULE_REGISTRY.items():
         scheduler.add_job(
-            meta["func"],           # 실행할 함수
-            trigger="cron",         # 특정 시간에 실행하는 cron 트리거
-            **meta["cron"],         # cron 표현식 (예: {"hour": "9", "minute": "0"} → 매일 9:00 실행)
-            id=agent_id,            # agent_id를 고유한 job id로 사용 (토글 시 참조)
-            replace_existing=True,  # 기존에 같은 id의 job이 있으면 덮어쓰기 (업데이트 반영)
-            misfire_grace_time=600, # 스케줄 놓쳐도 최대 10분까지는 실행 (서버 재시작 등 상황 대비),
-            coalesce=True,          # 이전 스케줄이 아직 실행 중이면 다음 스케줄은 건너뛰고 바로 다음 스케줄로 (중복 실행 방지)
+            meta["func"],
+            trigger="cron",
+            **meta["cron"],
+            id=agent_id,
+            replace_existing=True,
+            misfire_grace_time=600,
+            coalesce=True,
         )
         print(f"[Scheduler] 스케줄 등록: {agent_id}")
 
@@ -68,7 +78,7 @@ async def lifespan(app: FastAPI):
             replace_existing=True,
             misfire_grace_time=600,
             coalesce=True,
-            max_instances=1,        # 트리거는 중복 실행 방지 위해 최대 1개 인스턴스만 허용
+            max_instances=1,
         )
         print(f"[Scheduler] 트리거 등록: {agent_id}")
 
@@ -87,7 +97,6 @@ async def lifespan(app: FastAPI):
     scheduler.shutdown()
 
 
-
 # ── FastAPI 앱 ────────────────────────────────────────────────────────────────
 app = FastAPI(lifespan=lifespan)
 
@@ -104,15 +113,74 @@ app.include_router(spaces_router)
 app.include_router(knowledge_router)
 
 
-    # ── Google Chat Webhook ───────────────────────────────────────────────────────
+# ── Google Chat Webhook ───────────────────────────────────────────────────────
 @app.post("/chat")
 async def receive_message(request: Request, background_tasks: BackgroundTasks):
     event = await request.json()
+    print(f"[DEBUG FULL EVENT] {json.dumps(event, ensure_ascii=False)}")
 
     chat_event = event.get("chat")
-    if not chat_event or chat_event.get("removedFromSpacePayload") or chat_event.get("addedToSpacePayload"):
+
+    # ━━ (수정) 카드 버튼 클릭 처리 (Chat API 표준 Payload + Add-ons 모두 지원) ━━
+    # 버튼 클릭(또는 양방향 이벤트)인지 먼저 확인합니다.
+    event_type = event.get("type", "")
+    is_card_click = (event_type == "CARD_CLICKED") or (event.get("commonEventObject") is not None)
+
+    if not chat_event and not is_card_click:
+        print("[DEBUG] chat_event도 없고 카드 클릭도 아님 → 조기 종료")
         return {}
 
+    if chat_event and (chat_event.get("removedFromSpacePayload") or chat_event.get("addedToSpacePayload")):
+        return {}
+
+    # -- 카드 버튼 클릭 처리 (부서 등록 폼 제출) --
+    # Add-on 방식인 경우 commonEventObject 활용, Chat API HTTP 방식이면 action 객체 활용
+    common = event.get("commonEventObject", {})
+    action = event.get("action", {})
+    invoked_function = common.get("invokedFunction") or action.get("actionMethodName", "")
+
+    if invoked_function == "submitDepartment":
+        form_inputs = common.get("formInputs", {}) or action.get("parameters", [])
+        
+        # Add-on 방식의 formInputs 조회
+        if "department" in form_inputs and isinstance(form_inputs["department"], dict):
+            dept = form_inputs["department"].get("stringInputs", {}).get("value", [""])[0]
+        else:
+            # Chat API 방식의 action parameters 조회(추후 확장용)
+            dept = "알수없음"
+
+        # user_id 및 space_name 추출 로직 (Payload 방식에 따라 다름)
+        if chat_event:
+            user_id = chat_event.get("user", {}).get("email") or event.get("user", {}).get("name", "")
+            space_name = chat_event.get("messagePayload", {}).get("space", {}).get("name") or event.get("space", {}).get("name", "")
+        else:
+            user_id = event.get("user", {}).get("email") or event.get("user", {}).get("name", "")
+            space_name = event.get("space", {}).get("name", "")
+
+        print(f"[Dept] 부서 선택 이벤트 수신: user={user_id}, dept={dept}")
+
+        if user_id and dept:
+            await update_member_department(user_id, dept)
+            if space_name:
+                background_tasks.add_task(
+                    send_message, space_name,
+                    f"✅ *{dept}* 으로 등록되었습니다. BOA를 이용해 주세요!"
+                )
+            
+            # *필수*: Google Chat에 카드 클릭 이벤트가 정상 처리되었음을 알리기 위해 200 OK + actionResponse 반환
+            return {
+                "actionResponse": {
+                    "type": "OK" # 성공적으로 처리했음을 알림
+                }
+            }
+
+    # 만약 카드 클릭이었는데 핸들러가 없다면 기본 OK 반환
+    if is_card_click:
+        return {
+             "actionResponse": {"type": "OK"}
+        }
+
+    # ── 일반 메시지 처리 ───────────────────────────────────────────────────────
     event_time    = chat_event.get("eventTime", {})
     user_name     = chat_event.get("user", {}).get("displayName")
     user_id       = chat_event.get("user", {}).get("email")
@@ -127,18 +195,22 @@ async def receive_message(request: Request, background_tasks: BackgroundTasks):
 
     # ── DM/ROOM 정보 자동 등록 ─────────────────────────────────────────────────
     if space_type == "DM":
-        # 개인 → boa_members
-        background_tasks.add_task(upsert_member, user_id, user_name, space_name)
+        needs_dept = await upsert_member(user_id, user_name, space_name)
+        if needs_dept:
+            print(f"[Dept] department 미설정 → 카드 발송: {user_id}")
+            # Pub/Sub 방식: return {} 후 Chat REST API로 비동기 발송
+            background_tasks.add_task(send_department_card, space_name)
+            return {}
+
     elif space_type in ("ROOM", "GROUP_CHAT", "SPACE"):
-        # 단체방/스페이스 → boa_spaces
         background_tasks.add_task(upsert_space, space_name, display_name, space_type)
 
     # ── 세션 처리 ─────────────────────────────────────────────────────────────
     config   = {"configurable": {"thread_id": user_id}}
-    existing = await asyncio.to_thread(main_graph.get_state, config) # MongoDB에서 조회한 StateSnapshot
+    existing = await asyncio.to_thread(main_graph.get_state, config)
 
     if existing.values:
-        state        = GraphState(**existing.values) # GraphState 객체로 변환
+        state        = GraphState(**existing.values)
         current_time = int(time.time())
         if state.last_activity_time and current_time - state.last_activity_time > 3600:
             print("세션 타임아웃 → 초기화")
@@ -164,6 +236,7 @@ async def receive_message(request: Request, background_tasks: BackgroundTasks):
 
     background_tasks.add_task(orchestrate_chat_event, state, config)
     return {}
+
 
 if __name__ == "__main__":
     uvicorn.run("src.main:app", host="0.0.0.0", port=8080, reload=True)
