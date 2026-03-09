@@ -120,44 +120,26 @@ async def receive_message(request: Request, background_tasks: BackgroundTasks):
     print(f"[DEBUG FULL EVENT] {json.dumps(event, ensure_ascii=False)}")
 
     chat_event = event.get("chat")
-
-    # ━━ (수정) 카드 버튼 클릭 처리 (Chat API 표준 Payload + Add-ons 모두 지원) ━━
-    # 버튼 클릭(또는 양방향 이벤트)인지 먼저 확인합니다.
-    event_type = event.get("type", "")
-    is_card_click = (event_type == "CARD_CLICKED") or (event.get("commonEventObject") is not None)
-
-    if not chat_event and not is_card_click:
-        print("[DEBUG] chat_event도 없고 카드 클릭도 아님 → 조기 종료")
+    if not chat_event or chat_event.get("removedFromSpacePayload") or chat_event.get("addedToSpacePayload"):
         return {}
 
-    if chat_event and (chat_event.get("removedFromSpacePayload") or chat_event.get("addedToSpacePayload")):
-        return {}
-
-    # -- 카드 버튼 클릭 처리 (부서 등록 폼 제출) --
-    # Add-on 방식인 경우 commonEventObject 활용, Chat API HTTP 방식이면 action 객체 활용
-    common = event.get("commonEventObject", {})
-    action = event.get("action", {})
-    invoked_function = common.get("invokedFunction") or action.get("actionMethodName", "")
+    # ── 카드 버튼 클릭 처리 (부서 등록 폼 제출) ────────────────────────────────
+    # Pub/Sub 방식: 버튼 클릭 이벤트도 commonEventObject.invokedFunction으로 들어옴
+    common           = event.get("commonEventObject", {})
+    invoked_function = common.get("invokedFunction", "")
 
     if invoked_function == "submitDepartment":
-        form_inputs = common.get("formInputs", {}) or action.get("parameters", [])
-        
-        # Add-on 방식의 formInputs 조회
-        if "department" in form_inputs and isinstance(form_inputs["department"], dict):
-            dept = form_inputs["department"].get("stringInputs", {}).get("value", [""])[0]
-        else:
-            # Chat API 방식의 action parameters 조회(추후 확장용)
-            dept = "알수없음"
+        # selectionInput(RADIO_BUTTON) 값은 formInputs["department"]["stringInputs"]["value"][0]
+        form_inputs = common.get("formInputs", {})
+        dept = (
+            form_inputs.get("department", {})
+                       .get("stringInputs", {})
+                       .get("value", [""])[0]
+        )
+        user_id    = chat_event.get("user", {}).get("email")
+        space_name = chat_event.get("messagePayload", {}).get("space", {}).get("name") or ""
 
-        # user_id 및 space_name 추출 로직 (Payload 방식에 따라 다름)
-        if chat_event:
-            user_id = chat_event.get("user", {}).get("email") or event.get("user", {}).get("name", "")
-            space_name = chat_event.get("messagePayload", {}).get("space", {}).get("name") or event.get("space", {}).get("name", "")
-        else:
-            user_id = event.get("user", {}).get("email") or event.get("user", {}).get("name", "")
-            space_name = event.get("space", {}).get("name", "")
-
-        print(f"[Dept] 부서 선택 이벤트 수신: user={user_id}, dept={dept}")
+        print(f"[Dept] 부서 선택: user={user_id}, dept={dept}")
 
         if user_id and dept:
             await update_member_department(user_id, dept)
@@ -166,19 +148,7 @@ async def receive_message(request: Request, background_tasks: BackgroundTasks):
                     send_message, space_name,
                     f"✅ *{dept}* 으로 등록되었습니다. BOA를 이용해 주세요!"
                 )
-            
-            # *필수*: Google Chat에 카드 클릭 이벤트가 정상 처리되었음을 알리기 위해 200 OK + actionResponse 반환
-            return {
-                "actionResponse": {
-                    "type": "OK" # 성공적으로 처리했음을 알림
-                }
-            }
-
-    # 만약 카드 클릭이었는데 핸들러가 없다면 기본 OK 반환
-    if is_card_click:
-        return {
-             "actionResponse": {"type": "OK"}
-        }
+        return {}
 
     # ── 일반 메시지 처리 ───────────────────────────────────────────────────────
     event_time    = chat_event.get("eventTime", {})
