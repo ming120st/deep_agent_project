@@ -4,16 +4,20 @@ core/google_chat.py
 Google Chat API 클라이언트 및 메시지 전송 유틸리티.
 
 [함수 목록]
-  send_message(space_name, message)           ← 텍스트 메시지 전송
-  send_department_card(space_name)            ← 부서 선택 카드 전송 (Chat REST API 비동기)
-  find_or_create_dm_space(user_name)          ← DM space 조회 또는 생성
-  send_dm(user_name, message)                 ← user_name으로 DM 발송
+  build_department_card()               ← 부서 선택 카드 dict 반환 (동기 응답용)
+  send_message(space_name, message)     ← 텍스트 메시지 전송
+  find_or_create_dm_space(user_name)    ← DM space 조회 또는 생성
+  send_dm(user_name, message)           ← user_name으로 DM 발송
 
 [핵심 설계 원칙]
-  이 앱은 Google Workspace Events(Pub/Sub) 방식으로 이벤트를 수신합니다.
-  Google Chat은 웹훅에 대해 HTTP 200 응답만 기대하며, return {"cardsV2": ...} 형태의
-  동기 응답은 메시지로 처리되지 않습니다.
-  따라서 카드 포함 모든 메시지는 Chat REST API를 통해 비동기로 전송해야 합니다.
+  순수 Chat API 앱 (gcp-sa-chat) 기반.
+  카드는 build_department_card()로 dict를 생성해 동기 응답(return)으로 즉시 표시.
+  텍스트 메시지 및 스케줄 발송은 Chat REST API를 통해 비동기로 전송.
+
+  카드 버튼 클릭 이벤트:
+    event.type == "CARD_CLICKED"
+    event.action.actionMethodName == "submitDepartment"  (action.function 값과 동일)
+    event.common.formInputs["department"]["stringInputs"]["value"][0]
 """
 
 import json
@@ -41,6 +45,7 @@ chat_service = _build_chat_service()
 
 # ── 부서 목록 ──────────────────────────────────────────────────────────────────
 DEPARTMENT_LIST = [
+    "임원진",
     "영업/제휴팀",
     "도시락모바일팀",
     "브랜드마케팅팀",
@@ -68,8 +73,16 @@ DEPARTMENT_LIST = [
 ]
 
 
-def _build_department_card_body() -> dict:
-    """부서 선택 카드 body 생성 (Chat REST API 전송용)."""
+def build_department_card() -> dict:
+    """
+    부서 선택 카드 응답 dict를 반환합니다.
+    순수 Chat API에서는 return build_department_card() 로 동기 응답하면 즉시 카드가 표시됩니다.
+
+    카드 버튼 클릭 시:
+      event.type == "CARD_CLICKED"
+      event.action.actionMethodName == "submitDepartment"
+      event.common.formInputs["department"]["stringInputs"]["value"][0] → 선택된 부서명
+    """
     department_items = [
         {"text": dept, "value": dept, "selected": False}
         for dept in DEPARTMENT_LIST
@@ -108,39 +121,6 @@ def _build_department_card_body() -> dict:
             }
         }]
     }
-
-
-def _send_card_sync(space_name: str, card_body: dict) -> bool:
-    """카드 전송 동기 함수 (내부용)."""
-    chat_service.spaces().messages().create(
-        parent=space_name,
-        body=card_body,
-    ).execute()
-    return True
-
-
-async def send_department_card(space_name: str) -> bool:
-    """
-    부서 선택 카드를 Chat REST API로 발송합니다.
-
-    이 앱은 Pub/Sub 방식으로 이벤트를 수신하므로 HTTP 응답으로 카드를 반환해도
-    Google Chat이 메시지로 처리하지 않습니다. 반드시 이 함수처럼 Chat REST API를
-    통해 직접 전송해야 합니다.
-
-    Args:
-        space_name: Google Chat DM space 리소스명 (예: "spaces/XXXXXXXXXX")
-
-    Returns:
-        True: 성공 / False: 실패
-    """
-    try:
-        card_body = _build_department_card_body()
-        await asyncio.to_thread(_send_card_sync, space_name, card_body)
-        print(f"[GoogleChat] 부서 선택 카드 발송 → {space_name}")
-        return True
-    except Exception as e:
-        print(f"[GoogleChat] 카드 발송 실패 ({space_name}): {e}")
-        return False
 
 
 # ── 텍스트 메시지 전송 ─────────────────────────────────────────────────────────

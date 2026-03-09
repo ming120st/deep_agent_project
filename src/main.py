@@ -5,13 +5,21 @@
   SCHEDULE_REGISTRY, TRIGGER_REGISTRY 기반 에이전트 앱 시작 시 스케줄러에 자동 등록 (MongoDB enabled 상태 반영)
 
 [부서 등록 로직]
-  이 앱은 Google Workspace Events(Pub/Sub) 방식으로 이벤트를 수신합니다.
-  Google Chat은 웹훅에 대해 HTTP 200만 기대하므로, 모든 메시지는
-  Chat REST API를 통해 비동기로 전송합니다. (return {} 후 background_tasks로 처리)
+  순수 Chat API 앱 (gcp-sa-chat) 기반.
+  동기 응답(return {"cardsV2": ...})으로 카드 즉시 표시 가능.
+  버튼 클릭은 type == "CARD_CLICKED", action.actionMethodName 으로 수신.
+  formInputs는 common.formInputs 에서 파싱.
 
-  DM 수신 시 upsert_member → department 미설정이면 send_department_card() 비동기 발송
-  카드 등록 버튼 클릭 → commonEventObject.invokedFunction == "submitDepartment"
-                      → formInputs에서 선택된 부서 파싱 → MongoDB 저장 → 완료 메시지
+  실제 이벤트 구조 (확인됨):
+    event.type                    → "MESSAGE" | "CARD_CLICKED" | "ADDED_TO_SPACE" 등
+    event.user.email              → 유저 ID
+    event.user.displayName        → 유저 이름
+    event.space.name              → space ID
+    event.space.type              → "DM" | "ROOM" | "GROUP_CHAT" 등
+    event.message.text            → 메시지 텍스트
+    event.message.thread.name     → 스레드 이름
+    event.action.actionMethodName → 버튼 클릭 시 function 이름
+    event.common.formInputs       → 카드 폼 입력값
 """
 import os
 import json
@@ -35,11 +43,9 @@ from src.dashboard.task_router import router as dashboard_router
 from src.dashboard.knowledge_router import router as knowledge_router
 from src.dashboard.members_router import router as members_router
 from src.dashboard.spaces_router import router as spaces_router
-from src.agent.schedule.daily_sales_report.report_runner import run_daily_report
 from src.core.members_manager import upsert_member, update_member_department
 from src.core.spaces_manager import upsert_space
-from src.core.google_chat import send_message, send_department_card
-from src.agent.trigger.check_overdue_tasks import check_overdue_tasks
+from src.core.google_chat import send_message, build_department_card
 from src.agent.registry import SCHEDULE_REGISTRY, TRIGGER_REGISTRY
 from src.agent.sync_registry import sync_registry_to_mongo
 from src.dashboard.agents_router import router as agents_router
@@ -55,7 +61,7 @@ async def lifespan(app: FastAPI):
     # 1. registry → MongoDB sync (앱 시작 시 1회)
     await sync_registry_to_mongo()
 
-    # 2. 앱 시작 시 스케줄 에이전트 등록 (SCHEDULE_REGISTRY 기반으로 동적 등록)
+    # 2. 앱 시작 시 스케줄 에이전트 등록
     for agent_id, meta in SCHEDULE_REGISTRY.items():
         scheduler.add_job(
             meta["func"],
@@ -68,7 +74,7 @@ async def lifespan(app: FastAPI):
         )
         print(f"[Scheduler] 스케줄 등록: {agent_id}")
 
-    # 3. 앱 시작 시 트리거 에이전트 등록 (TRIGGER_REGISTRY 기반으로 동적 등록)
+    # 3. 앱 시작 시 트리거 에이전트 등록
     for agent_id, meta in TRIGGER_REGISTRY.items():
         scheduler.add_job(
             meta["func"],
@@ -119,58 +125,72 @@ async def receive_message(request: Request, background_tasks: BackgroundTasks):
     event = await request.json()
     print(f"[DEBUG FULL EVENT] {json.dumps(event, ensure_ascii=False)}")
 
-    chat_event = event.get("chat")
-    if not chat_event or chat_event.get("removedFromSpacePayload") or chat_event.get("addedToSpacePayload"):
+    event_type = event.get("type")
+
+    # ── 스페이스 추가/제거 이벤트 무시 ────────────────────────────────────────
+    if event_type in ("ADDED_TO_SPACE", "REMOVED_FROM_SPACE"):
         return {}
 
-    # ── 카드 버튼 클릭 처리 (부서 등록 폼 제출) ────────────────────────────────
-    # Pub/Sub 방식: 버튼 클릭 이벤트도 commonEventObject.invokedFunction으로 들어옴
-    common           = event.get("commonEventObject", {})
-    invoked_function = common.get("invokedFunction", "")
+    # ── 공통 필드 파싱 (확인된 실제 구조 기반) ─────────────────────────────────
+    user       = event.get("user", {})
+    user_id    = user.get("email", "")
+    user_name  = user.get("displayName", "")
+    space      = event.get("space", {})
+    space_name = space.get("name", "")
+    space_type = space.get("type", "")
+    display_name = space.get("displayName", "")
 
-    if invoked_function == "submitDepartment":
-        # selectionInput(RADIO_BUTTON) 값은 formInputs["department"]["stringInputs"]["value"][0]
-        form_inputs = common.get("formInputs", {})
-        dept = (
-            form_inputs.get("department", {})
-                       .get("stringInputs", {})
-                       .get("value", [""])[0]
-        )
-        user_id    = chat_event.get("user", {}).get("email")
-        space_name = chat_event.get("messagePayload", {}).get("space", {}).get("name") or ""
+    # ── 카드 버튼 클릭 처리 ────────────────────────────────────────────────────
+    if event_type == "CARD_CLICKED":
+        action_method = event.get("action", {}).get("actionMethodName", "")
 
-        print(f"[Dept] 부서 선택: user={user_id}, dept={dept}")
+        if action_method == "submitDepartment":
+            # formInputs는 event.common.formInputs 에 위치
+            form_inputs = event.get("common", {}).get("formInputs", {})
+            dept = (
+                form_inputs.get("department", {})
+                           .get("stringInputs", {})
+                           .get("value", [""])[0]
+            )
+            print(f"[Dept] 부서 선택: user={user_id}, dept={dept}")
 
-        if user_id and dept:
-            await update_member_department(user_id, dept)
-            if space_name:
+            if user_id and dept:
+                await update_member_department(user_id, dept)
                 background_tasks.add_task(
                     send_message, space_name,
                     f"✅ *{dept}* 으로 등록되었습니다. BOA를 이용해 주세요!"
                 )
+            return {}
+
+        # 다른 카드 클릭 이벤트는 여기서 추가 처리
         return {}
 
     # ── 일반 메시지 처리 ───────────────────────────────────────────────────────
-    event_time    = chat_event.get("eventTime", {})
-    user_name     = chat_event.get("user", {}).get("displayName")
-    user_id       = chat_event.get("user", {}).get("email")
-    message       = chat_event.get("messagePayload", {}).get("message", {}).get("text") or ""
-    space         = chat_event.get("messagePayload", {}).get("space", {})
-    space_name    = space.get("name") or ""
-    space_type    = space.get("type") or ""
-    display_name  = space.get("displayName") or ""
-    thread_name   = chat_event.get("messagePayload", {}).get("message", {}).get("thread", {}).get("name")
-    quoted_message = chat_event.get("messagePayload", {}).get("message", {}).get("quotedMessageMetadata", {}).get("quotedMessageSnapshot", {}).get("text")
-    quoted_message_sender = chat_event.get("messagePayload", {}).get("message", {}).get("quotedMessageMetadata", {}).get("quotedMessageSnapshot", {}).get("sender", {})
+    if event_type != "MESSAGE":
+        return {}
+
+    message_obj    = event.get("message", {})
+    message        = message_obj.get("text", "")
+    thread_name    = message_obj.get("thread", {}).get("name")
+    event_time     = event.get("eventTime", {})
+    quoted_message = (
+        message_obj.get("quotedMessageMetadata", {})
+                   .get("quotedMessageSnapshot", {})
+                   .get("text")
+    )
+    quoted_message_sender = (
+        message_obj.get("quotedMessageMetadata", {})
+                   .get("quotedMessageSnapshot", {})
+                   .get("sender", {})
+    )
 
     # ── DM/ROOM 정보 자동 등록 ─────────────────────────────────────────────────
     if space_type == "DM":
         needs_dept = await upsert_member(user_id, user_name, space_name)
         if needs_dept:
-            print(f"[Dept] department 미설정 → 카드 발송: {user_id}")
-            # Pub/Sub 방식: return {} 후 Chat REST API로 비동기 발송
-            background_tasks.add_task(send_department_card, space_name)
-            return {}
+            print(f"[Dept] department 미설정 → 카드 동기 응답: {user_id}")
+            # 순수 Chat API: 동기 응답으로 카드 즉시 표시
+            return build_department_card()
 
     elif space_type in ("ROOM", "GROUP_CHAT", "SPACE"):
         background_tasks.add_task(upsert_space, space_name, display_name, space_type)
