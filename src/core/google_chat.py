@@ -11,9 +11,8 @@ Google Chat API 클라이언트 및 메시지 전송 유틸리티.
 
 [핵심 설계 원칙]
   순수 Chat API 앱 (gcp-sa-chat) 기반.
-  카드는 build_department_card()로 dict를 생성해 동기 응답(return)으로 즉시 표시.
-  텍스트 메시지 및 스케줄 발송은 Chat REST API를 통해 비동기로 전송.
-
+  기본: Chat RestAPI로 비동기 메시지 전송, 부서선택 등 일부 기능은 동기 응답으로 즉시 표시
+  
   카드 버튼 클릭 이벤트:
     event.type == "CARD_CLICKED"
     event.action.actionMethodName == "submitDepartment"  (action.function 값과 동일)
@@ -75,50 +74,58 @@ DEPARTMENT_LIST = [
 
 def build_department_card() -> dict:
     """
-    부서 선택 카드 응답 dict를 반환합니다.
-    순수 Chat API에서는 return build_department_card() 로 동기 응답하면 즉시 카드가 표시됩니다.
-
-    카드 버튼 클릭 시:
-      event.type == "CARD_CLICKED"
-      event.action.actionMethodName == "submitDepartment"
-      event.common.formInputs["department"]["stringInputs"]["value"][0] → 선택된 부서명
+    DROPDOWN 버전 — 심플하고 프로페셔널
+    이벤트 파싱 방식은 기존과 동일:
+      event.common.formInputs["department"]["stringInputs"]["value"][0]
     """
-    department_items = [
-        {"text": dept, "value": dept, "selected": False}
-        for dept in DEPARTMENT_LIST
-    ]
     return {
         "cardsV2": [{
             "cardId": "department-selection-card",
             "card": {
                 "header": {
-                    "title": "구성원 등록을 도와드릴게요! 현재 부서를 선택해주세요."
+                    "title": "안녕하세요👋 AI에이전트 시락이 입니다",
+                    "subtitle": "구성원 등록을 위해 소속 부서를 선택해 주세요",
+                    "imageUrl": "https://fonts.gstatic.com/s/i/googlematerialicons/groups/v6/googlematerialicons-groups-24px.svg",
+                    "imageType": "CIRCLE",
                 },
-                "sections": [{
-                    "widgets": [
-                        {
-                            "selectionInput": {
-                                "name": "department",
-                                "label": "소속 부서",
-                                "type": "RADIO_BUTTON",
-                                "items": department_items,
-                            }
-                        },
-                        {
-                            "buttonList": {
-                                "buttons": [{
-                                    "text": "등록",
-                                    "onClick": {
-                                        "action": {
-                                            "function": "submitDepartment"
+                "sections": [
+                    {
+                        "header": "소속 부서 선택",
+                        "collapsible": False,
+                        "widgets": [
+                            {
+                                "selectionInput": {
+                                    "name": "department",
+                                    "label": "부서",
+                                    "type": "DROPDOWN",
+                                    "items": [
+                                        {"text": dept, "value": dept, "selected": False}
+                                        for dept in DEPARTMENT_LIST
+                                    ],
+                                }
+                            },
+                            {
+                                "buttonList": {
+                                    "buttons": [
+                                        {
+                                            "text": "등록하기",
+                                            "color": {
+                                                "red": 0.388,
+                                                "green": 0.400,
+                                                "blue": 0.945,
+                                                "alpha": 1,
+                                            },  # #6366f1 인디고
+                                            "onClick": {
+                                                "action": {"function": "submitDepartment"}
+                                            },
                                         }
-                                    }
-                                }]
-                            }
-                        }
-                    ]
-                }]
-            }
+                                    ]
+                                }
+                            },
+                        ],
+                    }
+                ],
+            },
         }]
     }
 

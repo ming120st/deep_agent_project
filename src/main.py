@@ -140,10 +140,13 @@ async def receive_message(request: Request, background_tasks: BackgroundTasks):
     space_type = space.get("type", "")
     display_name = space.get("displayName", "")
 
-    # ── 카드 버튼 클릭 처리 ────────────────────────────────────────────────────
+    # ── 카드 인터랙션 처리 ────────────────────────────────────────────────────
     if event_type == "CARD_CLICKED":
+
+        # 개별 버튼 
         action_method = event.get("action", {}).get("actionMethodName", "")
 
+        # 소속 부서 선택 카드의 버튼 클릭 이벤트
         if action_method == "submitDepartment":
             # formInputs는 event.common.formInputs 에 위치
             form_inputs = event.get("common", {}).get("formInputs", {})
@@ -158,7 +161,7 @@ async def receive_message(request: Request, background_tasks: BackgroundTasks):
                 await update_member_department(user_id, dept)
                 background_tasks.add_task(
                     send_message, space_name,
-                    f"✅ *{dept}* 으로 등록되었습니다. BOA를 이용해 주세요!"
+                    f"🎉 *{dept}* 으로 등록되었습니다! 오늘은 어떤걸 도와드릴까요?"
                 )
             return {}
 

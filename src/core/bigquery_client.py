@@ -17,20 +17,20 @@ load_dotenv()
 # ── 클라이언트 초기화 ──────────────────────────────────────────────────────────
 def _build_bq_client() -> bigquery.Client:
     """Service Account JSON으로 BigQuery 클라이언트 생성"""
-    sa_info = json.loads(os.getenv("GOOGLE_SERVICE_ACCOUNT_KEY_PATH"))
+    sa_info = json.loads(os.getenv("GOOGLE_SERVICE_ACCOUNT_KEY_PATH_GBQ"))
     credentials = service_account.Credentials.from_service_account_info(
         sa_info,
         scopes=["https://www.googleapis.com/auth/bigquery"]
     )
     return bigquery.Client(
         credentials=credentials,
-        project=os.getenv("BQ_PROJECT_ID")          # 예: "widemobile-data"
+        project=os.getenv("BQ_PROJECT_ID")
     )
 
 bq_client = _build_bq_client()
 
-BQ_DATASET = os.getenv("BQ_DATASET", "esim_dataset")  # 예: "esim_dataset"
-BQ_TABLE   = os.getenv("BQ_TABLE",   "esim_sales")    # 예: "esim_sales"
+BQ_DATASET = os.getenv("BQ_DATASET", "dataset")
+BQ_TABLE   = os.getenv("BQ_TABLE",   "esim_sales")
 
 
 # ── 날짜 헬퍼 ─────────────────────────────────────────────────────────────────

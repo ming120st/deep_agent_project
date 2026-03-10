@@ -15,6 +15,7 @@ src/agent/registry.py
 from typing import Dict, Any
 
 from src.agent.chat.wifi_usage_inquiry.graph import wifi_usage_inquiry_graph
+from src.agent.chat.bigquery_agent.agent import bigquery_agent_node
 # from src.agent.xxx.graph import xxx_graph  ← graph 쓰는 에이전트 추가할 때마다 import
 
 from src.agent.schedule.daily_sales_report.report_runner import run_daily_report
@@ -63,6 +64,15 @@ AGENT_REGISTRY: dict = {
                 "required": False,
             },
         },
+    },
+    "bigquery_agent": {
+        "type": "chat",
+        "display_name": "실적 분석 에이전트",
+        "description": "BigQuery 데이터 조회 및 매출 분석 리포트 생성. "
+                       "'지난달 매출 분석', '이번 주 판매 현황', '상품별 매출 비교' 등 "
+                       "데이터 분석이 필요한 모든 요청에 사용합니다.",
+        "graph": bigquery_agent_node,  # DeepAgent 노드 함수 (LangGraph subgraph 아님)
+        "enabled": True,
     },
 }
 
