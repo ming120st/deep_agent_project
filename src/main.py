@@ -49,6 +49,18 @@ from src.core.google_chat import send_message, build_department_card
 from src.agent.registry import SCHEDULE_REGISTRY, TRIGGER_REGISTRY
 from src.agent.sync_registry import sync_registry_to_mongo
 from src.dashboard.agents_router import router as agents_router
+from src.agent.schedule.bq_analysis_schedule.schedule_manager import (
+    register_bq_schedule,
+    restore_bq_schedules,
+    delete_bq_schedule,
+    list_user_schedules,
+    bq_schedules_collection,
+    INTERVAL_LABELS,
+)
+from src.agent.schedule.bq_analysis_schedule.cards import (
+    build_bq_schedule_card,
+    build_schedule_confirm_message,
+)
 
 
 # ── 스케줄러 ──────────────────────────────────────────────────────────────────
@@ -88,7 +100,10 @@ async def lifespan(app: FastAPI):
         )
         print(f"[Scheduler] 트리거 등록: {agent_id}")
 
-    # 4. MongoDB enabled=False인 job은 시작 시 바로 pause
+    # 4. MongoDB에 저장된 BQ 분석 스케줄 복원 (서버 재시작 시 유지)
+    await restore_bq_schedules(scheduler)
+
+    # 5. MongoDB enabled=False인 job은 시작 시 바로 pause
     from src.core.mongo_client import boa_agents_collection
     cursor = boa_agents_collection.find({"enabled": False, "type": {"$in": ["schedule", "trigger"]}})
     disabled = await cursor.to_list(length=None)
@@ -165,6 +180,49 @@ async def receive_message(request: Request, background_tasks: BackgroundTasks):
                 )
             return {}
 
+        # BQ 분석 스케줄 등록
+        # BQ 스케줄 등록
+        if action_method == "submitBqSchedule":
+            form_inputs = event.get("common", {}).get("formInputs", {})
+
+            agent_name = form_inputs.get("bq_agent_name", {}).get("stringInputs", {}).get("value", [""])[0].strip()
+            query      = form_inputs.get("bq_query",      {}).get("stringInputs", {}).get("value", [""])[0].strip()
+            interval   = form_inputs.get("bq_interval",   {}).get("stringInputs", {}).get("value", ["daily"])[0]
+            hour       = int(form_inputs.get("bq_hour",   {}).get("stringInputs", {}).get("value", ["8"])[0])
+            minute     = int(form_inputs.get("bq_minute", {}).get("stringInputs", {}).get("value", ["0"])[0])
+
+            if not agent_name:
+                return {"text": "⚠️ 에이전트 이름을 입력해주세요."}
+            if not query:
+                return {"text": "⚠️ 분석 요청 내용을 입력해주세요."}
+
+            try:
+                schedule_id = await register_bq_schedule(
+                    scheduler=scheduler,
+                    user_id=user_id,
+                    space_name=space_name,
+                    agent_name=agent_name,
+                    query=query,
+                    hour=hour,
+                    minute=minute,
+                    interval=interval,
+                )
+            except ValueError as e:
+                return {"text": f"⚠️ {e}\n다른 이름을 사용해주세요."}
+
+            return {"text": build_schedule_confirm_message(agent_name, query, interval, hour, minute, schedule_id)}
+
+        # BQ 분석 스케줄 삭제
+        if action_method == "deleteBqSchedule":
+            form_inputs = event.get("common", {}).get("formInputs", {})
+            schedule_id = form_inputs.get("schedule_id", {}).get("stringInputs", {}).get("value", [""])[0]
+            if schedule_id:
+                deleted = await delete_bq_schedule(scheduler, schedule_id)
+                msg = (f"🗑️ 스케줄 `{schedule_id[-8:]}` 이 삭제되었습니다."
+                       if deleted else "⚠️ 스케줄을 찾을 수 없습니다.")
+                return {"text": msg}
+            return {}
+
         # 다른 카드 클릭 이벤트는 여기서 추가 처리
         return {}
 
@@ -226,6 +284,34 @@ async def receive_message(request: Request, background_tasks: BackgroundTasks):
         "event_time":            event_time,
     }
     state.add_user_message(message)
+
+    # ── 슬래시 커맨드 처리 (LLM 없이 즉시 카드/텍스트 반환) ─────────────────────
+    if message.strip() == "/데이터분석스케줄":
+        return build_bq_schedule_card()
+
+    if message.strip().startswith("/분석스케줄취소"):
+        parts = message.strip().split()
+        if len(parts) >= 2:
+            short_id = parts[1]
+            doc = await bq_schedules_collection.find_one(
+                {"user_id": user_id, "schedule_id": {"$regex": short_id + "$"}}
+            )
+            if doc:
+                await delete_bq_schedule(scheduler, doc["schedule_id"])
+                return {"text": f"🗑️ 스케줄 `{short_id}` 이 삭제되었습니다."}
+            return {"text": "⚠️ 해당 스케줄 ID를 찾을 수 없습니다."}
+        return {"text": "사용법: `/분석스케줄취소 {스케줄ID}`"}
+
+    if message.strip() == "/내스케줄":
+        schedules = await list_user_schedules(user_id)
+        if not schedules:
+            return {"text": "등록된 분석 스케줄이 없습니다."}
+        lines = ["📋 *등록된 데이터 분석 스케줄*\n"]
+        for s in schedules:
+            label    = INTERVAL_LABELS.get(s["interval"], s["interval"])
+            time_str = f"{s['hour']:02d}:{s['minute']:02d}" if s["interval"] != "hourly" else "매시간"
+            lines.append(f"• `{s['schedule_id'][-8:]}` | {label} {time_str}\n  _{s['query'][:40]}_")
+        return {"text": "\n".join(lines)}
 
     background_tasks.add_task(orchestrate_chat_event, state, config)
     return {}
