@@ -3,9 +3,15 @@ src/agent/chat/bigquery_agent/tools.py
 
 BigQuery 조회 도구 모음.
 기존 src/core/bigquery_client.py의 bq_client를 재사용합니다.
+
+[비동기 처리]
+bq_client의 메서드는 모두 동기(blocking)이므로
+asyncio.to_thread()로 감싸서 이벤트 루프를 블로킹하지 않습니다.
+→ DeepAgent 실행 중(40~60초)에도 다른 요청 정상 처리 가능
 """
 import os
 import json
+import asyncio
 import logging
 from langchain.tools import tool
 
@@ -16,24 +22,63 @@ logger = logging.getLogger(__name__)
 BQ_PROJECT_ID = os.getenv("BQ_PROJECT_ID", "")
 
 
+# ── 동기 헬퍼 (to_thread 내부에서 실행) ───────────────────────────────────────
+
+def _list_datasets_sync() -> str:
+    datasets = [ds.dataset_id for ds in bq_client.list_datasets()]
+    return json.dumps(datasets or [], ensure_ascii=False)
+
+def _list_tables_sync(dataset_id: str) -> str:
+    tables = [t.table_id for t in bq_client.list_tables(dataset_id)]
+    return json.dumps(tables or [], ensure_ascii=False)
+
+def _get_table_schema_sync(dataset_id: str, table_id: str) -> str:
+    table_ref = f"{BQ_PROJECT_ID}.{dataset_id}.{table_id}"
+    table = bq_client.get_table(table_ref)
+    result = {
+        "table": table_ref,
+        "num_rows": table.num_rows,
+        "schema": [
+            {
+                "name": f.name,
+                "type": f.field_type,
+                "mode": f.mode,
+                "description": f.description or "",
+            }
+            for f in table.schema
+        ],
+    }
+    return json.dumps(result, ensure_ascii=False, indent=2)
+
+def _get_sample_rows_sync(dataset_id: str, table_id: str, limit: int) -> str:
+    sql = f"SELECT * FROM `{BQ_PROJECT_ID}.{dataset_id}.{table_id}` LIMIT {limit}"
+    rows = [dict(row) for row in bq_client.query(sql).result()]
+    return json.dumps(rows or [], ensure_ascii=False, default=str)
+
+def _run_query_sync(sql: str, max_rows: int) -> str:
+    if not sql.strip().upper().startswith("SELECT"):
+        return "오류: SELECT 쿼리만 허용됩니다."
+    rows = [dict(r) for r in bq_client.query(sql).result(max_results=max_rows)]
+    return json.dumps(rows or [], ensure_ascii=False, default=str)
+
+
+# ── Tools (비동기 래핑) ────────────────────────────────────────────────────────
+
 @tool
-def list_datasets() -> str:
+async def list_datasets() -> str:
     """
     BigQuery 프로젝트 내 모든 데이터셋 목록을 반환합니다.
     분석 시작 전 어떤 데이터셋이 있는지 파악할 때 사용하세요.
     """
     try:
-        datasets = [ds.dataset_id for ds in bq_client.list_datasets()]
-        if not datasets:
-            return "데이터셋이 없습니다."
-        return json.dumps(datasets, ensure_ascii=False)
+        return await asyncio.to_thread(_list_datasets_sync)
     except Exception as e:
         logger.error(f"[list_datasets] {e}")
         return f"오류: {e}"
 
 
 @tool
-def list_tables(dataset_id: str) -> str:
+async def list_tables(dataset_id: str) -> str:
     """
     특정 데이터셋 내 테이블 목록을 반환합니다.
 
@@ -41,17 +86,14 @@ def list_tables(dataset_id: str) -> str:
         dataset_id: 조회할 데이터셋 ID (예: "esim_dataset")
     """
     try:
-        tables = [t.table_id for t in bq_client.list_tables(dataset_id)]
-        if not tables:
-            return f"'{dataset_id}'에 테이블이 없습니다."
-        return json.dumps(tables, ensure_ascii=False)
+        return await asyncio.to_thread(_list_tables_sync, dataset_id)
     except Exception as e:
         logger.error(f"[list_tables] {e}")
         return f"오류: {e}"
 
 
 @tool
-def get_table_schema(dataset_id: str, table_id: str) -> str:
+async def get_table_schema(dataset_id: str, table_id: str) -> str:
     """
     테이블의 스키마(컬럼명, 타입, 설명)와 행 수를 반환합니다.
     쿼리 작성 전 반드시 스키마를 확인하세요.
@@ -61,29 +103,14 @@ def get_table_schema(dataset_id: str, table_id: str) -> str:
         table_id: 테이블 ID
     """
     try:
-        table_ref = f"{BQ_PROJECT_ID}.{dataset_id}.{table_id}"
-        table = bq_client.get_table(table_ref)
-        result = {
-            "table": table_ref,
-            "num_rows": table.num_rows,
-            "schema": [
-                {
-                    "name": f.name,
-                    "type": f.field_type,
-                    "mode": f.mode,
-                    "description": f.description or "",
-                }
-                for f in table.schema
-            ],
-        }
-        return json.dumps(result, ensure_ascii=False, indent=2)
+        return await asyncio.to_thread(_get_table_schema_sync, dataset_id, table_id)
     except Exception as e:
         logger.error(f"[get_table_schema] {e}")
         return f"오류: {e}"
 
 
 @tool
-def get_sample_rows(dataset_id: str, table_id: str, limit: int = 5) -> str:
+async def get_sample_rows(dataset_id: str, table_id: str, limit: int = 5) -> str:
     """
     테이블의 샘플 데이터를 조회합니다.
     실제 데이터 형태와 값의 패턴을 파악할 때 사용하세요.
@@ -94,18 +121,14 @@ def get_sample_rows(dataset_id: str, table_id: str, limit: int = 5) -> str:
         limit: 샘플 행 수 (기본 5)
     """
     try:
-        sql = f"SELECT * FROM `{BQ_PROJECT_ID}.{dataset_id}.{table_id}` LIMIT {limit}"
-        rows = [dict(row) for row in bq_client.query(sql).result()]
-        if not rows:
-            return "데이터가 없습니다."
-        return json.dumps(rows, ensure_ascii=False, default=str)
+        return await asyncio.to_thread(_get_sample_rows_sync, dataset_id, table_id, limit)
     except Exception as e:
         logger.error(f"[get_sample_rows] {e}")
         return f"오류: {e}"
 
 
 @tool
-def run_query(sql: str, max_rows: int = 500) -> str:
+async def run_query(sql: str, max_rows: int = 200) -> str:
     """
     BigQuery SQL 쿼리를 실행하고 결과를 반환합니다.
     - SELECT 쿼리만 허용됩니다.
@@ -114,15 +137,10 @@ def run_query(sql: str, max_rows: int = 500) -> str:
 
     Args:
         sql: 실행할 SELECT SQL 문
-        max_rows: 최대 반환 행 수 (기본 500)
+        max_rows: 최대 반환 행 수 (기본 200)
     """
     try:
-        if not sql.strip().upper().startswith("SELECT"):
-            return "오류: SELECT 쿼리만 허용됩니다."
-        rows = [dict(r) for r in bq_client.query(sql).result(max_results=max_rows)]
-        if not rows:
-            return "쿼리 결과가 없습니다."
-        return json.dumps(rows, ensure_ascii=False, default=str)
+        return await asyncio.to_thread(_run_query_sync, sql, max_rows)
     except Exception as e:
         logger.error(f"[run_query] {e}")
         return f"오류: {e}"

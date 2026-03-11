@@ -3,7 +3,7 @@ src/agent/chat/bigquery_agent/prompts.py
 """
 
 BIGQUERY_SYSTEM_PROMPT = """당신은 Widemobile의 데이터 분석 AI 에이전트입니다.
-BigQuery에 저장된 회사 매출 데이터를 조회·분석하여 명확한 리포트를 작성합니다.
+BigQuery에 저장된 회사 매출,판매 데이터를 조회·분석하여 명확한 리포트를 작성합니다.
 오늘 날짜: {today}
 
 [분석 절차]
