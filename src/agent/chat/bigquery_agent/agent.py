@@ -21,6 +21,7 @@ from src.core.llm_config import llm_light, llm_heavy
 from src.agent.chat.bigquery_agent.tools import BIGQUERY_TOOLS
 from src.agent.chat.bigquery_agent.prompts import BIGQUERY_SYSTEM_PROMPT
 from src.core.task_manager import set_completed, set_cancelled
+import asyncio
 
 logger = logging.getLogger(__name__)
 
@@ -58,9 +59,12 @@ async def bigquery_agent_node(state: GraphState) -> GraphState:
             prompt=prompt,
         )
 
-        result = await agent.ainvoke({
-            "messages": [{"role": "user", "content": user_query}]
-        })
+        result = await asyncio.wait_for(
+            agent.ainvoke({
+                "messages": [{"role": "user", "content": user_query}]
+            }),
+            timeout=120
+        )
 
         raw_content = result["messages"][-1].content
         report = _extract_text(raw_content)
