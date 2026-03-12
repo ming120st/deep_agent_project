@@ -290,6 +290,7 @@ async def receive_message(request: Request, background_tasks: BackgroundTasks):
     state.add_user_message(message)
 
     # ── 슬래시 커맨드 처리 (LLM 없이 즉시 카드/텍스트 반환) ─────────────────────
+    # 추가로 슬래시 커맨드로 처리할 기능이 있으면 여기에 if문 추가
     if message.strip() == "/데이터분석스케줄":
         return build_bq_schedule_card()
 

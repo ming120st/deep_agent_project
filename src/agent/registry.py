@@ -16,13 +16,9 @@ from typing import Dict, Any
 
 from src.agent.chat.wifi_usage_inquiry.graph import wifi_usage_inquiry_graph
 from src.agent.chat.bigquery_agent.agent import bigquery_agent_node
-# from src.agent.xxx.graph import xxx_graph  ← graph 쓰는 에이전트 추가할 때마다 import
-
-from src.agent.schedule.daily_sales_report.report_runner import run_daily_report
-from src.agent.trigger.check_overdue_tasks import check_overdue_tasks
 from src.agent.trigger.check_stale_docs import check_stale_docs
 from src.core.rag_engine import reload_rag_index_if_updated
-# from src.triggers.xxx import xxx  ← 트리거 추가할 때마다 import
+# 서브에이전트 함수는 여기서 직접 import하여 registry에 참조로 등록
 
 from src.core.mongo_client import boa_agents_collection
 
@@ -79,27 +75,23 @@ AGENT_REGISTRY: dict = {
 }
 
 # ── 스케줄 에이전트 ────────────────────────────────────────────────────────────
-SCHEDULE_REGISTRY: dict = {
-    "daily_report": {
-        "type":         "schedule",
-        "display_name": "일일 리포트",
-        "description":  "매일 오전 8시 영업 리포트를 구성원에게 발송합니다.",
-        "enabled":      True,
-        "cron":         {"hour": 8, "minute": 0},   # APScheduler cron 파라미터
-        "func":         run_daily_report,
-    },
+SCHEDULE_REGISTRY: dict = {    
 }
+
+# 현재는 스케줄 에이전트 없음. 필요 시 아래 예시처럼 등록
+"""
+"daily_report": {
+    "type":         "schedule",
+    "display_name": "일일 리포트",
+    "description":  "매일 오전 8시 영업 리포트를 구성원에게 발송합니다.",
+    "enabled":      True,
+    "cron":         {"hour": 8, "minute": 0},   # APScheduler cron 파라미터
+    "func":         run_daily_report,
+},
+"""
 
 # ── 트리거 에이전트 ────────────────────────────────────────────────────────────
 TRIGGER_REGISTRY: dict = {
-    "overdue_tasks": {
-        "type":         "trigger",
-        "display_name": "기한 초과 알림",
-        "description":  "기한이 지난 미완료 태스크를 10분마다 확인하여 담당자에게 알립니다.",
-        "enabled":      True,
-        "interval":     {"minutes": 10},
-        "func":         check_overdue_tasks,
-    },
     "stale_docs": {
         "type":         "trigger",
         "display_name": "지식베이스 검토 요청",

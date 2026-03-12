@@ -1221,7 +1221,13 @@ function renderDocList() {
     }
 
     // 잠금 표시
-    const lockHtml = doc.locked_by ? `<span class="lock-icon" title="${doc.locked_by} 편집중">🔒</span>` : '';
+    let lockHtml = '';
+    if (doc.locked_by) {
+      const isSelf = doc.locked_by === currentUser?.email;
+      const editorName = isSelf ? '내가' : (doc.locked_by.split('@')[0] + '님이');
+      const lockColor = isSelf ? 'color:#60a5fa' : 'color:#fbbf24';
+      lockHtml = `<span style="font-size:11px;font-family:'IBM Plex Mono',monospace;${lockColor};margin-left:6px" title="${doc.locked_by}">🔒 ${editorName} 편집중</span>`;
+    }
 
     // 동기화 상태
     const syncClass = doc.sync_status === 'synced' ? 'sync-synced' : doc.sync_status === 'failed' ? 'sync-failed' : 'sync-pending';
@@ -1290,8 +1296,7 @@ async function openDetail(docId) {
 function renderDetail() {
   const doc = currentDoc;
   const svc = services[doc.service] || {};
-  const isOwner = currentUser?.email === doc.owner_id || currentUser?.email === doc.created_by;
-  const canEdit = isOwner || currentUser?.is_admin;
+  const canEdit = !!currentUser;  // 로그인한 모든 멤버 편집 가능 (삭제는 본인/관리자만)
 
   document.getElementById('dp-title').textContent = doc.title;
 
@@ -1320,15 +1325,24 @@ function renderDetail() {
   let actions = `<button class="btn btn-ghost btn-sm" onclick="openHistory('${doc.doc_id}')">📜 히스토리</button>`;
   if (canEdit) {
     const isLocked = doc.locked_by && doc.locked_by !== currentUser?.email;
-    actions += `<button class="btn btn-secondary btn-sm" onclick="openEditDoc('${doc.doc_id}')" ${isLocked ? 'disabled title="다른 사람이 편집중"' : ''}>✏️ 편집</button>`;
+    const lockedByName = isLocked ? doc.locked_by.split('@')[0] : '';
+    // 잠금 중이어도 편집 가능 — 저장 시 서버에서 최종 체크
+    actions += `<button class="btn btn-secondary btn-sm" onclick="openEditDoc('${doc.doc_id}')"
+      title="${isLocked ? lockedByName + '님이 편집 중이지만 수정할 수 있습니다' : ''}">✏️ 편집${isLocked ? ' ⚠️' : ''}</button>`;
     actions += `<button class="btn btn-sm" style="background:rgba(20,184,166,.15);border:1px solid rgba(20,184,166,.3);color:#2dd4bf" onclick="markReviewed('${doc.doc_id}')" title="내용 변경 없이 검토 완료 처리">✅ 검토 완료</button>`;
   }
   document.getElementById('dp-actions').innerHTML = actions;
 
   // 잠금 공지
   let lockNotice = '';
-  if (doc.locked_by && doc.locked_by !== currentUser?.email) {
-    lockNotice = `<div class="lock-notice">🔒 <strong>${doc.locked_by.split('@')[0]}</strong>님이 편집 중입니다. 잠시 후 수정해주세요.</div>`;
+  if (doc.locked_by) {
+    const isSelf = doc.locked_by === currentUser?.email;
+    if (isSelf) {
+      lockNotice = `<div class="lock-notice" style="background:rgba(59,130,246,.08);border-color:rgba(59,130,246,.25);color:#60a5fa">✏️ 내가 편집 중입니다.</div>`;
+    } else {
+      const lockedName = doc.locked_by.split('@')[0];
+      lockNotice = `<div class="lock-notice">🔒 <strong>${lockedName}</strong>님이 편집 중입니다. 잠시 후 수정해주세요.</div>`;
+    }
   }
 
   // 본문
@@ -1709,6 +1723,14 @@ document.addEventListener('keydown', e => {
 });
 
 init();
+
+// ── 잠금 상태 폴링 (30초마다 목록 갱신) ─────────────────────────────────────
+setInterval(() => {
+  // 편집 패널이나 상세 패널이 열려 있으면 갱신 스킵
+  const editOpen   = document.getElementById('edit-panel').classList.contains('open');
+  const detailOpen = document.getElementById('detail-panel').classList.contains('open');
+  if (!editOpen && !detailOpen) loadDocs();
+}, 30000);
 </script>
 </body>
 </html>"""

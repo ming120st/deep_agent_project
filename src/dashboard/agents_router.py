@@ -2,14 +2,21 @@
 src/dashboard/agents_router.py
 
 [엔드포인트]
-  GET    /agents                     → HTML 에이전트 관리 페이지
-  GET    /api/boa-agents             → 전체 에이전트 목록 (boa_agents + boa_bq_schedules 통합)
-  PATCH  /api/boa-agents/{agent_id}  → enabled 토글 (레지스트리 & bq_schedule 양쪽 처리)
-  DELETE /api/boa-agents/{agent_id}  → bq_schedule 에이전트 삭제 (deletable=True만 허용)
+  GET    /agents                     → HTML 에이전트 관리 페이지 (로그인 필수)
+  GET    /api/boa-agents             → 에이전트 목록 (권한에 따라 필터링)
+  PATCH  /api/boa-agents/{agent_id}  → enabled 토글
+  DELETE /api/boa-agents/{agent_id}  → bq_schedule 에이전트 삭제
 
-[통합 목록 구조]
-  레지스트리 에이전트 → deletable: false, 대시보드에서 삭제 불가
-  BQ 분석 스케줄      → deletable: true,  display_name=agent_name, description=query
+[권한 정책]
+  관리자(boa_admins):
+    - 전체 에이전트 조회
+    - 모든 에이전트 토글
+    - 모든 사용자 생성 에이전트 삭제
+
+  일반 멤버:
+    - 공통 에이전트(deletable=False) + 자신이 만든 에이전트만 조회
+    - 자신이 만든 에이전트만 토글
+    - 자신이 만든 에이전트만 삭제
 """
 from datetime import datetime
 from fastapi import APIRouter, HTTPException, Request
@@ -28,29 +35,35 @@ from src.agent.schedule.bq_analysis_schedule.schedule_manager import (
 router = APIRouter()
 
 
-# ── 관리자 체크 ───────────────────────────────────────────────────────────────
-async def require_admin(request: Request) -> dict:
+# ── 인증 헬퍼 ─────────────────────────────────────────────────────────────────
+
+async def require_login(request: Request) -> dict:
     user = request.session.get("user")
     if not user:
-        raise HTTPException(status_code=401)
-    doc = await boa_admins_collection.find_one({"email": user["email"]})
-    if not doc:
-        raise HTTPException(status_code=403, detail="관리자만 접근할 수 있습니다.")
+        raise HTTPException(status_code=401, detail="로그인이 필요합니다.")
     return user
 
 
+async def check_is_admin(email: str) -> bool:
+    doc = await boa_admins_collection.find_one({"email": email})
+    return doc is not None
+
+
 # ── 스케줄러 참조 ─────────────────────────────────────────────────────────────
+
 def get_scheduler():
     from src.main import scheduler
     return scheduler
 
 
 # ── 스키마 ────────────────────────────────────────────────────────────────────
+
 class ToggleRequest(BaseModel):
     enabled: bool
 
 
 # ── bq_schedule → 에이전트 포맷 변환 ──────────────────────────────────────────
+
 def _bq_schedule_to_agent(doc: dict) -> dict:
     interval_label = INTERVAL_LABELS.get(doc.get("interval", "daily"), "매일")
     hour   = doc.get("hour", 8)
@@ -58,16 +71,17 @@ def _bq_schedule_to_agent(doc: dict) -> dict:
     time_str = f"{hour:02d}:{minute:02d}" if doc.get("interval") != "hourly" else "매시간"
     created = doc.get("created_at")
     return {
-        "agent_id":     doc["schedule_id"],
-        "display_name": doc.get("agent_name", doc["schedule_id"]),
-        "type":         "schedule",
-        "description":  doc.get("query", ""),
-        "enabled":      doc.get("enabled", True),
-        "deletable":    True,
-        "cron_label":   f"{interval_label} {time_str}",
-        "created_by":   doc.get("user_id", ""),
-        "created_at":   created.isoformat() if created else None,
-        "updated_at":   doc.get("updated_at", created).isoformat() if doc.get("updated_at", created) else None,
+        "agent_id":        doc["schedule_id"],
+        "display_name":    doc.get("agent_name", doc["schedule_id"]),
+        "type":            "schedule",
+        "description":     doc.get("query", ""),
+        "enabled":         doc.get("enabled", True),
+        "deletable":       True,
+        "cron_label":      f"{interval_label} {time_str}",
+        "created_by":      doc.get("user_id", ""),
+        "created_by_name": doc.get("user_name", ""),
+        "created_at":      created.isoformat() if created else None,
+        "updated_at":      doc.get("updated_at", created).isoformat() if doc.get("updated_at", created) else None,
     }
 
 
@@ -77,9 +91,11 @@ def _bq_schedule_to_agent(doc: dict) -> dict:
 
 @router.get("/api/boa-agents")
 async def list_agents(request: Request):
-    await require_admin(request)
+    user     = await require_login(request)
+    email    = user["email"]
+    is_admin = await check_is_admin(email)
 
-    # 1. 레지스트리 에이전트 (boa_agents 컬렉션)
+    # 1. 레지스트리 에이전트 (boa_agents 컬렉션) — 공통, 모두에게 표시
     cursor = boa_agents_collection.find({}, {"_id": 0})
     registry_agents = await cursor.to_list(length=None)
     for a in registry_agents:
@@ -88,13 +104,20 @@ async def list_agents(request: Request):
                 a[key] = a[key].isoformat()
         a["deletable"] = False
 
-    # 2. BQ 분석 스케줄 (boa_bq_schedules 컬렉션) — schedule 탭에 통합
-    bq_cursor = bq_schedules_collection.find({}, {"_id": 0})
+    # 2. BQ 분석 스케줄 — 관리자는 전체, 멤버는 자신이 만든 것만
+    if is_admin:
+        bq_cursor = bq_schedules_collection.find({}, {"_id": 0})
+    else:
+        bq_cursor = bq_schedules_collection.find({"user_id": email}, {"_id": 0})
+
     bq_docs   = await bq_cursor.to_list(length=None)
     bq_agents = [_bq_schedule_to_agent(doc) for doc in bq_docs]
 
-    # 타입별 그룹핑
-    result = {"chat": [], "schedule": [], "trigger": []}
+    # 타입별 그룹핑 + 메타 정보
+    result = {
+        "chat": [], "schedule": [], "trigger": [],
+        "_meta": {"is_admin": is_admin, "user_id": email},
+    }
     for agent in registry_agents:
         t = agent.get("type", "chat")
         if t in result:
@@ -106,10 +129,14 @@ async def list_agents(request: Request):
 
 @router.patch("/api/boa-agents/{agent_id}")
 async def toggle_agent(agent_id: str, body: ToggleRequest, request: Request):
-    await require_admin(request)
+    user     = await require_login(request)
+    email    = user["email"]
+    is_admin = await check_is_admin(email)
 
-    # Case 1. 레지스트리 에이전트
+    # Case 1. 레지스트리 에이전트 (공통) — 관리자만 토글 가능
     if agent_id in ALL_REGISTRIES:
+        if not is_admin:
+            raise HTTPException(status_code=403, detail="공통 에이전트는 관리자만 변경할 수 있습니다.")
         await boa_agents_collection.update_one(
             {"agent_id": agent_id},
             {"$set": {"enabled": body.enabled, "updated_at": datetime.utcnow()}}
@@ -124,20 +151,36 @@ async def toggle_agent(agent_id: str, body: ToggleRequest, request: Request):
 
     # Case 2. BQ 분석 스케줄
     doc = await bq_schedules_collection.find_one({"schedule_id": agent_id})
-    if doc:
-        ok = await toggle_bq_schedule(get_scheduler(), agent_id, body.enabled)
-        if ok:
-            return {"agent_id": agent_id, "enabled": body.enabled}
+    if not doc:
+        raise HTTPException(status_code=404, detail="에이전트를 찾을 수 없습니다.")
 
-    raise HTTPException(status_code=404, detail="에이전트를 찾을 수 없습니다.")
+    # 권한 확인: 관리자 또는 본인
+    if not is_admin and doc.get("user_id") != email:
+        raise HTTPException(status_code=403, detail="본인이 만든 에이전트만 변경할 수 있습니다.")
+
+    ok = await toggle_bq_schedule(get_scheduler(), agent_id, body.enabled)
+    if ok:
+        return {"agent_id": agent_id, "enabled": body.enabled}
+
+    raise HTTPException(status_code=500, detail="토글 처리 중 오류가 발생했습니다.")
 
 
 @router.delete("/api/boa-agents/{agent_id}")
 async def delete_agent(agent_id: str, request: Request):
-    await require_admin(request)
+    user     = await require_login(request)
+    email    = user["email"]
+    is_admin = await check_is_admin(email)
 
     if agent_id in ALL_REGISTRIES:
         raise HTTPException(status_code=403, detail="코드에 등록된 에이전트는 삭제할 수 없습니다.")
+
+    doc = await bq_schedules_collection.find_one({"schedule_id": agent_id})
+    if not doc:
+        raise HTTPException(status_code=404, detail="에이전트를 찾을 수 없습니다.")
+
+    # 권한 확인: 관리자 또는 본인
+    if not is_admin and doc.get("user_id") != email:
+        raise HTTPException(status_code=403, detail="본인이 만든 에이전트만 삭제할 수 있습니다.")
 
     deleted = await delete_bq_schedule(get_scheduler(), agent_id)
     if not deleted:
@@ -151,26 +194,12 @@ async def delete_agent(agent_id: str, request: Request):
 # 페이지
 # ══════════════════════════════════════════════════════════════════════════════
 
-FORBIDDEN_HTML = """
-<html><body style="font-family:sans-serif;display:flex;align-items:center;
-justify-content:center;height:100vh;background:#0f1117;color:#e2e8f0;">
-<div style="text-align:center">
-  <div style="font-size:48px">🔒</div>
-  <h2 style="margin:16px 0 8px">접근 권한 없음</h2>
-  <p style="color:#64748b">관리자만 접근할 수 있는 페이지입니다.</p>
-  <a href="/dashboard" style="color:#6366f1;margin-top:16px;display:inline-block">← 대시보드로</a>
-</div></body></html>
-"""
-
 @router.get("/agents", response_class=HTMLResponse)
 async def agents_page(request: Request):
     user = request.session.get("user")
     if not user:
         return RedirectResponse("/auth/login")
-    doc = await boa_admins_collection.find_one({"email": user["email"]})
-    if not doc:
-        return HTMLResponse(FORBIDDEN_HTML, status_code=403)
-
+    # 관리자/멤버 모두 접근 가능 — 데이터는 API에서 권한별 필터링
     return HTMLResponse(AGENTS_HTML)
 
 
@@ -202,8 +231,11 @@ AGENTS_HTML = """<!DOCTYPE html>
     .btn-logout:hover { border-color: #ef4444; color: #ef4444; }
 
     .page-body { padding: 32px 24px; }
-    .header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 28px; }
+    .header { display: flex; align-items: center; gap: 14px; margin-bottom: 28px; }
     .header h1 { font-size: 20px; font-weight: 600; }
+    .role-badge { font-size: 11px; padding: 3px 10px; border-radius: 20px; font-family: 'IBM Plex Mono', monospace; }
+    .role-admin  { background: rgba(99,102,241,0.18); color: #818cf8; }
+    .role-member { background: rgba(100,116,139,0.18); color: var(--muted); }
 
     .stats { display: flex; gap: 16px; margin-bottom: 24px; flex-wrap: wrap; }
     .stat-card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 16px 24px; min-width: 130px; }
@@ -230,11 +262,21 @@ AGENTS_HTML = """<!DOCTYPE html>
     tr:last-child td { border-bottom: none; }
     tr:hover td { background: rgba(255,255,255,0.02); }
 
+    /* 타입 배지 */
     .badge { display: inline-flex; align-items: center; padding: 3px 10px; border-radius: 20px; font-size: 11px; font-weight: 500; font-family: 'IBM Plex Mono', monospace; white-space: nowrap; }
     .badge-chat     { background: rgba(99,102,241,0.15); color: #818cf8; }
     .badge-schedule { background: rgba(245,158,11,0.15); color: var(--yellow); }
     .badge-trigger  { background: rgba(34,197,94,0.15);  color: var(--green); }
-    .badge-user     { background: rgba(59,130,246,0.12); color: var(--blue); margin-left: 6px; font-size: 10px; }
+
+    /* 등록자 칩 */
+    .badge-creator {
+      display: inline-flex; align-items: center; gap: 5px;
+      background: rgba(59,130,246,0.12); color: var(--blue);
+      border-radius: 20px; padding: 3px 10px; margin-left: 6px;
+      font-size: 10px; font-family: 'IBM Plex Mono', monospace; white-space: nowrap;
+    }
+    .creator-name { font-weight: 600; color: #93c5fd; }
+    .creator-id   { color: #60a5fa; opacity: 0.7; }
 
     .agent-name { font-weight: 500; color: #eef1f6; }
     .agent-id   { font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: var(--muted); margin-top: 3px; }
@@ -252,10 +294,10 @@ AGENTS_HTML = """<!DOCTYPE html>
     .slider:before { position: absolute; content: ""; width: 16px; height: 16px; left: 3px; bottom: 3px; background: white; border-radius: 50%; transition: .2s; }
     input:checked + .slider { background: var(--accent); }
     input:checked + .slider:before { transform: translateX(18px); }
+    input:disabled + .slider { opacity: 0.3; cursor: not-allowed; }
 
     .btn-delete { background: none; border: 1px solid transparent; border-radius: 6px; padding: 5px 12px; color: var(--muted); font-size: 12px; cursor: pointer; font-family: 'IBM Plex Sans KR', sans-serif; transition: all .15s; }
     .btn-delete:hover { border-color: var(--red); color: var(--red); background: rgba(239,68,68,0.08); }
-    .btn-delete:disabled { opacity: 0.3; cursor: not-allowed; }
     .action-placeholder { color: var(--border); font-size: 13px; }
 
     /* 삭제 확인 모달 */
@@ -295,6 +337,7 @@ AGENTS_HTML = """<!DOCTYPE html>
 <div class="page-body">
 <div class="header">
   <h1>🤖 에이전트 관리</h1>
+  <span class="role-badge" id="roleBadge" style="display:none"></span>
 </div>
 
 <div class="stats">
@@ -352,18 +395,41 @@ AGENTS_HTML = """<!DOCTYPE html>
   let data = { chat: [], schedule: [], trigger: [] };
   let currentTab = 'all';
   let pendingDeleteId = null;
+  let isAdmin = false;
+  let currentUserId = '';
 
+  // ── 데이터 로드 ────────────────────────────────────────────────────────────
   async function load() {
     const res = await fetch('/api/boa-agents');
     if (!res.ok) {
-      document.getElementById('tbody').innerHTML = '<tr><td colspan="6" class="empty">데이터 로드 실패</td></tr>';
+      document.getElementById('tbody').innerHTML =
+        '<tr><td colspan="6" class="empty">데이터 로드 실패</td></tr>';
       return;
     }
-    data = await res.json();
+    const json = await res.json();
+
+    // 메타 정보 (권한, 현재 유저)
+    const meta  = json._meta || {};
+    isAdmin      = meta.is_admin   || false;
+    currentUserId = meta.user_id   || '';
+
+    // 역할 배지 표시
+    const roleBadge = document.getElementById('roleBadge');
+    roleBadge.style.display = '';
+    if (isAdmin) {
+      roleBadge.textContent = '👑 관리자';
+      roleBadge.className   = 'role-badge role-admin';
+    } else {
+      roleBadge.textContent = '👤 멤버';
+      roleBadge.className   = 'role-badge role-member';
+    }
+
+    data = { chat: json.chat || [], schedule: json.schedule || [], trigger: json.trigger || [] };
     updateStats();
     render();
   }
 
+  // ── 통계 ──────────────────────────────────────────────────────────────────
   function updateStats() {
     const all = [...data.chat, ...data.schedule, ...data.trigger];
     document.getElementById('cnt-total').textContent    = all.length;
@@ -378,6 +444,27 @@ AGENTS_HTML = """<!DOCTYPE html>
     return data[currentTab] || [];
   }
 
+  // ── 권한 판단 ─────────────────────────────────────────────────────────────
+  // 공통(deletable=false): 관리자만 토글
+  // 사용자 생성(deletable=true): 관리자 or 본인
+  function canToggle(a) {
+    if (!a.deletable) return isAdmin;
+    return isAdmin || a.created_by === currentUserId;
+  }
+  function canDelete(a) {
+    if (!a.deletable) return false;
+    return isAdmin || a.created_by === currentUserId;
+  }
+
+  // ── 등록자 칩 ─────────────────────────────────────────────────────────────
+  function creatorChip(a) {
+    if (!a.deletable || !a.created_by) return '';
+    const name    = escHtml(a.created_by_name || '');
+    const idShort = escHtml(a.created_by.split('@')[0]);
+    const nameEl  = name ? `<span class="creator-name">${name}</span>` : '';
+    return `<span class="badge-creator">${nameEl}<span class="creator-id">${idShort}</span></span>`;
+  }
+
   function typeBadge(a) {
     const map = {
       chat:     ['badge-chat',     '💬 대화형'],
@@ -385,14 +472,16 @@ AGENTS_HTML = """<!DOCTYPE html>
       trigger:  ['badge-trigger',  '⚡ 트리거'],
     };
     const [cls, label] = map[a.type] || ['badge-chat', a.type];
-    const userBadge = a.deletable ? '<span class="badge badge-user">사용자 등록</span>' : '';
-    return `<span class="badge ${cls}">${label}</span>${userBadge}`;
+    return `<span class="badge ${cls}">${label}</span>${creatorChip(a)}`;
   }
 
   function escHtml(s) {
-    return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+    return String(s || '')
+      .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+      .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
   }
 
+  // ── 렌더 ──────────────────────────────────────────────────────────────────
   function render() {
     const q = document.getElementById('searchInput').value.toLowerCase();
     let agents = getAgents();
@@ -411,7 +500,21 @@ AGENTS_HTML = """<!DOCTYPE html>
       const cronLine = a.cron_label
         ? `<div class="cron-label">🕐 ${escHtml(a.cron_label)}</div>` : '';
       const dateStr = (a.updated_at || a.created_at || '').slice(0, 10) || '—';
-      const actionCell = a.deletable
+
+      // 토글 — 권한 없으면 disabled
+      const disabled = canToggle(a) ? '' : 'disabled';
+      const toggleHtml = `
+        <div class="toggle-cell">
+          <span class="status-dot ${a.enabled ? 'dot-on' : 'dot-off'}" id="dot-${escHtml(a.agent_id)}"></span>
+          <label class="toggle">
+            <input type="checkbox" ${a.enabled ? 'checked' : ''} ${disabled}
+              onchange="toggleAgent('${escHtml(a.agent_id)}', this.checked, this)">
+            <span class="slider"></span>
+          </label>
+        </div>`;
+
+      // 삭제 버튼 — 권한 없으면 placeholder
+      const actionCell = canDelete(a)
         ? `<button class="btn-delete"
              onclick="openDeleteModal('${escHtml(a.agent_id)}','${escHtml(a.display_name)}')">
              🗑 삭제
@@ -430,22 +533,14 @@ AGENTS_HTML = """<!DOCTYPE html>
             ${cronLine}
           </td>
           <td class="td-mono">${dateStr}</td>
-          <td>
-            <div class="toggle-cell">
-              <span class="status-dot ${a.enabled ? 'dot-on' : 'dot-off'}" id="dot-${escHtml(a.agent_id)}"></span>
-              <label class="toggle">
-                <input type="checkbox" ${a.enabled ? 'checked' : ''}
-                  onchange="toggleAgent('${escHtml(a.agent_id)}', this.checked, this)">
-                <span class="slider"></span>
-              </label>
-            </div>
-          </td>
+          <td>${toggleHtml}</td>
           <td>${actionCell}</td>
         </tr>
       `;
     }).join('');
   }
 
+  // ── 토글 ──────────────────────────────────────────────────────────────────
   async function toggleAgent(agent_id, enabled, checkbox) {
     const res = await fetch(`/api/boa-agents/${agent_id}`, {
       method: 'PATCH',
@@ -453,7 +548,8 @@ AGENTS_HTML = """<!DOCTYPE html>
       body: JSON.stringify({ enabled }),
     });
     if (!res.ok) {
-      alert('변경 실패');
+      const err = await res.json().catch(() => ({}));
+      alert('변경 실패: ' + (err.detail || '알 수 없는 오류'));
       checkbox.checked = !enabled;
       return;
     }
@@ -466,7 +562,7 @@ AGENTS_HTML = """<!DOCTYPE html>
     updateStats();
   }
 
-  // ── 삭제 모달 ───────────────────────────────────────────────────────────────
+  // ── 삭제 모달 ─────────────────────────────────────────────────────────────
   function openDeleteModal(agent_id, display_name) {
     pendingDeleteId = agent_id;
     document.getElementById('modal-agent-name').textContent = display_name;
@@ -496,7 +592,6 @@ AGENTS_HTML = """<!DOCTYPE html>
       return;
     }
 
-    // 로컬 데이터에서 제거 후 재렌더
     for (const type of ['chat', 'schedule', 'trigger']) {
       data[type] = data[type].filter(x => x.agent_id !== agent_id);
     }

@@ -103,6 +103,7 @@ async def register_bq_schedule(
     hour: int,
     minute: int,
     interval: str,
+    user_name: str = "",
 ) -> str:
     """
     스케줄 등록 (MongoDB 저장 + APScheduler 등록).
@@ -122,6 +123,7 @@ async def register_bq_schedule(
         "schedule_id": schedule_id,
         "agent_name":  agent_name,
         "user_id":     user_id,
+        "user_name":   user_name,
         "space_name":  space_name,
         "query":       query,
         "hour":        hour,
