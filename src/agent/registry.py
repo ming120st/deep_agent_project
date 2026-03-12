@@ -16,9 +16,12 @@ from typing import Dict, Any
 
 from src.agent.chat.wifi_usage_inquiry.graph import wifi_usage_inquiry_graph
 from src.agent.chat.bigquery_agent.agent import bigquery_agent_node
+# from src.agent.xxx.graph import xxx_graph  ← graph 쓰는 에이전트 추가할 때마다 import
+
+
 from src.agent.trigger.check_stale_docs import check_stale_docs
 from src.core.rag_engine import reload_rag_index_if_updated
-# 서브에이전트 함수는 여기서 직접 import하여 registry에 참조로 등록
+# from src.triggers.xxx import xxx  ← 트리거 추가할 때마다 import
 
 from src.core.mongo_client import boa_agents_collection
 
@@ -75,11 +78,8 @@ AGENT_REGISTRY: dict = {
 }
 
 # ── 스케줄 에이전트 ────────────────────────────────────────────────────────────
-SCHEDULE_REGISTRY: dict = {    
-}
-
-# 현재는 스케줄 에이전트 없음. 필요 시 아래 예시처럼 등록
 """
+아직 구현된 스케줄 에이전트가 없어서 예시로 daily_report 하나만 주석 처리해둔 상태입니다. 스케줄 에이전트 추가할 때마다 registry에 정의하고 sync_registry.py에도 import + sync 코드 추가해주세요.
 "daily_report": {
     "type":         "schedule",
     "display_name": "일일 리포트",
@@ -87,8 +87,12 @@ SCHEDULE_REGISTRY: dict = {
     "enabled":      True,
     "cron":         {"hour": 8, "minute": 0},   # APScheduler cron 파라미터
     "func":         run_daily_report,
+    "target":       "구성원 DM (report_daily 설정)",  # 발송 대상 설명
 },
 """
+
+SCHEDULE_REGISTRY: dict = {
+}
 
 # ── 트리거 에이전트 ────────────────────────────────────────────────────────────
 TRIGGER_REGISTRY: dict = {
@@ -99,6 +103,7 @@ TRIGGER_REGISTRY: dict = {
         "enabled":      True,
         "interval":     {"hours": 24},
         "func":         check_stale_docs,
+        "target":       "문서 담당자 DM",
     },
     "rag_index_reload": {
         "type":         "trigger",
@@ -107,6 +112,7 @@ TRIGGER_REGISTRY: dict = {
         "enabled":      True,
         "interval":     {"minutes": 10},
         "func":         reload_rag_index_if_updated,
+        "target":       "사용자 인터랙션 없음",  # 메시지 발송 없음
     },
 }
 

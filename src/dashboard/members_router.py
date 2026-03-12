@@ -1,36 +1,15 @@
 """
 구성원 관리 라우터 (members_router.py)
 
-[settings 스키마 동적 렌더링]
-  MEMBER_SETTINGS_SCHEMA 리스트에 항목 추가하면
-  → /api/members/schema API로 프론트에 내려감
-  → UI가 자동으로 토글 컬럼 추가
-  → HTML 수정 불필요
-
-새 설정 추가 방법:
-  MEMBER_SETTINGS_SCHEMA에 한 줄 추가
-  {"key": "new_setting", "label": "새 설정 이름"}
+순수 인벤토리: BOA와 DM 중인 구성원 목록 조회만 제공.
+에이전트별 발송 대상은 각 에이전트에서 직접 관리.
 """
-import json
-from datetime import datetime
 from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import HTMLResponse, RedirectResponse
-from pydantic import BaseModel
-from typing import Any
 
 from src.core.mongo_client import boa_members_collection, boa_admins_collection
 
 router = APIRouter()
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# 설정 스키마 — 여기에만 추가하면 UI 자동 반영
-# ══════════════════════════════════════════════════════════════════════════════
-MEMBER_SETTINGS_SCHEMA = [
-    {"key": "report_daily",  "label": "일일 리포트"},
-    {"key": "alert_waiting", "label": "대기 알림"},   # 예시: 추가 시 주석 해제
-    # {"key": "report_weekly", "label": "주간 리포트"}, # 예시: 추가 시 주석 해제
-]
 
 
 # ── 관리자 체크 ───────────────────────────────────────────────────────────────
@@ -48,13 +27,6 @@ async def require_admin(request: Request) -> dict:
 # API
 # ══════════════════════════════════════════════════════════════════════════════
 
-@router.get("/api/members/schema")
-async def get_members_schema(request: Request):
-    """설정 스키마 반환 — 프론트에서 동적 렌더링에 사용"""
-    await require_admin(request)
-    return MEMBER_SETTINGS_SCHEMA
-
-
 @router.get("/api/members")
 async def get_members(request: Request):
     await require_admin(request)
@@ -65,33 +37,6 @@ async def get_members(request: Request):
             if m.get(key):
                 m[key] = m[key].isoformat()
     return members
-
-
-class SettingsUpdate(BaseModel):
-    email: str
-    key:   str
-    value: Any
-
-
-@router.patch("/api/members/settings")
-async def update_member_settings(request: Request, body: SettingsUpdate):
-    await require_admin(request)
-
-    # 스키마에 없는 key는 거부
-    valid_keys = {s["key"] for s in MEMBER_SETTINGS_SCHEMA}
-    if body.key not in valid_keys:
-        raise HTTPException(status_code=400, detail=f"유효하지 않은 설정 키: {body.key}")
-
-    result = await boa_members_collection.update_one(
-        {"email": body.email},
-        {"$set": {
-            f"settings.{body.key}": body.value,
-            "updated_at": datetime.utcnow(),
-        }}
-    )
-    if result.matched_count == 0:
-        raise HTTPException(status_code=404, detail="구성원을 찾을 수 없습니다.")
-    return {"ok": True, "email": body.email, "key": body.key, "value": body.value}
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -124,18 +69,17 @@ async def members_page(request: Request):
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>구성원 관리 — BOA</title>
-  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@300;400;500;600&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@300;400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     :root {
       --bg: #0f1117; --surface: #1a1d27; --border: #2a2d3e;
       --text: #e2e8f0; --muted: #64748b; --accent: #6366f1;
-      --green: #22c55e; --red: #ef4444;
+      --green: #22c55e; --red: #ef4444; --blue: #3b82f6;
     }
     body { font-family: 'IBM Plex Sans KR', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
-    /* 상단 네비게이션 바 */
     .top-nav { background: #13161b; border-bottom: 1px solid #252931; padding: 0 28px; height: 56px; display: flex; align-items: center; justify-content: space-between; position: sticky; top: 0; z-index: 100; }
-    .logo { font-family: monospace; font-weight: 600; font-size: 16px; color: #eef1f6; letter-spacing: .05em; }
+    .logo { font-family: 'IBM Plex Mono', monospace; font-weight: 600; font-size: 16px; color: #eef1f6; letter-spacing: .05em; }
     .logo span { color: #3b82f6; }
     .nav-links { display: flex; align-items: center; gap: 4px; }
     .nav-link { padding: 6px 14px; border-radius: 6px; font-size: 13px; color: var(--muted); text-decoration: none; transition: all .15s; }
@@ -144,34 +88,36 @@ async def members_page(request: Request):
     .btn-logout { background: none; border: 1px solid #252931; border-radius: 6px; padding: 5px 12px; color: var(--muted); font-size: 12px; cursor: pointer; text-decoration: none; transition: all .15s; }
     .btn-logout:hover { border-color: #ef4444; color: #ef4444; }
     .page-body { padding: 32px 24px; }
-    .header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 28px; }
+    .header { margin-bottom: 28px; }
     .header h1 { font-size: 20px; font-weight: 600; }
     .stats { display: flex; gap: 16px; margin-bottom: 24px; flex-wrap: wrap; }
     .stat-card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 16px 24px; min-width: 140px; }
     .stat-card .label { font-size: 12px; color: var(--muted); margin-bottom: 6px; }
-    .stat-card .value { font-size: 24px; font-weight: 600; }
-    .stat-card .value.green { color: var(--green); }
+    .stat-card .value { font-size: 24px; font-weight: 600; font-family: 'IBM Plex Mono', monospace; }
+    .value.green { color: var(--green); }
+    .value.red   { color: var(--red); }
     .toolbar { margin-bottom: 20px; }
-    .search-bar { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 10px 16px; width: 300px; color: var(--text); font-size: 14px; font-family: inherit; }
-    .search-bar:focus { outline: none; border-color: var(--accent); }
+    .search-bar { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 10px 16px; width: 300px; color: var(--text); font-size: 14px; font-family: inherit; outline: none; transition: border-color .15s; }
+    .search-bar:focus { border-color: var(--accent); }
+    .search-bar::placeholder { color: var(--muted); }
     table { width: 100%; border-collapse: collapse; background: var(--surface); border-radius: 12px; overflow: hidden; border: 1px solid var(--border); }
-    th { text-align: left; padding: 14px 20px; font-size: 12px; color: var(--muted); font-weight: 500; border-bottom: 1px solid var(--border); background: rgba(255,255,255,0.02); white-space: nowrap; }
+    th { text-align: left; padding: 14px 20px; font-size: 11px; color: var(--muted); font-weight: 500; border-bottom: 1px solid var(--border); background: rgba(255,255,255,0.02); white-space: nowrap; text-transform: uppercase; letter-spacing: .06em; font-family: 'IBM Plex Mono', monospace; }
     td { padding: 14px 20px; font-size: 14px; border-bottom: 1px solid rgba(255,255,255,0.04); vertical-align: middle; }
     tr:last-child td { border-bottom: none; }
     tr:hover td { background: rgba(255,255,255,0.02); }
-    .space-chip { font-size: 11px; color: var(--muted); background: rgba(255,255,255,0.05); padding: 2px 8px; border-radius: 4px; font-family: monospace; }
-    .no-space { font-size: 12px; color: var(--red); }
-    .toggle { position: relative; display: inline-block; width: 40px; height: 22px; }
-    .toggle input { opacity: 0; width: 0; height: 0; }
-    .slider { position: absolute; cursor: pointer; inset: 0; background: var(--border); border-radius: 22px; transition: .2s; }
-    .slider:before { position: absolute; content: ""; width: 16px; height: 16px; left: 3px; bottom: 3px; background: white; border-radius: 50%; transition: .2s; }
-    input:checked + .slider { background: var(--accent); }
-    input:checked + .slider:before { transform: translateX(18px); }
-    .empty { text-align: center; padding: 60px; color: var(--muted); }
+    .name-cell { font-weight: 500; color: #eef1f6; }
+    .email-cell { font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: var(--muted); }
+    .dept-badge { display: inline-block; background: #1e293b; border: 1px solid #334155; padding: 2px 9px; border-radius: 4px; font-size: 12px; color: #94a3b8; }
+    .dept-none  { display: inline-block; background: #2d1515; border: 1px solid #7f1d1d; padding: 2px 9px; border-radius: 4px; font-size: 12px; color: #f87171; }
+    .space-chip { font-size: 11px; color: var(--muted); background: rgba(255,255,255,0.05); padding: 2px 8px; border-radius: 4px; font-family: 'IBM Plex Mono', monospace; }
+    .no-space   { font-size: 12px; color: var(--red); }
+    .date-cell  { font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: var(--muted); }
+    .empty   { text-align: center; padding: 60px; color: var(--muted); }
     .loading { text-align: center; padding: 60px; color: var(--muted); }
   </style>
 </head>
 <body>
+
 <nav class="top-nav">
   <div class="logo">BOA <span>//</span> 구성원 관리</div>
   <div class="nav-links">
@@ -183,114 +129,83 @@ async def members_page(request: Request):
   </div>
   <a href="/auth/logout" class="btn-logout">로그아웃</a>
 </nav>
+
 <div class="page-body">
-<div class="header">
-  <h1>👥 구성원 관리</h1>
+  <div class="header">
+    <h1>👥 구성원 현황</h1>
+  </div>
+
+  <div class="stats">
+    <div class="stat-card"><div class="label">전체</div><div class="value" id="cntTotal">—</div></div>
+    <div class="stat-card"><div class="label">부서 설정 완료</div><div class="value green" id="cntDept">—</div></div>
+    <div class="stat-card"><div class="label">부서 미설정</div><div class="value red" id="cntNoDept">—</div></div>
+  </div>
+
+  <div class="toolbar">
+    <input class="search-bar" type="text" id="searchInput" placeholder="이름 또는 이메일 검색...">
+  </div>
+
+  <table>
+    <thead>
+      <tr>
+        <th>이름</th>
+        <th>부서</th>
+        <th>이메일</th>
+        <th>DM Space</th>
+        <th>등록일</th>
+        <th>최종 활동</th>
+      </tr>
+    </thead>
+    <tbody id="tbody">
+      <tr><td colspan="6" class="loading">로딩 중...</td></tr>
+    </tbody>
+  </table>
 </div>
-<div class="stats" id="stats">
-  <div class="stat-card"><div class="label">전체 구성원</div><div class="value" id="totalCount">—</div></div>
-</div>
-<div class="toolbar">
-  <input class="search-bar" type="text" id="searchInput" placeholder="이름 또는 이메일 검색...">
-</div>
-<table>
-  <thead><tr id="thead-row"></tr></thead>
-  <tbody id="tbody"><tr><td class="loading">로딩 중...</td></tr></tbody>
-</table>
 
 <script>
-  let all = [], schema = [];
+  let all = [];
 
   async function load() {
-    // 스키마와 데이터 병렬 로드
-    [schema, all] = await Promise.all([
-      fetch('/api/members/schema').then(r => r.json()),
-      fetch('/api/members').then(r => r.json()),
-    ]);
-    buildHeader();
-    buildStats();
+    const res = await fetch('/api/members');
+    if (!res.ok) {
+      document.getElementById('tbody').innerHTML = '<tr><td colspan="6" class="empty">로드 실패</td></tr>';
+      return;
+    }
+    all = await res.json();
+    updateStats();
     render(all);
   }
 
-  function buildHeader() {
-    const tr = document.getElementById('thead-row');
-    const base = ['이름', '부서', '이메일', 'Space', '등록일'];
-    const schemaLabels = schema.map(s => s.label);
-    [...base, ...schemaLabels].forEach(label => {
-      const th = document.createElement('th');
-      th.textContent = label;
-      tr.appendChild(th);
-    });
-  }
-
-  function buildStats() {
-    const statsEl = document.getElementById('stats');
-    // 전체 카드는 이미 있음, 설정별 카드 동적 추가
-    schema.forEach(s => {
-      const count = all.filter(m => m.settings?.[s.key]).length;
-      const card = document.createElement('div');
-      card.className = 'stat-card';
-      card.id = `stat-${s.key}`;
-      card.innerHTML = `<div class="label">${s.label}</div><div class="value green">${count}</div>`;
-      statsEl.appendChild(card);
-    });
-    document.getElementById('totalCount').textContent = all.length;
-  }
-
   function updateStats() {
-    document.getElementById('totalCount').textContent = all.length;
-    schema.forEach(s => {
-      const el = document.querySelector(`#stat-${s.key} .value`);
-      if (el) el.textContent = all.filter(m => m.settings?.[s.key]).length;
-    });
+    const withDept = all.filter(m => m.department).length;
+    document.getElementById('cntTotal').textContent  = all.length;
+    document.getElementById('cntDept').textContent   = withDept;
+    document.getElementById('cntNoDept').textContent = all.length - withDept;
   }
 
   function render(members) {
     const tbody = document.getElementById('tbody');
-    const colSpan = 4 + schema.length;
     if (!members.length) {
-      tbody.innerHTML = `<tr><td colspan="${colSpan}" class="empty">등록된 구성원이 없습니다</td></tr>`;
+      tbody.innerHTML = '<tr><td colspan="6" class="empty">등록된 구성원이 없습니다</td></tr>';
       return;
     }
     tbody.innerHTML = members.map(m => {
-      const spaceCell = m.space_name
+      const deptHtml = m.department
+        ? `<span class="dept-badge">${m.department}</span>`
+        : `<span class="dept-none">미설정</span>`;
+      const spaceHtml = m.space_name
         ? `<span class="space-chip">${m.space_name}</span>`
-        : '<span class="no-space">미등록</span>';
-      const date = m.created_at ? m.created_at.slice(0, 10) : '—';
-      // 스키마 기반으로 토글 셀 동적 생성
-      const toggleCells = schema.map(s => `
-        <td>
-          <label class="toggle">
-            <input type="checkbox" ${m.settings?.[s.key] ? 'checked' : ''}
-              onchange="toggleSetting('${m.email}', '${s.key}', this.checked)">
-            <span class="slider"></span>
-          </label>
-        </td>`).join('');
-      const deptBadge = m.department
-        ? `<span style="background:#1e293b;border:1px solid #334155;padding:2px 8px;border-radius:4px;font-size:12px;color:#94a3b8">${m.department}</span>`
-        : `<span style="background:#2d1515;border:1px solid #7f1d1d;padding:2px 8px;border-radius:4px;font-size:12px;color:#f87171">미설정</span>`;
+        : `<span class="no-space">미등록</span>`;
       return `
         <tr>
-          <td>${m.name || '—'}</td>
-          <td>${deptBadge}</td>
-          <td>${m.email}</td>
-          <td>${spaceCell}</td>
-          <td>${date}</td>
-          ${toggleCells}
+          <td class="name-cell">${m.name || '—'}</td>
+          <td>${deptHtml}</td>
+          <td class="email-cell">${m.email}</td>
+          <td>${spaceHtml}</td>
+          <td class="date-cell">${m.created_at ? m.created_at.slice(0,10) : '—'}</td>
+          <td class="date-cell">${m.updated_at ? m.updated_at.slice(0,10) : '—'}</td>
         </tr>`;
     }).join('');
-  }
-
-  async function toggleSetting(email, key, value) {
-    const res = await fetch('/api/members/settings', {
-      method: 'PATCH',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ email, key, value })
-    });
-    if (!res.ok) { alert('변경 실패'); await load(); return; }
-    const m = all.find(x => x.email === email);
-    if (m) { m.settings = m.settings || {}; m.settings[key] = value; }
-    updateStats();
   }
 
   document.getElementById('searchInput').addEventListener('input', e => {
@@ -303,6 +218,5 @@ async def members_page(request: Request):
 
   load();
 </script>
-</div>
 </body>
 </html>""")

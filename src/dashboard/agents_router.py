@@ -80,6 +80,7 @@ def _bq_schedule_to_agent(doc: dict) -> dict:
         "cron_label":      f"{interval_label} {time_str}",
         "created_by":      doc.get("user_id", ""),
         "created_by_name": doc.get("user_name", ""),
+        "space_names":     [doc.get("space_name", "")] if doc.get("space_name") else [],
         "created_at":      created.isoformat() if created else None,
         "updated_at":      doc.get("updated_at", created).isoformat() if doc.get("updated_at", created) else None,
     }
@@ -103,6 +104,9 @@ async def list_agents(request: Request):
             if a.get(key):
                 a[key] = a[key].isoformat()
         a["deletable"] = False
+        # schedule/trigger: target 필드를 space_names 표시용으로 사용
+        if not a.get("space_names"):
+            a["space_names"] = [a["target"]] if a.get("target") else []
 
     # 2. BQ 분석 스케줄 — 관리자는 전체, 멤버는 자신이 만든 것만
     if is_admin:
@@ -299,6 +303,7 @@ AGENTS_HTML = """<!DOCTYPE html>
     .btn-delete { background: none; border: 1px solid transparent; border-radius: 6px; padding: 5px 12px; color: var(--muted); font-size: 12px; cursor: pointer; font-family: 'IBM Plex Sans KR', sans-serif; transition: all .15s; }
     .btn-delete:hover { border-color: var(--red); color: var(--red); background: rgba(239,68,68,0.08); }
     .action-placeholder { color: var(--border); font-size: 13px; }
+    .space-chip { display: inline-block; background: rgba(59,130,246,0.1); border: 1px solid rgba(59,130,246,0.25); color: #60a5fa; border-radius: 4px; padding: 2px 7px; font-size: 10px; font-family: 'IBM Plex Mono', monospace; margin: 1px 2px; }
 
     /* 삭제 확인 모달 */
     .modal-backdrop { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.65); z-index: 200; align-items: center; justify-content: center; }
@@ -365,13 +370,14 @@ AGENTS_HTML = """<!DOCTYPE html>
       <th>에이전트</th>
       <th>타입</th>
       <th>설명 / 쿼리</th>
+      <th>발송 대상</th>
       <th>업데이트</th>
       <th>활성화</th>
       <th>액션</th>
     </tr>
   </thead>
   <tbody id="tbody">
-    <tr><td colspan="6" class="loading">로딩 중...</td></tr>
+    <tr><td colspan="7" class="loading">로딩 중...</td></tr>
   </tbody>
 </table>
 </div>
@@ -403,7 +409,7 @@ AGENTS_HTML = """<!DOCTYPE html>
     const res = await fetch('/api/boa-agents');
     if (!res.ok) {
       document.getElementById('tbody').innerHTML =
-        '<tr><td colspan="6" class="empty">데이터 로드 실패</td></tr>';
+        '<tr><td colspan="7" class="empty">데이터 로드 실패</td></tr>';
       return;
     }
     const json = await res.json();
@@ -475,6 +481,20 @@ AGENTS_HTML = """<!DOCTYPE html>
     return `<span class="badge ${cls}">${label}</span>${creatorChip(a)}`;
   }
 
+  // ── 발송 대상 셀 ─────────────────────────────────────────────────────────────
+  function spaceNamesHtml(a) {
+    // chat 타입은 표시 안 함
+    if (a.type === 'chat') return '<span class="action-placeholder">—</span>';
+    const names = a.space_names || [];
+    if (!names.length || (names.length === 1 && !names[0]))
+      return '<span class="action-placeholder">—</span>';
+    return names.map(n => {
+      // spaces/XXX 형태면 짧게, 아니면 그대로
+      const label = n.startsWith('spaces/') ? n.slice(7, 7+12) + (n.length > 19 ? '…' : '') : n;
+      return `<span class="space-chip" title="${escHtml(n)}">${escHtml(label)}</span>`;
+    }).join(' ');
+  }
+
   function escHtml(s) {
     return String(s || '')
       .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
@@ -492,7 +512,7 @@ AGENTS_HTML = """<!DOCTYPE html>
 
     const tbody = document.getElementById('tbody');
     if (!agents.length) {
-      tbody.innerHTML = '<tr><td colspan="6" class="empty">등록된 에이전트가 없습니다</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="7" class="empty">등록된 에이전트가 없습니다</td></tr>';
       return;
     }
 
@@ -532,6 +552,7 @@ AGENTS_HTML = """<!DOCTYPE html>
             <div class="desc" title="${escHtml(a.description)}">${escHtml(a.description) || '—'}</div>
             ${cronLine}
           </td>
+          <td>${spaceNamesHtml(a)}</td>
           <td class="td-mono">${dateStr}</td>
           <td>${toggleHtml}</td>
           <td>${actionCell}</td>

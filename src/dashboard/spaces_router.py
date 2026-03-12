@@ -1,35 +1,16 @@
 """
 스페이스 관리 라우터 (spaces_router.py)
 
-[settings 스키마 동적 렌더링]
-  SPACE_SETTINGS_SCHEMA 리스트에 항목 추가하면
-  → /api/spaces/schema API로 프론트에 내려감
-  → UI가 자동으로 토글 컬럼 추가
-  → HTML 수정 불필요
-
-새 설정 추가 방법:
-  SPACE_SETTINGS_SCHEMA에 한 줄 추가
-  {"key": "new_setting", "label": "새 설정 이름"}
+순수 인벤토리: BOA가 참여 중인 스페이스 목록 조회만 제공.
+에이전트별 발송 대상은 각 에이전트(boa_bq_schedules 등)에서 직접 관리.
 """
 from datetime import datetime
 from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import HTMLResponse, RedirectResponse
-from pydantic import BaseModel
-from typing import Any
 
 from src.core.mongo_client import boa_spaces_collection, boa_admins_collection
 
 router = APIRouter()
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# 설정 스키마 — 여기에만 추가하면 대시보드 토글항목 자동 반영 (true/false로 관리)
-# ══════════════════════════════════════════════════════════════════════════════
-SPACE_SETTINGS_SCHEMA = [
-    {"key": "report_daily",  "label": "일일 리포트"},
-    {"key": "announcement",  "label": "공지 발송"},   # 예시: 추가 시 주석 해제
-    # {"key": "report_weekly", "label": "주간 리포트"}, # 예시: 추가 시 주석 해제
-]
 
 
 # ── 관리자 체크 ───────────────────────────────────────────────────────────────
@@ -47,13 +28,6 @@ async def require_admin(request: Request) -> dict:
 # API
 # ══════════════════════════════════════════════════════════════════════════════
 
-@router.get("/api/spaces/schema")
-async def get_spaces_schema(request: Request):
-    """설정 스키마 반환 — 프론트에서 동적 렌더링에 사용"""
-    await require_admin(request)
-    return SPACE_SETTINGS_SCHEMA
-
-
 @router.get("/api/spaces")
 async def get_spaces(request: Request):
     await require_admin(request)
@@ -64,33 +38,6 @@ async def get_spaces(request: Request):
             if s.get(key):
                 s[key] = s[key].isoformat()
     return spaces
-
-
-class SpaceSettingsUpdate(BaseModel):
-    space_name: str
-    key:        str
-    value:      Any
-
-
-@router.patch("/api/spaces/settings")
-async def update_space_settings(request: Request, body: SpaceSettingsUpdate):
-    await require_admin(request)
-
-    # 스키마에 없는 key는 거부
-    valid_keys = {s["key"] for s in SPACE_SETTINGS_SCHEMA}
-    if body.key not in valid_keys:
-        raise HTTPException(status_code=400, detail=f"유효하지 않은 설정 키: {body.key}")
-
-    result = await boa_spaces_collection.update_one(
-        {"space_name": body.space_name},
-        {"$set": {
-            f"settings.{body.key}": body.value,
-            "updated_at": datetime.utcnow(),
-        }}
-    )
-    if result.matched_count == 0:
-        raise HTTPException(status_code=404, detail="스페이스를 찾을 수 없습니다.")
-    return {"ok": True, "space_name": body.space_name, "key": body.key, "value": body.value}
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -123,18 +70,17 @@ async def spaces_page(request: Request):
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>스페이스 관리 — BOA</title>
-  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@300;400;500;600&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@300;400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     :root {
       --bg: #0f1117; --surface: #1a1d27; --border: #2a2d3e;
       --text: #e2e8f0; --muted: #64748b; --accent: #6366f1;
-      --green: #22c55e; --yellow: #f59e0b;
+      --green: #22c55e; --yellow: #f59e0b; --blue: #3b82f6;
     }
     body { font-family: 'IBM Plex Sans KR', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
-    /* 상단 네비게이션 바 */
     .top-nav { background: #13161b; border-bottom: 1px solid #252931; padding: 0 28px; height: 56px; display: flex; align-items: center; justify-content: space-between; position: sticky; top: 0; z-index: 100; }
-    .logo { font-family: monospace; font-weight: 600; font-size: 16px; color: #eef1f6; letter-spacing: .05em; }
+    .logo { font-family: 'IBM Plex Mono', monospace; font-weight: 600; font-size: 16px; color: #eef1f6; letter-spacing: .05em; }
     .logo span { color: #3b82f6; }
     .nav-links { display: flex; align-items: center; gap: 4px; }
     .nav-link { padding: 6px 14px; border-radius: 6px; font-size: 13px; color: var(--muted); text-decoration: none; transition: all .15s; }
@@ -148,28 +94,24 @@ async def spaces_page(request: Request):
     .stats { display: flex; gap: 16px; margin-bottom: 24px; flex-wrap: wrap; }
     .stat-card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 16px 24px; min-width: 140px; }
     .stat-card .label { font-size: 12px; color: var(--muted); margin-bottom: 6px; }
-    .stat-card .value { font-size: 24px; font-weight: 600; }
-    .stat-card .value.green  { color: var(--green); }
-    .stat-card .value.yellow { color: var(--yellow); }
+    .stat-card .value { font-size: 24px; font-weight: 600; font-family: 'IBM Plex Mono', monospace; }
+    .value.green  { color: var(--green); }
+    .value.yellow { color: var(--yellow); }
+    .value.blue   { color: var(--blue); }
     .toolbar { margin-bottom: 20px; }
-    .search-bar { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 10px 16px; width: 300px; color: var(--text); font-size: 14px; font-family: inherit; }
-    .search-bar:focus { outline: none; border-color: var(--accent); }
+    .search-bar { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 10px 16px; width: 300px; color: var(--text); font-size: 14px; font-family: inherit; outline: none; transition: border-color .15s; }
+    .search-bar:focus { border-color: var(--accent); }
+    .search-bar::placeholder { color: var(--muted); }
     table { width: 100%; border-collapse: collapse; background: var(--surface); border-radius: 12px; overflow: hidden; border: 1px solid var(--border); }
-    th { text-align: left; padding: 14px 20px; font-size: 12px; color: var(--muted); font-weight: 500; border-bottom: 1px solid var(--border); background: rgba(255,255,255,0.02); white-space: nowrap; }
+    th { text-align: left; padding: 14px 20px; font-size: 11px; color: var(--muted); font-weight: 500; border-bottom: 1px solid var(--border); background: rgba(255,255,255,0.02); white-space: nowrap; text-transform: uppercase; letter-spacing: .06em; font-family: 'IBM Plex Mono', monospace; }
     td { padding: 14px 20px; font-size: 14px; border-bottom: 1px solid rgba(255,255,255,0.04); vertical-align: middle; }
     tr:last-child td { border-bottom: none; }
     tr:hover td { background: rgba(255,255,255,0.02); }
-    .badge { display: inline-flex; align-items: center; padding: 3px 10px; border-radius: 20px; font-size: 11px; font-weight: 500; }
-    .badge.group  { background: rgba(99,102,241,0.15); color: #818cf8; }
-    .badge.room   { background: rgba(245,158,11,0.15); color: var(--yellow); }
-    .space-chip { font-size: 11px; color: var(--muted); background: rgba(255,255,255,0.05); padding: 2px 8px; border-radius: 4px; font-family: monospace; }
-    .toggle { position: relative; display: inline-block; width: 40px; height: 22px; }
-    .toggle input { opacity: 0; width: 0; height: 0; }
-    .slider { position: absolute; cursor: pointer; inset: 0; background: var(--border); border-radius: 22px; transition: .2s; }
-    .slider:before { position: absolute; content: ""; width: 16px; height: 16px; left: 3px; bottom: 3px; background: white; border-radius: 50%; transition: .2s; }
-    input:checked + .slider { background: var(--accent); }
-    input:checked + .slider:before { transform: translateX(18px); }
-    .empty { text-align: center; padding: 60px; color: var(--muted); }
+    .badge { display: inline-flex; align-items: center; padding: 3px 10px; border-radius: 20px; font-size: 11px; font-weight: 500; font-family: 'IBM Plex Mono', monospace; }
+    .badge-group { background: rgba(99,102,241,0.15); color: #818cf8; }
+    .badge-room  { background: rgba(245,158,11,0.15); color: var(--yellow); }
+    .space-name-chip { font-size: 11px; color: var(--muted); background: rgba(255,255,255,0.05); padding: 2px 8px; border-radius: 4px; font-family: 'IBM Plex Mono', monospace; }
+    .empty   { text-align: center; padding: 60px; color: var(--muted); }
     .loading { text-align: center; padding: 60px; color: var(--muted); }
   </style>
 </head>
@@ -185,116 +127,78 @@ async def spaces_page(request: Request):
   </div>
   <a href="/auth/logout" class="btn-logout">로그아웃</a>
 </nav>
+
 <div class="page-body">
-<div class="header">
-  <h1>💬 스페이스 관리</h1>
+  <div class="header">
+    <h1>💬 스페이스 현황</h1>
+  </div>
+
+  <div class="stats">
+    <div class="stat-card"><div class="label">전체</div><div class="value" id="cntTotal">—</div></div>
+    <div class="stat-card"><div class="label">GROUP_CHAT</div><div class="value green" id="cntGroup">—</div></div>
+    <div class="stat-card"><div class="label">ROOM / SPACE</div><div class="value yellow" id="cntRoom">—</div></div>
+  </div>
+
+  <div class="toolbar">
+    <input class="search-bar" type="text" id="searchInput" placeholder="이름 또는 space_name 검색...">
+  </div>
+
+  <table>
+    <thead>
+      <tr>
+        <th>이름</th>
+        <th>유형</th>
+        <th>Space Name</th>
+        <th>등록일</th>
+        <th>최종 활동</th>
+      </tr>
+    </thead>
+    <tbody id="tbody">
+      <tr><td colspan="5" class="loading">로딩 중...</td></tr>
+    </tbody>
+  </table>
 </div>
-<div class="stats" id="stats">
-  <div class="stat-card"><div class="label">전체 등록</div><div class="value" id="totalCount">—</div></div>
-  <div class="stat-card"><div class="label">GROUP_CHAT</div><div class="value green" id="groupCount">—</div></div>
-  <div class="stat-card"><div class="label">ROOM</div><div class="value yellow" id="roomCount">—</div></div>
-</div>
-<div class="toolbar">
-  <input class="search-bar" type="text" id="searchInput" placeholder="이름 또는 space_name 검색...">
-</div>
-<table>
-  <thead><tr id="thead-row"></tr></thead>
-  <tbody id="tbody"><tr><td class="loading">로딩 중...</td></tr></tbody>
-</table>
 
 <script>
-  let all = [], schema = [];
+  let all = [];
 
   async function load() {
-    [schema, all] = await Promise.all([
-      fetch('/api/spaces/schema').then(r => r.json()),
-      fetch('/api/spaces').then(r => r.json()),
-    ]);
-    buildHeader();
-    buildStats();
+    const res = await fetch('/api/spaces');
+    if (!res.ok) {
+      document.getElementById('tbody').innerHTML = '<tr><td colspan="5" class="empty">로드 실패</td></tr>';
+      return;
+    }
+    all = await res.json();
+    updateStats();
     render(all);
   }
 
-  function buildHeader() {
-    const tr = document.getElementById('thead-row');
-    const base = ['이름', '유형', 'Space Name', '등록일'];
-    const schemaLabels = schema.map(s => s.label);
-    [...base, ...schemaLabels].forEach(label => {
-      const th = document.createElement('th');
-      th.textContent = label;
-      tr.appendChild(th);
-    });
-  }
-
-  function buildStats() {
-    const statsEl = document.getElementById('stats');
-    // 기본 카운트 업데이트
-    document.getElementById('totalCount').textContent = all.length;
-    document.getElementById('groupCount').textContent = all.filter(s => s.space_type === 'GROUP_CHAT').length;
-    document.getElementById('roomCount').textContent  = all.filter(s => s.space_type === 'ROOM' || s.space_type === 'SPACE').length;
-    // 스키마별 카드 동적 추가
-    schema.forEach(s => {
-      const count = all.filter(x => x.settings?.[s.key]).length;
-      const card = document.createElement('div');
-      card.className = 'stat-card';
-      card.id = `stat-${s.key}`;
-      card.innerHTML = `<div class="label">${s.label}</div><div class="value green">${count}</div>`;
-      statsEl.appendChild(card);
-    });
-  }
-
   function updateStats() {
-    document.getElementById('totalCount').textContent = all.length;
-    document.getElementById('groupCount').textContent = all.filter(s => s.space_type === 'GROUP_CHAT').length;
-    document.getElementById('roomCount').textContent  = all.filter(s => s.space_type === 'ROOM' || s.space_type === 'SPACE').length;
-    schema.forEach(s => {
-      const el = document.querySelector(`#stat-${s.key} .value`);
-      if (el) el.textContent = all.filter(x => x.settings?.[s.key]).length;
-    });
+    document.getElementById('cntTotal').textContent = all.length;
+    document.getElementById('cntGroup').textContent = all.filter(s => s.space_type === 'GROUP_CHAT').length;
+    document.getElementById('cntRoom').textContent  = all.filter(s => s.space_type === 'ROOM' || s.space_type === 'SPACE').length;
   }
 
   function typeBadge(t) {
-    const cls = t === 'GROUP_CHAT' ? 'group' : 'room';
+    const cls = t === 'GROUP_CHAT' ? 'badge-group' : 'badge-room';
     return `<span class="badge ${cls}">${t}</span>`;
   }
 
   function render(spaces) {
     const tbody = document.getElementById('tbody');
-    const colSpan = 4 + schema.length;
     if (!spaces.length) {
-      tbody.innerHTML = `<tr><td colspan="${colSpan}" class="empty">등록된 스페이스가 없습니다</td></tr>`;
+      tbody.innerHTML = '<tr><td colspan="5" class="empty">등록된 스페이스가 없습니다</td></tr>';
       return;
     }
-    tbody.innerHTML = spaces.map(s => {
-      const toggleCells = schema.map(sc => `
-        <td>
-          <label class="toggle">
-            <input type="checkbox" ${s.settings?.[sc.key] ? 'checked' : ''}
-              onchange="toggleSetting('${s.space_name}', '${sc.key}', this.checked)">
-            <span class="slider"></span>
-          </label>
-        </td>`).join('');
-      return `
-        <tr>
-          <td>${s.display_name || '—'}</td>
-          <td>${typeBadge(s.space_type)}</td>
-          <td><span class="space-chip">${s.space_name}</span></td>
-          <td>${s.created_at ? s.created_at.slice(0, 10) : '—'}</td>
-          ${toggleCells}
-        </tr>`;
-    }).join('');
-  }
-
-  async function toggleSetting(space_name, key, value) {
-    const res = await fetch('/api/spaces/settings', {
-      method: 'PATCH',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ space_name, key, value })
-    });
-    if (!res.ok) { alert('변경 실패'); await load(); return; }
-    const s = all.find(x => x.space_name === space_name);
-    if (s) { s.settings = s.settings || {}; s.settings[key] = value; }
-    updateStats();
+    tbody.innerHTML = spaces.map(s => `
+      <tr>
+        <td style="font-weight:500;color:#eef1f6">${s.display_name || '—'}</td>
+        <td>${typeBadge(s.space_type)}</td>
+        <td><span class="space-name-chip">${s.space_name}</span></td>
+        <td style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--muted)">${s.created_at ? s.created_at.slice(0,10) : '—'}</td>
+        <td style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--muted)">${s.updated_at ? s.updated_at.slice(0,10) : '—'}</td>
+      </tr>
+    `).join('');
   }
 
   document.getElementById('searchInput').addEventListener('input', e => {
@@ -307,6 +211,5 @@ async def spaces_page(request: Request):
 
   load();
 </script>
-</div>
 </body>
 </html>""")

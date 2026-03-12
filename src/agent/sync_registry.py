@@ -21,6 +21,7 @@ async def sync_registry_to_mongo() -> None:
                     "type":        meta["type"],
                     "display_name":meta["display_name"],
                     "description": meta["description"],
+                    "target":      meta.get("target", ""),   # 발송 대상 (schedule/trigger)
                     "updated_at":  datetime.utcnow(),
                 },
                 "$setOnInsert": {
