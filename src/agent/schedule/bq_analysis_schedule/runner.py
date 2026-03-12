@@ -20,7 +20,7 @@ from langgraph.prebuilt import create_react_agent
 
 from src.agent.chat.bigquery_agent.tools import BIGQUERY_TOOLS
 from src.agent.chat.bigquery_agent.prompts import BIGQUERY_SYSTEM_PROMPT
-from src.core.llm_config import llm_light
+from src.core.llm_config import LLM_LIGHT
 from src.core.google_chat import send_message
 
 logger = logging.getLogger(__name__)
@@ -65,7 +65,7 @@ async def run_scheduled_bq_analysis(
 
     try:
         agent = create_react_agent(
-            model=llm_light,
+            model=LLM_LIGHT,
             tools=BIGQUERY_TOOLS,
             prompt=prompt,
         )

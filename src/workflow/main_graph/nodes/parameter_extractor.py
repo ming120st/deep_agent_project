@@ -12,7 +12,7 @@ from langchain_core.runnables import Runnable
 import json
 
 from src.workflow.graph_infra.state import GraphState
-from src.core.llm_config import llm_light
+from src.core.llm_config import LLM_LIGHT
 from src.agent.registry import get_current_agent_spec
 from src.core.mongo_client import boa_sops_collection, boa_memories_collection
 from src.core.google_chat import send_message
@@ -80,7 +80,7 @@ extract_prompt = ChatPromptTemplate.from_template(
 
 extract_chain: Runnable = (
     extract_prompt
-    | llm_light
+    | LLM_LIGHT
     | param_parser
 )
 

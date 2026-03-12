@@ -1,7 +1,7 @@
 import time
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.output_parsers import StrOutputParser
-from src.core.llm_config import llm_light
+from src.core.llm_config import LLM_LIGHT
 from src.workflow.graph_infra.state import GraphState
 
 LIGHT_RESPONSE_SYSTEM_PROMPT = """당신은 와이드모바일 회사 내 다양한 업무를 지원하고 사용자들의 궁금증을 해결해주는 친절하고 유능한 업무 지원 AI 어시스턴트(Business Operations Agent)입니다.
@@ -15,7 +15,7 @@ light_response_prompt = ChatPromptTemplate.from_messages([
     MessagesPlaceholder(variable_name="messages")
 ])
 
-light_response_chain = light_response_prompt | llm_light | StrOutputParser()
+light_response_chain = light_response_prompt | LLM_LIGHT | StrOutputParser()
 
 async def execute_light_response(state: GraphState):
     """ActionResult가 light_response일 때 호출되어 가벼운 대화 응답을 생성합니다."""

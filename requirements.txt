@@ -28,3 +28,4 @@ motor # MongoDB 비동기 드라이버
 langgraph-checkpoint-mongodb
 google-cloud-bigquery
 apscheduler
+faiss-cpu

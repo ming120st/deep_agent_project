@@ -20,6 +20,8 @@ from src.agent.chat.bigquery_agent.agent import bigquery_agent_node
 
 from src.agent.schedule.daily_sales_report.report_runner import run_daily_report
 from src.agent.trigger.check_overdue_tasks import check_overdue_tasks
+from src.agent.trigger.check_stale_docs import check_stale_docs
+from src.core.rag_engine import reload_rag_index_if_updated
 # from src.triggers.xxx import xxx  ← 트리거 추가할 때마다 import
 
 from src.core.mongo_client import boa_agents_collection
@@ -95,8 +97,24 @@ TRIGGER_REGISTRY: dict = {
         "display_name": "기한 초과 알림",
         "description":  "기한이 지난 미완료 태스크를 10분마다 확인하여 담당자에게 알립니다.",
         "enabled":      True,
-        "interval":     {"minutes": 10},            # APScheduler interval 파라미터
+        "interval":     {"minutes": 10},
         "func":         check_overdue_tasks,
+    },
+    "stale_docs": {
+        "type":         "trigger",
+        "display_name": "지식베이스 검토 요청",
+        "description":  "검토 기한이 지난 지식베이스 문서를 매일 오전 9시에 확인하여 담당자에게 검토를 요청합니다.",
+        "enabled":      True,
+        "interval":     {"hours": 24},
+        "func":         check_stale_docs,
+    },
+    "rag_index_reload": {
+        "type":         "trigger",
+        "display_name": "RAG 인덱스 동기화",
+        "description":  "10분마다 Azure Blob Storage의 FAISS 인덱스 버전을 체크하여 변경 시 reload합니다.",
+        "enabled":      True,
+        "interval":     {"minutes": 10},
+        "func":         reload_rag_index_if_updated,
     },
 }
 

@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from typing import Dict, Any, List, Optional
 import uuid
 import json
@@ -14,8 +14,26 @@ class GraphState(BaseModel):
     last_activity_time: Optional[int] = None
 
     # ── 메시지 히스토리 ───────────────────────────────────────────────────────
-    messages: List[Dict[str, str]] = Field(default_factory=list)
+    messages: List[Dict[str, Any]] = Field(default_factory=list)
     # [{"role": "user"|"assistant", "content": "..."}]
+
+    @field_validator("messages", mode="before")
+    @classmethod
+    def sanitize_message_content(cls, messages):
+        """content가 list로 저장된 경우(Gemini 응답 버그) str로 변환."""
+        if not isinstance(messages, list):
+            return messages
+        sanitized = []
+        for msg in messages:
+            if isinstance(msg, dict) and isinstance(msg.get("content"), list):
+                content_list = msg["content"]
+                text = "".join(
+                    block.get("text", "") if isinstance(block, dict) else str(block)
+                    for block in content_list
+                )
+                msg = {**msg, "content": text}
+            sanitized.append(msg)
+        return sanitized
 
     extra_context: Optional[str] = None
     # 모델 응답 요청 시 추가로 전달할 컨텍스트 (에이전트 실행 결과 등)

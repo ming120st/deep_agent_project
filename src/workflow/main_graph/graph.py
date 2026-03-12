@@ -44,10 +44,99 @@ from src.core.mongo_client import boa_agents_collection
 
 # ── 임시 노드 (틀) ─────────────────────────────────────────────────────────────
 
-def execute_rag(state: GraphState):
-    # TODO: RAG 로직 구현
-    state.add_ai_message("RAG 검색 결과를 바탕으로 답변드립니다. (구현 예정)")
-    return state
+async def execute_rag(state: GraphState):
+    """
+    RAG 노드: 지식베이스 검색 → LLM 답변 생성
+    1. search_knowledge()로 관련 문서 검색
+    2. 검색 결과를 컨텍스트로 LLM_LIGHT 호출
+    3. 답변 생성
+    """
+    import json
+    from src.core.rag_engine import search_knowledge
+    from src.core.llm_config import LLM_LIGHT
+
+    user_query = state.get_last_user_message() or ""
+
+    # ── 1. RAG 검색 ───────────────────────────────────────────────
+    try:
+        rag_result = await search_knowledge(query=user_query, top_k=3)
+        docs = rag_result.get("results", [])
+    except Exception as e:
+        print(f"[RAG] 검색 실패: {e}")
+        docs = []
+
+    # ── 2. MongoDB에서 full content 로드 ─────────────────────────
+    if docs:
+        from src.core.mongo_client import boa_knowledge_collection
+        doc_ids = [d["doc_id"] for d in docs]
+        cursor = boa_knowledge_collection.find(
+            {"doc_id": {"$in": doc_ids}},
+            {"doc_id": 1, "title": 1, "content": 1, "service": 1, "category": 1}
+        )
+        full_content_map = {}
+        async for d in cursor:
+            full_content_map[str(d["doc_id"])] = d.get("content", "")
+
+        context_parts = []
+        for i, doc in enumerate(docs, 1):
+            full_content = full_content_map.get(doc["doc_id"], doc.get("content_preview", ""))
+            context_parts.append(
+                f"[문서 {i}] {doc['title']} ({doc['service']} > {doc['category']})\n"
+                f"{full_content}"
+            )
+        context = "\n\n".join(context_parts)
+        has_context = True
+    else:
+        context = "관련 문서를 찾을 수 없습니다."
+        has_context = False
+
+    # ── 3. LLM 답변 생성 ──────────────────────────────────────────
+    system_prompt = """당신은 와이드모바일의 내부 업무 지원 AI(BOA)입니다.
+아래 지식베이스 문서를 참고하여 질문에 답변하세요.
+
+규칙:
+- 문서에 있는 내용만 답변하세요.
+- 문서에 없는 내용은 "해당 내용은 지식베이스에서 찾을 수 없습니다."라고 안내하세요.
+- 출처 문서 제목을 답변 마지막에 간략히 표시하세요.
+- 간결하고 명확하게 답변하세요.
+
+[지식베이스 검색 결과]
+{context}"""
+
+    prompt = system_prompt.format(context=context)
+
+    try:
+        from langchain_core.prompts import ChatPromptTemplate
+        messages_for_llm = [(m["role"], m["content"]) for m in state.messages[:-1]]  # 마지막 user 메시지 제외
+        messages_for_llm = [("system", prompt)] + messages_for_llm + [("user", user_query)]
+
+        from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
+        lc_messages = []
+        for role, content in messages_for_llm:
+            if role == "system":
+                lc_messages.append(SystemMessage(content=content))
+            elif role == "user":
+                lc_messages.append(HumanMessage(content=content))
+            elif role == "assistant":
+                lc_messages.append(AIMessage(content=content))
+
+        response = await LLM_LIGHT.ainvoke(lc_messages)
+        # Gemini response.content가 list로 올 수 있음
+        raw = response.content
+        if isinstance(raw, list):
+            answer = " ".join(
+                block.get("text", "") if isinstance(block, dict) else str(block)
+                for block in raw
+            )
+        else:
+            answer = str(raw)
+    except Exception as e:
+        print(f"[RAG] LLM 호출 실패: {e}")
+        answer = "죄송합니다. 답변 생성 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요."
+
+    new_messages = list(state.messages)
+    new_messages.append({"role": "assistant", "content": answer})
+    return {"messages": new_messages}
 
 def handle_unclear(state: GraphState):
     state.add_ai_message("죄송합니다. 말씀하신 내용을 정확히 이해하지 못했습니다. 다시 한 번 말씀해 주시겠어요?")

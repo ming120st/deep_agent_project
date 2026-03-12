@@ -11,7 +11,7 @@ from langchain_core.runnables import Runnable
 import json
 
 from src.workflow.graph_infra.state import GraphState
-from src.core.llm_config import llm_light
+from src.core.llm_config import LLM_LIGHT
 from src.agent.registry import AGENT_REGISTRY
 from src.agent.registry import get_enabled_agent_descriptions
 
@@ -81,7 +81,7 @@ action_classify_prompt = ChatPromptTemplate.from_template(
 
 action_classify_chain: Runnable = (
     action_classify_prompt
-    | llm_light
+    | LLM_LIGHT
     | action_parser
 )
 

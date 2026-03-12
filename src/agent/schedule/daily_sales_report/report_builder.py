@@ -7,7 +7,7 @@ Google Chat 메시지 포맷에 맞게 작성합니다.
 import json
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
-from src.core.llm_config import llm_light
+from src.core.llm_config import LLM_LIGHT
 
 
 # ── 프롬프트 ──────────────────────────────────────────────────────────────────
@@ -43,7 +43,7 @@ report_chain = (
         ("system", REPORT_SYSTEM_PROMPT),
         ("user",   REPORT_USER_PROMPT),
     ])
-    | llm_light
+    | LLM_LIGHT
     | StrOutputParser()
 )
 

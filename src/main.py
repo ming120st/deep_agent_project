@@ -73,6 +73,10 @@ async def lifespan(app: FastAPI):
     # 1. registry → MongoDB sync (앱 시작 시 1회)
     await sync_registry_to_mongo()
 
+    # 2. RAG 엔진 초기화 (Blob → 없으면 MongoDB 전체 빌드)
+    from src.core.rag_engine import init_rag_engine
+    await init_rag_engine()
+
     # 2. 앱 시작 시 스케줄 에이전트 등록
     for agent_id, meta in SCHEDULE_REGISTRY.items():
         scheduler.add_job(

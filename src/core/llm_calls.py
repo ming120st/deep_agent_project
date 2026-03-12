@@ -4,7 +4,7 @@ from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables import RunnableMap
 from langchain_core.runnables import RunnableLambda
-from src.core.llm_config import llm_light, llm_heavy
+from src.core.llm_config import LLM_LIGHT, LLM_HEAVY
 from src.workflow.graph_infra.state import GraphState
 
 # -----------------------------------------------------------------
@@ -21,7 +21,7 @@ simple_response_prompt = ChatPromptTemplate.from_messages(
 simple_response_chain: Runnable = RunnableMap({
     "instruction_prompt": lambda input: input["instruction_prompt"],
     "userQuery": lambda input: input["userQuery"]
-}) | simple_response_prompt | llm_light | StrOutputParser()
+}) | simple_response_prompt | LLM_LIGHT | StrOutputParser()
 
 # 응답 생성 함수
 async def generate_response(instruction_prompt: str, state: GraphState) -> str:
