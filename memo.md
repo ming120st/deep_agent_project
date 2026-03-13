@@ -24,5 +24,4 @@ https://www.iotmaker.kr/2023/03/14/install-openssl-make-cert-windows/
 ctrl + shift + p 또는 F1 을 누르고 Workspaces : Duplicate As Workspace in New Window 를 찾아서 실행
 ----------------------------------------------------------------------------------------
 
-
 uvicorn src.main:app --host 0.0.0.0 --port 8080 --ssl-keyfile=certs/privKey.pem --ssl-certfile=certs/cert.pem

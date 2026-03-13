@@ -15,7 +15,10 @@ src/agent/registry.py
 from typing import Dict, Any
 
 from src.agent.chat.wifi_usage_inquiry.graph import wifi_usage_inquiry_graph
+from src.agent.chat.esim_order_cancellation.graph import esim_order_cancellation_graph
 from src.agent.chat.bigquery_agent.agent import bigquery_agent_node
+from src.agent.chat.esim_resend.graph import esim_resend_graph
+from src.agent.chat.esim_resend.graph import esim_resend_graph
 # from src.agent.xxx.graph import xxx_graph  ← graph 쓰는 에이전트 추가할 때마다 import
 
 
@@ -66,6 +69,32 @@ AGENT_REGISTRY: dict = {
             },
         },
     },
+    "esim_order_cancellation": {
+        "type":         "chat",
+        "display_name": "이심 주문취소",
+        "description":  "eSIM 주문 취소 신청을 처리하는 에이전트. "
+                        "이심 인트라넷 주문번호를 제공하면 취소 가능 여부를 확인 후 취소신청을 접수합니다. "
+                        "이심 취소, 이심 주문 취소, eSIM 취소 등 이심 주문 취소 관련 요청에 사용합니다.",
+        "enabled":      True,
+        "graph":        esim_order_cancellation_graph,
+        "parameters": {
+            "intent_confirmed": {
+                "type":        "bool",
+                "description": "이심 주문취소 업무 진행 의사 여부. 사용자가 업무 취소 의사를 표현하면 false로 설정.",
+                "required":    True,
+            },
+            "order_id": {
+                "type":        "str",
+                "description": "이심 인트라넷 주문번호 (예: E202501010001)",
+                "required":    True,
+            },
+            "cancel_confirmed": {
+                "type":        "bool",
+                "description": "구매 상품 전체 취소 진행 의사. 사용자가 전체 취소에 동의하면 true, 원하지 않으면 false.",
+                "required":    True,
+            },
+        },
+    },
     "bigquery_agent": {
         "type": "chat",
         "display_name": "데이터 분석 에이전트",
@@ -73,6 +102,74 @@ AGENT_REGISTRY: dict = {
                        "와이파이,유심,이심 대상으로 간단한 분석부터 복잡한 분석까지 데이터 분석이 필요한 모든 요청에 사용합니다.",
         "graph": bigquery_agent_node,  # DeepAgent 노드 함수 (LangGraph subgraph 아님)
         "enabled": True,
+    },
+    "esim_resend": {
+        "type":         "chat",
+        "display_name": "이심 재발송 에이전트",
+        "description":  "고객의 eSIM QR코드를 재발송하는 에이전트. "
+                        "담당자가 주문번호와 고객 이름을 입력하면 재발송 가능 여부를 확인 후 재발송을 처리합니다. "
+                        "이심 재발송, QR코드 재발송, eSIM 재전송 등 이심 재발송 관련 요청에 사용합니다.",
+        "enabled":      True,
+        "graph":        esim_resend_graph,
+        "parameters": {
+            "intent_confirmed": {
+                "type":        "bool",
+                "description": "이심 재발송 업무 진행 의사 여부. 담당자가 업무 취소 의사를 표현하면 false.",
+                "required":    True,
+            },
+            "order_id": {
+                "type":        "str",
+                "description": "E로 시작하는 이심 인트라넷 주문번호 (예: E202501010001)",
+                "required":    True,
+            },
+            "customer_name": {
+                "type":        "str",
+                "description": "재발송 대상 고객 이름 (주문자 이름)",
+                "required":    True,
+            },
+            "resend_confirmed": {
+                "type":        "bool",
+                "description": "재발송 진행 의사. 담당자가 재발송에 동의하면 true, 취소하면 false.",
+                "required":    True,
+            },
+        },
+    },
+    "esim_resend": {
+        "type":         "chat",
+        "display_name": "이심 재발송",
+        "description":  "고객의 eSIM QR코드를 재발송하는 에이전트. "
+                        "담당자가 주문번호를 입력하면 해당 주문의 이심 상품 목록을 조회하고, "
+                        "재발송할 항목과 수신처(이메일/전화번호)를 확인하여 재발송을 처리합니다. "
+                        "이심 재발송, QR 재전송, eSIM 재발송 등 재발송 관련 요청에 사용합니다.",
+        "enabled":      True,
+        "graph":        esim_resend_graph,
+        "parameters": {
+            "intent_confirmed": {
+                "type":        "bool",
+                "description": "이심 재발송 업무 진행 의사. 취소 의사 시 false.",
+                "required":    True,
+            },
+            "order_id": {
+                "type":        "str",
+                "description": "E로 시작하는 이심 인트라넷 주문번호 (예: E23061200272)",
+                "required":    True,
+            },
+            "selected_order_detail_ids": {
+                "type":        "list[str]",
+                "description": "재발송할 orderDetailId 리스트. '전체' 요청 시 ordersDetail 전체 항목의 orderDetailId를 포함.",
+                "required":    True,
+            },
+            "email": {
+                "type":        "str",
+                "description": "재발송 수신 이메일 주소. '그대로' 응답 시 order_contact.email 값을 그대로 사용. 미사용 시 빈 문자열.",
+                "required":    False,
+            },
+            "mobile": {
+                "type":        "str",
+                "description": "재발송 수신 전화번호 (숫자만, 예: 01012345678). '그대로' 응답 시 order_contact.mobile 값을 그대로 사용. 미사용 시 빈 문자열.",
+                "required":    False,
+            },
+        },
     },
 }
 
