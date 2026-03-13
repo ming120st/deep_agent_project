@@ -47,7 +47,7 @@ async def fetch_usage(state: GraphState) -> GraphState:
         state.response["usage_data"] = usage_data
 
     except Exception as e:
-        error_msg = "사용량 조회 중 오류가 발생했습니다.\n\n 원인은 다음 중 하나일 수 있습니다:\n1. 잘못된 IMEI 번호\n2. 잘못된 기간 설정\n3. 시스템 오류\n\n잠시 후 다시 시도해주세요."
+        error_msg = "사용량 조회 중 오류가 발생했습니다.\n\n 원인은 다음 중 하나일 수 있습니다:\n1. 잘못된 IMEI 번호\n2. 잘못된 기간 설정\n3. 시스템 오류\n\n 다시 시도해주세요. 지속되면 AI팀으로 문의해주세요."
         state.add_ai_message(error_msg)
 
         state.error_message = str(e)
@@ -73,8 +73,9 @@ async def fetch_usage(state: GraphState) -> GraphState:
 
 # 이메일 전송 희망 여부 확인
 async def confirm_email_sending(state: GraphState) -> GraphState:
-    state.add_ai_message("조회된 사용량을 이메일로 발송할까요?")
-    await set_waiting(state, result="이메일 발송 여부 확인")
+    ai_response = f"조회된 사용량은 다음과 같습니다.\n\n{state.response.get('usage_data', '')}\n\n이 결과를 이메일로 발송하시려면 이메일 주소를 알려주세요."
+    state.add_ai_message(ai_response)
+    await set_completed(state, result="결과 구글챗 전달 완료 및 이메일 발송 여부 확인요청")
     return state
 
 # 채팅창에 사용량 결과 전송

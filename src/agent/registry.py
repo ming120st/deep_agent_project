@@ -30,8 +30,8 @@ AGENT_REGISTRY: dict = {
     "wifi_usage_inquiry": {
         "type":         "chat",
         "display_name": "와이파이 사용량 조회",
-        "description":  "와이파이도시락 데이터 사용량을 조회하여 알려주는 에이전트입니다.",
-        "enabled":      True,   # 초기값 (MongoDB에 없을 때만 사용)
+        "description":  "와이파이도시락 데이터 사용량을 조회하여 알려주는 에이전트입니다. 사용자가 단말 IMEI와 조회 기간을 입력하면, 해당 기간 동안의 데이터 사용량을 조회하여 알려줍니다. 또한, 결과를 이메일로 발송할 수 있습니다.",
+        "enabled":      True,
         "graph":        wifi_usage_inquiry_graph,
         "parameters": {
             "intent_confirmed": {
@@ -68,10 +68,9 @@ AGENT_REGISTRY: dict = {
     },
     "bigquery_agent": {
         "type": "chat",
-        "display_name": "실적 분석 에이전트",
-        "description": "BigQuery 데이터 조회 및 매출 분석 리포트 생성. "
-                       "'지난달 매출 분석', '이번 주 판매 현황', '상품별 매출 비교' 등 "
-                       "데이터 분석이 필요한 모든 요청에 사용합니다.",
+        "display_name": "데이터 분석 에이전트",
+        "description": "BigQuery 데이터 조회 및 매출 분석 리포트 생성."
+                       "와이파이,유심,이심 대상으로 간단한 분석부터 복잡한 분석까지 데이터 분석이 필요한 모든 요청에 사용합니다.",
         "graph": bigquery_agent_node,  # DeepAgent 노드 함수 (LangGraph subgraph 아님)
         "enabled": True,
     },
