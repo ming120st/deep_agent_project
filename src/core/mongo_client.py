@@ -21,6 +21,7 @@ boa_spaces_collection = db["boa_spaces"]
 boa_agents_collection = db["boa_agents"]
 boa_knowledge_collection = db["boa_knowledge"]
 boa_knowledge_versions_collection = db["boa_knowledge_versions"]
+boa_device_jobs_collection = db["boa_device_jobs"]
 
 # checkpointer용 동기 pymongo 클라이언트
 sync_client = MongoClient(MONGODB_URI, tlsCAFile=certifi.where())

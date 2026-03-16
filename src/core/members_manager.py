@@ -20,20 +20,20 @@ main.py /chat 핸들러에서 space_type이 DM일 때 호출됩니다.
 """
 from datetime import datetime
 from src.core.mongo_client import boa_members_collection
+from src.core.workspace_client import get_user_org_unit
 
 
-async def upsert_member(user_id: str, user_name: str, space_name: str) -> bool:
+async def upsert_member(user_id: str, user_name: str, space_name: str) -> None:
     """
     BOA에 DM(space_type="DM")이 올 때마다 호출.
     처음이면 생성 (settings 기본값), 있으면 name/space_name만 갱신.
     settings는 덮어쓰지 않음 — 대시보드에서 설정한 값 유지.
 
-    Returns:
-        True  → department 미설정 (카드 발송 필요)
-        False → department 이미 설정됨
+    department 미설정 시 Google Workspace Admin SDK로 조직단위(OU)를 자동 조회해
+    department에 저장합니다. 조회에 실패하면 None 유지 (카드 표시 없음).
     """
     if not user_id or not space_name:
-        return False
+        return
 
     try:
         await boa_members_collection.update_one(
@@ -62,12 +62,20 @@ async def upsert_member(user_id: str, user_name: str, space_name: str) -> bool:
             {"email": user_id},
             {"department": 1}
         )
-        needs_dept = not doc or not doc.get("department")
-        return needs_dept
+        if doc and doc.get("department"):
+            return  # 이미 department 설정됨
+
+        # department 미설정 → Workspace Admin SDK로 자동 조회
+        print(f"[Members] department 미설정 → Workspace OU 자동 조회: {user_id}")
+        org_unit = await get_user_org_unit(user_id)
+        if org_unit:
+            await update_member_department(user_id, org_unit)
+            print(f"[Members] department 자동 설정: {user_id} → {org_unit}")
+        else:
+            print(f"[Members] Workspace OU 조회 실패 — department 미설정 유지: {user_id}")
 
     except Exception as e:
         print(f"[Members] 오류: {e}")
-        return False
 
 
 async def update_member_department(user_id: str, department: str) -> bool:

@@ -41,11 +41,12 @@ from src.workflow.main_graph.graph import main_graph
 from src.dashboard.auth import router as auth_router
 from src.dashboard.task_router import router as dashboard_router
 from src.dashboard.knowledge_router import router as knowledge_router
+from src.dashboard.device_job_router import router as device_job_router
 from src.dashboard.members_router import router as members_router
 from src.dashboard.spaces_router import router as spaces_router
 from src.core.members_manager import upsert_member, update_member_department
 from src.core.spaces_manager import upsert_space
-from src.core.google_chat import send_message, build_department_card
+from src.core.google_chat import send_message
 from src.agent.registry import SCHEDULE_REGISTRY, TRIGGER_REGISTRY
 from src.agent.sync_registry import sync_registry_to_mongo
 from src.dashboard.agents_router import router as agents_router
@@ -136,6 +137,7 @@ app.include_router(agents_router)
 app.include_router(members_router)
 app.include_router(spaces_router)
 app.include_router(knowledge_router)
+app.include_router(device_job_router)
 
 
 # ── Google Chat Webhook ───────────────────────────────────────────────────────
@@ -164,25 +166,6 @@ async def receive_message(request: Request, background_tasks: BackgroundTasks):
 
         # 개별 버튼 
         action_method = event.get("action", {}).get("actionMethodName", "")
-
-        # 소속 부서 선택 카드의 버튼 클릭 이벤트
-        if action_method == "submitDepartment":
-            # formInputs는 event.common.formInputs 에 위치
-            form_inputs = event.get("common", {}).get("formInputs", {})
-            dept = (
-                form_inputs.get("department", {})
-                           .get("stringInputs", {})
-                           .get("value", [""])[0]
-            )
-            print(f"[Dept] 부서 선택: user={user_id}, dept={dept}")
-
-            if user_id and dept:
-                await update_member_department(user_id, dept)
-                background_tasks.add_task(
-                    send_message, space_name,
-                    f"🎉 *{dept}* 으로 등록되었습니다! 오늘은 어떤걸 도와드릴까요?"
-                )
-            return {}
 
         # BQ 분석 스케줄 등록
         # BQ 스케줄 등록
@@ -251,11 +234,7 @@ async def receive_message(request: Request, background_tasks: BackgroundTasks):
 
     # ── DM/ROOM 정보 자동 등록 ─────────────────────────────────────────────────
     if space_type == "DM":
-        needs_dept = await upsert_member(user_id, user_name, space_name)
-        if needs_dept:
-            print(f"[Dept] department 미설정 → 카드 동기 응답: {user_id}")
-            # 순수 Chat API: 동기 응답으로 카드 즉시 표시
-            return build_department_card()
+        await upsert_member(user_id, user_name, space_name)
 
     elif space_type in ("ROOM", "GROUP_CHAT", "SPACE"):
         background_tasks.add_task(upsert_space, space_name, display_name, space_type)
