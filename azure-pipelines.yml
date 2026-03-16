@@ -37,3 +37,12 @@ stages:
         containerRegistry: $(dockerRegistryServiceConnection)
         tags: |
           $(tag)
+
+    - task: AzureWebAppContainer@1
+      inputs:
+        azureSubscription: 'Microsoft Azure(feeb182c-d854-46f7-bb51-25218822dc5c)'
+        appName: 'wm-business-ops-agent'
+        deployToSlotOrASE: true
+        resourceGroupName: 'wm-rgbusiness-ops-agent'
+        slotName: 'production'
+        containers: 'wmbusinessopsagentacr.azurecr.io/businessopsagent:$(tag)'
