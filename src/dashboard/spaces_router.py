@@ -46,7 +46,7 @@ async def get_spaces(request: Request):
 
 FORBIDDEN_HTML = """
 <html><body style="font-family:sans-serif;display:flex;align-items:center;
-justify-content:center;height:100vh;background:#0f1117;color:#e2e8f0;">
+justify-content:center;height:100vh;background:#f5f6fa;color:#1e2436;">
 <div style="text-align:center">
   <div style="font-size:48px">🔒</div>
   <h2 style="margin:16px 0 8px">접근 권한 없음</h2>
@@ -74,19 +74,19 @@ async def spaces_page(request: Request):
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     :root {
-      --bg: #0f1117; --surface: #1a1d27; --border: #2a2d3e;
-      --text: #e2e8f0; --muted: #64748b; --accent: #6366f1;
+      --bg: #f5f6fa; --surface: #ffffff; --border: #e2e7f0;
+      --text: #1e2436; --muted: #7b8499; --accent: #4f46e5;
       --green: #22c55e; --yellow: #f59e0b; --blue: #3b82f6;
     }
-    body { font-family: 'IBM Plex Sans KR', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
-    .top-nav { background: #13161b; border-bottom: 1px solid #252931; padding: 0 28px; height: 56px; display: flex; align-items: center; justify-content: space-between; position: sticky; top: 0; z-index: 100; }
-    .logo { font-family: 'IBM Plex Mono', monospace; font-weight: 600; font-size: 16px; color: #eef1f6; letter-spacing: .05em; }
+    body { font-family: 'IBM Plex Sans KR', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; font-size: 15px; }
+    .top-nav { background: #ffffff; border-bottom: 1px solid #e5e7eb; padding: 0 28px; height: 56px; display: flex; align-items: center; justify-content: space-between; position: sticky; top: 0; z-index: 100; }
+    .logo { font-family: 'IBM Plex Mono', monospace; font-weight: 600; font-size: 16px; color: #1e2436; letter-spacing: .05em; }
     .logo span { color: #3b82f6; }
     .nav-links { display: flex; align-items: center; gap: 4px; }
-    .nav-link { padding: 6px 14px; border-radius: 6px; font-size: 13px; color: var(--muted); text-decoration: none; transition: all .15s; }
-    .nav-link:hover { color: var(--text); background: #1a1e25; }
-    .nav-link.active { color: #3b82f6; background: #1d3d6e; }
-    .btn-logout { background: none; border: 1px solid #252931; border-radius: 6px; padding: 5px 12px; color: var(--muted); font-size: 12px; cursor: pointer; text-decoration: none; transition: all .15s; }
+    .nav-link { padding: 6px 14px; border-radius: 6px; font-size: 14px; color: var(--muted); text-decoration: none; transition: all .15s; }
+    .nav-link:hover { color: var(--text); background: #f0f2f8; }
+    .nav-link.active { color: #4f46e5; background: #ede9fe; }
+    .btn-logout { background: none; border: 1px solid #e2e7f0; border-radius: 6px; padding: 5px 12px; color: var(--muted); font-size: 12px; cursor: pointer; text-decoration: none; transition: all .15s; }
     .btn-logout:hover { border-color: #ef4444; color: #ef4444; }
     .page-body { padding: 32px 24px; }
     .header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 28px; }
@@ -99,18 +99,18 @@ async def spaces_page(request: Request):
     .value.yellow { color: var(--yellow); }
     .value.blue   { color: var(--blue); }
     .toolbar { margin-bottom: 20px; }
-    .search-bar { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 10px 16px; width: 300px; color: var(--text); font-size: 14px; font-family: inherit; outline: none; transition: border-color .15s; }
+    .search-bar { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 10px 16px; width: 300px; color: var(--text); font-size: 15px; font-family: inherit; outline: none; transition: border-color .15s; }
     .search-bar:focus { border-color: var(--accent); }
     .search-bar::placeholder { color: var(--muted); }
     table { width: 100%; border-collapse: collapse; background: var(--surface); border-radius: 12px; overflow: hidden; border: 1px solid var(--border); }
-    th { text-align: left; padding: 14px 20px; font-size: 11px; color: var(--muted); font-weight: 500; border-bottom: 1px solid var(--border); background: rgba(255,255,255,0.02); white-space: nowrap; text-transform: uppercase; letter-spacing: .06em; font-family: 'IBM Plex Mono', monospace; }
-    td { padding: 14px 20px; font-size: 14px; border-bottom: 1px solid rgba(255,255,255,0.04); vertical-align: middle; }
+    th { text-align: left; padding: 14px 20px; font-size: 12px; color: var(--muted); font-weight: 500; border-bottom: 1px solid var(--border); background: rgba(0,0,0,0.02); white-space: nowrap; text-transform: uppercase; letter-spacing: .06em; font-family: 'IBM Plex Mono', monospace; }
+    td { padding: 14px 20px; font-size: 15px; border-bottom: 1px solid rgba(0,0,0,0.04); vertical-align: middle; }
     tr:last-child td { border-bottom: none; }
-    tr:hover td { background: rgba(255,255,255,0.02); }
+    tr:hover td { background: rgba(0,0,0,0.02); }
     .badge { display: inline-flex; align-items: center; padding: 3px 10px; border-radius: 20px; font-size: 11px; font-weight: 500; font-family: 'IBM Plex Mono', monospace; }
-    .badge-group { background: rgba(99,102,241,0.15); color: #818cf8; }
-    .badge-room  { background: rgba(245,158,11,0.15); color: var(--yellow); }
-    .space-name-chip { font-size: 11px; color: var(--muted); background: rgba(255,255,255,0.05); padding: 2px 8px; border-radius: 4px; font-family: 'IBM Plex Mono', monospace; }
+    .badge-group { background: rgba(99,102,241,0.1); color: #4f46e5; }
+    .badge-room  { background: rgba(245,158,11,0.12); color: #b45309; }
+    .space-name-chip { font-size: 11px; color: var(--muted); background: rgba(0,0,0,0.04); padding: 2px 8px; border-radius: 4px; font-family: 'IBM Plex Mono', monospace; }
     .empty   { text-align: center; padding: 60px; color: var(--muted); }
     .loading { text-align: center; padding: 60px; color: var(--muted); }
   </style>
@@ -192,7 +192,7 @@ async def spaces_page(request: Request):
     }
     tbody.innerHTML = spaces.map(s => `
       <tr>
-        <td style="font-weight:500;color:#eef1f6">${s.display_name || '—'}</td>
+        <td style="font-weight:500;color:#1a2035">${s.display_name || '—'}</td>
         <td>${typeBadge(s.space_type)}</td>
         <td><span class="space-name-chip">${s.space_name}</span></td>
         <td style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--muted)">${s.created_at ? s.created_at.slice(0,10) : '—'}</td>

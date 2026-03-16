@@ -217,21 +217,21 @@ AGENTS_HTML = """<!DOCTYPE html>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     :root {
-      --bg: #0f1117; --surface: #1a1d27; --border: #2a2d3e;
-      --text: #e2e8f0; --muted: #64748b; --accent: #6366f1;
+      --bg: #f5f6fa; --surface: #ffffff; --border: #e2e7f0;
+      --text: #1e2436; --muted: #7b8499; --accent: #4f46e5;
       --green: #22c55e; --red: #ef4444; --yellow: #f59e0b; --blue: #3b82f6;
     }
-    body { font-family: 'IBM Plex Sans KR', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
+    body { font-family: 'IBM Plex Sans KR', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; font-size: 15px; }
 
-    .top-nav { background: #13161b; border-bottom: 1px solid #252931; padding: 0 28px; height: 56px; display: flex; align-items: center; justify-content: space-between; position: sticky; top: 0; z-index: 100; }
-    .logo { font-family: 'IBM Plex Mono', monospace; font-weight: 600; font-size: 16px; color: #eef1f6; letter-spacing: .05em; }
+    .top-nav { background: #ffffff; border-bottom: 1px solid #e5e7eb; padding: 0 28px; height: 56px; display: flex; align-items: center; justify-content: space-between; position: sticky; top: 0; z-index: 100; }
+    .logo { font-family: 'IBM Plex Mono', monospace; font-weight: 600; font-size: 16px; color: #1e2436; letter-spacing: .05em; }
     .logo span { color: #3b82f6; }
     .nav-links { display: flex; align-items: center; gap: 4px; }
-    .nav-link { padding: 6px 14px; border-radius: 6px; font-size: 13px; color: var(--muted); text-decoration: none; transition: all .15s; }
-    .nav-link:hover { color: var(--text); background: #1a1e25; }
-    .nav-link.active { color: #3b82f6; background: #1d3d6e; }
+    .nav-link { padding: 6px 14px; border-radius: 6px; font-size: 14px; color: var(--muted); text-decoration: none; transition: all .15s; }
+    .nav-link:hover { color: var(--text); background: #f0f2f8; }
+    .nav-link.active { color: #4f46e5; background: #ede9fe; }
     .nav-right { display: flex; align-items: center; gap: 12px; }
-    .btn-logout { background: none; border: 1px solid #252931; border-radius: 6px; padding: 5px 12px; color: var(--muted); font-size: 12px; cursor: pointer; text-decoration: none; transition: all .15s; }
+    .btn-logout { background: none; border: 1px solid #e2e7f0; border-radius: 6px; padding: 5px 12px; color: var(--muted); font-size: 12px; cursor: pointer; text-decoration: none; transition: all .15s; }
     .btn-logout:hover { border-color: #ef4444; color: #ef4444; }
 
     .page-body { padding: 32px 24px; }
@@ -256,35 +256,35 @@ AGENTS_HTML = """<!DOCTYPE html>
     .tab.active { background: var(--accent); color: white; }
 
     .toolbar { margin-bottom: 20px; }
-    .search-bar { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 10px 16px; width: 300px; color: var(--text); font-size: 14px; font-family: inherit; outline: none; transition: border-color .15s; }
+    .search-bar { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 10px 16px; width: 300px; color: var(--text); font-size: 15px; font-family: inherit; outline: none; transition: border-color .15s; }
     .search-bar:focus { border-color: var(--accent); }
     .search-bar::placeholder { color: var(--muted); }
 
     table { width: 100%; border-collapse: collapse; background: var(--surface); border-radius: 12px; overflow: hidden; border: 1px solid var(--border); }
-    th { text-align: left; padding: 14px 20px; font-size: 11px; color: var(--muted); font-weight: 500; border-bottom: 1px solid var(--border); background: rgba(255,255,255,0.02); white-space: nowrap; text-transform: uppercase; letter-spacing: .06em; font-family: 'IBM Plex Mono', monospace; }
-    td { padding: 14px 20px; font-size: 14px; border-bottom: 1px solid rgba(255,255,255,0.04); vertical-align: middle; }
+    th { text-align: left; padding: 14px 20px; font-size: 12px; color: var(--muted); font-weight: 500; border-bottom: 1px solid var(--border); background: rgba(0,0,0,0.02); white-space: nowrap; text-transform: uppercase; letter-spacing: .06em; font-family: 'IBM Plex Mono', monospace; }
+    td { padding: 14px 20px; font-size: 15px; border-bottom: 1px solid rgba(0,0,0,0.04); vertical-align: middle; }
     tr:last-child td { border-bottom: none; }
-    tr:hover td { background: rgba(255,255,255,0.02); }
+    tr:hover td { background: rgba(0,0,0,0.02); }
 
     /* 타입 배지 */
     .badge { display: inline-flex; align-items: center; padding: 3px 10px; border-radius: 20px; font-size: 11px; font-weight: 500; font-family: 'IBM Plex Mono', monospace; white-space: nowrap; }
-    .badge-chat     { background: rgba(99,102,241,0.15); color: #818cf8; }
-    .badge-schedule { background: rgba(245,158,11,0.15); color: var(--yellow); }
-    .badge-trigger  { background: rgba(34,197,94,0.15);  color: var(--green); }
+    .badge-chat     { background: rgba(99,102,241,0.1); color: #4f46e5; }
+    .badge-schedule { background: rgba(245,158,11,0.12); color: #b45309; }
+    .badge-trigger  { background: rgba(34,197,94,0.12);  color: #15803d; }
 
     /* 등록자 칩 */
     .badge-creator {
       display: inline-flex; align-items: center; gap: 5px;
-      background: rgba(59,130,246,0.12); color: var(--blue);
+      background: rgba(37,99,235,0.08); color: #1d4ed8;
       border-radius: 20px; padding: 3px 10px; margin-left: 6px;
       font-size: 10px; font-family: 'IBM Plex Mono', monospace; white-space: nowrap;
     }
-    .creator-name { font-weight: 600; color: #93c5fd; }
-    .creator-id   { color: #60a5fa; opacity: 0.7; }
+    .creator-name { font-weight: 600; color: #1e40af; }
+    .creator-id   { color: #3b82f6; opacity: 0.9; }
 
-    .agent-name { font-weight: 500; color: #eef1f6; }
+    .agent-name { font-weight: 500; color: #1a2035; }
     .agent-id   { font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: var(--muted); margin-top: 3px; }
-    .desc       { font-size: 12px; color: var(--muted); line-height: 1.5; max-width: 340px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .desc       { font-size: 12px; color: var(--muted); line-height: 1.6; max-width: 340px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .cron-label { font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: var(--yellow); margin-top: 4px; }
     .td-mono    { font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: var(--muted); }
 
@@ -302,13 +302,13 @@ AGENTS_HTML = """<!DOCTYPE html>
 
     .btn-delete { background: none; border: 1px solid transparent; border-radius: 6px; padding: 5px 12px; color: var(--muted); font-size: 12px; cursor: pointer; font-family: 'IBM Plex Sans KR', sans-serif; transition: all .15s; }
     .btn-delete:hover { border-color: var(--red); color: var(--red); background: rgba(239,68,68,0.08); }
-    .action-placeholder { color: var(--border); font-size: 13px; }
-    .space-chip { display: inline-block; background: rgba(59,130,246,0.1); border: 1px solid rgba(59,130,246,0.25); color: #60a5fa; border-radius: 4px; padding: 2px 7px; font-size: 10px; font-family: 'IBM Plex Mono', monospace; margin: 1px 2px; }
+    .action-placeholder { color: #cbd5e1; font-size: 13px; }
+    .space-chip { display: inline-block; background: rgba(37,99,235,0.08); border: 1px solid rgba(37,99,235,0.2); color: #1d4ed8; border-radius: 4px; padding: 2px 7px; font-size: 10px; font-family: 'IBM Plex Mono', monospace; margin: 1px 2px; }
 
     /* 삭제 확인 모달 */
     .modal-backdrop { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.65); z-index: 200; align-items: center; justify-content: center; }
     .modal-backdrop.open { display: flex; }
-    .modal { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 28px 32px; width: 420px; max-width: 90vw; }
+    .modal { background: #ffffff; border: 1px solid #e2e7f0; border-radius: 14px; box-shadow: 0 20px 60px rgba(0,0,0,0.15); padding: 28px 32px; width: 420px; max-width: 90vw; }
     .modal h3 { font-size: 16px; font-weight: 600; margin-bottom: 12px; }
     .modal p  { font-size: 13px; color: var(--muted); line-height: 1.7; margin-bottom: 24px; }
     .modal-name { color: var(--text); font-weight: 600; }
