@@ -72,6 +72,12 @@ async def bigquery_agent_node(state: GraphState) -> GraphState:
         state.add_ai_message(report)
         await set_completed(state, result="BigQuery 분석 완료")
 
+    except asyncio.TimeoutError:
+        logger.error("[bigquery_agent_node] BigQuery 응답 시간 초과")
+        state.add_ai_message("❌ BigQuery 분석이 제한 시간(120초)을 초과하여 중단되었습니다.\n조건에 맞는 데이터가 없어 내부적으로 계속 재시도했을 수 있습니다. 검색 범위를 변경하여 다시 요청해주시고 지속적으로 오류 발생 시 AI팀에 문의해주세요.")
+        state.error_message = "TimeoutError"
+        await set_cancelled(state, result="BigQuery 분석 실패: 시간 초과")
+
     except Exception as e:
         logger.error(f"[bigquery_agent_node] {e}", exc_info=True)
         state.add_ai_message(f"❌ BigQuery 분석 중 오류가 발생했습니다.\n{e}")
