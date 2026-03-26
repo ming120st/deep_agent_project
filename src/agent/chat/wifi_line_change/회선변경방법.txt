@@ -1,0 +1,36 @@
+[와이파이 회선변경]
+
+1. 요청
+ - 요청 의도 예시 "와이파이 회선변경 해주세요"
+ - 요청 시 받는 parameter: (단말기번호) "device_number"
+
+2. urocomm 관리자페이지 로그인
+ 2.1 크롬 브라우저 열고  
+ 2.2 사이트 접속: "http://20.196.145.191:9080/omc/#"
+
+3. 현재 요금제 찾기
+ 3.1 device_management > status > advance search 차례대로 클릭하여 페이지 접근
+ 3.2 imei에 넣고 검색 (if 검색결과 없으면 기기가 꺼져있는것. 꺼져있다고 켜라고 안내반환)
+ 3.3 imsi 번호 클릭. 상세화면 뜸
+ 3.4 plan name 항목 읽기 (변수할당)
+
+4. 다른 플랜의 SIM 찾기
+ 4.1 USIM management 클릭 > usim information 클릭
+ 4.2 advance search 클릭
+ 4.3 우측 필터 온라인/액티브/free / available / nomal > cover country/regin select 누르고 > 2자리 국가코드(대문자)로 검색 및 선택 > ok클릭 > search 클릭
+ 4.4 표시행 개수 500으로 변경
+ 4.4 1번 행부터 Plan Name컬럼을 읽고 3.4의 기존 plan name과 다르면 해당 행의 iccid 변수할당 (최대 10개 한번에 리스트로 할당).
+    - 만료일 엘리먼트 읽고(2026-07-07 23:59:59 <형식), 만료일에 텍스트가 있다면 1일 이상 여유있는것만 선택
+    - 끝까지 다른 플랜이 없다면 같은 플랜 중에서 선택
+
+5. SIM 잔여량 조회
+ 5.1 sim usage management > usim local usage 클릭
+ 5.2 입력창에 ICCID 입력 > search버튼 클릭
+ 5.3 if 7초 뒤에도 검색결과(테이블1행 엘리먼트)가 안나오면 sim usage management > usim roaming usage 클릭해서 5.2부터 다시 수행
+ 5.3 surplus_usage 읽고 > int변환 > N MB 이상이면 해당 ICCID로 결정
+
+6. 회선 변경
+ 6.1 device management > assign usim 클릭
+ 6.2 add클릭 > 모달창 뜸 > USIM항목의 SELECT 클릭 > clear클릭 > ICCID 입력 > search클릭 > 첫번째꺼 클릭 > ok클릭
+ 6.3 if 모달창에 "SIM card is already occupied!" 등 오류메시지 노출 시 4번에서 만든 iccid 리스트의 다른 iccid로 재시도
+ 6.4 if 모달창에 "IMEI is already assigned with USIM, please check. 뜨면 ok > cancel 눌러서 끄고 > 그다음에 검색창에 디바이스번호넣고 search > 첫번째꺼 modify

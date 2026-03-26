@@ -19,6 +19,7 @@ from src.agent.chat.esim_order_cancellation.graph import esim_order_cancellation
 from src.agent.chat.bigquery_agent.agent import bigquery_agent_node
 from src.agent.chat.esim_resend.graph import esim_resend_graph
 from src.agent.chat.esim_resend.graph import esim_resend_graph
+from src.agent.chat.wifi_line_change.graph import wifi_line_change_graph
 # from src.agent.xxx.graph import xxx_graph  ← graph 쓰는 에이전트 추가할 때마다 import
 
 
@@ -105,37 +106,6 @@ AGENT_REGISTRY: dict = {
     },
     "esim_resend": {
         "type":         "chat",
-        "display_name": "이심 재발송 에이전트",
-        "description":  "고객의 eSIM QR코드를 재발송하는 에이전트. "
-                        "담당자가 주문번호와 고객 이름을 입력하면 재발송 가능 여부를 확인 후 재발송을 처리합니다. "
-                        "이심 재발송, QR코드 재발송, eSIM 재전송 등 이심 재발송 관련 요청에 사용합니다.",
-        "enabled":      True,
-        "graph":        esim_resend_graph,
-        "parameters": {
-            "intent_confirmed": {
-                "type":        "bool",
-                "description": "이심 재발송 업무 진행 의사 여부. 담당자가 업무 취소 의사를 표현하면 false.",
-                "required":    True,
-            },
-            "order_id": {
-                "type":        "str",
-                "description": "E로 시작하는 이심 인트라넷 주문번호 (예: E202501010001)",
-                "required":    True,
-            },
-            "customer_name": {
-                "type":        "str",
-                "description": "재발송 대상 고객 이름 (주문자 이름)",
-                "required":    True,
-            },
-            "resend_confirmed": {
-                "type":        "bool",
-                "description": "재발송 진행 의사. 담당자가 재발송에 동의하면 true, 취소하면 false.",
-                "required":    True,
-            },
-        },
-    },
-    "esim_resend": {
-        "type":         "chat",
         "display_name": "이심 재발송",
         "description":  "고객의 eSIM QR코드를 재발송하는 에이전트. "
                         "담당자가 주문번호를 입력하면 해당 주문의 이심 상품 목록을 조회하고, "
@@ -169,6 +139,39 @@ AGENT_REGISTRY: dict = {
                 "description": "재발송 수신 전화번호 (숫자만, 예: 01012345678). '그대로' 응답 시 order_contact.mobile 값을 그대로 사용. 미사용 시 빈 문자열.",
                 "required":    False,
             },
+        },
+    },
+    "wifi_line_change": {
+        "type":         "chat",
+        "display_name": "와이파이 회선변경",
+        "description": "와이파이 회선변경, 회선 교체, SIM 교체 요청을 처리하는 에이전트. "
+                    "와이파이도시락 단말기의 회선(SIM)을 교체합니다. "
+                    "단말기 번호(IMEI)와 사용 국가, 만료일을 입력하면 잔여량이 충분한 "
+                    "SIM을 찾아 자동으로 회선을 변경합니다. "
+                    "와이파이 회선변경, SIM 교체, 회선 교체, 회선 변경 등의 요청에 사용합니다.",
+        "enabled":      True,
+        "graph":        wifi_line_change_graph,
+        "parameters": {
+            "intent_confirmed": {
+                "type":        "bool",
+                "description": "회선변경 업무 진행 의사. 취소 의사 시 false.",
+                "required":    True,
+            },
+            "device_number": {
+                "type":        "str",
+                "description": "단말기 번호 (IMEI. 숫자만 입력, 예: 123456789012345)",
+                "required":    True,
+            },
+            "country_code": {
+                "type":        "str",
+                "description": "사용 국가. ISO 3166-1 alpha-2의 2자리 코드로 입력 (예: JP, US, TH)",
+                "required":    True,
+            },
+            "expiry_date": {
+                "type":        "str",
+                "description": "회선 만료일. YYYYMMDD 형식으로 입력 (예: 20231231)",
+                "required":    True,
+            }
         },
     },
 }

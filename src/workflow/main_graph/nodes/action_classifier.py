@@ -101,10 +101,7 @@ async def classify_agent_action(state: GraphState):
     current_agent = state.current_agent or "None"
 
     # MongoDB에서 enabled=True인 chat 에이전트의 이름과 설명을 가져와서 프롬프트에 포함 (action_classifier 프롬프트용)
-    if state.current_agent and state.current_agent in AGENT_REGISTRY:
-        descriptions = {state.current_agent: AGENT_REGISTRY[state.current_agent]["description"]}
-    else:
-        descriptions = await get_enabled_agent_descriptions()
+    descriptions = await get_enabled_agent_descriptions()
     agent_list = json.dumps(descriptions, indent=2, ensure_ascii=False)
 
     result = await action_classify_chain.ainvoke({
