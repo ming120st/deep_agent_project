@@ -166,11 +166,6 @@ AGENT_REGISTRY: dict = {
                 "description": "재발급할 이심의 사용일수 (예: 30)",
                 "required":    True,
             },
-            "request_qnt": {
-                "type":        "int",
-                "description": "재발급할 이심 수량 (예: 1)",
-                "required":    True,
-            },
             "country_name": {
                 "type":        "str",
                 "description": "이심 사용 국가명. 대체 상품 검색 시 국가 기반 조회에 사용. (예: 일본, 대만, 미국)",
