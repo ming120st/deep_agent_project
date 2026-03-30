@@ -25,3 +25,4 @@ certs/
 src.zip
 test.py
 reset_session_test.py
+*.zip

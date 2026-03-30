@@ -20,6 +20,7 @@ from src.agent.chat.bigquery_agent.agent import bigquery_agent_node
 from src.agent.chat.esim_resend.graph import esim_resend_graph
 from src.agent.chat.esim_resend.graph import esim_resend_graph
 from src.agent.chat.wifi_line_change.graph import wifi_line_change_graph
+from src.agent.chat.esim_fault_replacement.graph import esim_fault_replacement_graph
 # from src.agent.xxx.graph import xxx_graph  ← graph 쓰는 에이전트 추가할 때마다 import
 
 
@@ -137,6 +138,42 @@ AGENT_REGISTRY: dict = {
             "mobile": {
                 "type":        "str",
                 "description": "재발송 수신 전화번호 (숫자만, 예: 01012345678). '그대로' 응답 시 order_contact.mobile 값을 그대로 사용. 미사용 시 빈 문자열.",
+                "required":    False,
+            },
+        },
+    },
+    "esim_fault_replacement": {
+        "type":         "chat",
+        "display_name": "이심 재발급",
+        "description":  "고객이 구매한 이심 사용 중 문제 발생 시 대체 이심을 발송하는 에이전트. "
+                        "주문번호, 재발급 사용일수, 수량을 입력하면 대체 상품을 선정하여 재발급 처리 및 상담 등록을 진행합니다. "
+                        "이심 재발급, 이심 불량 교체, eSIM 대체 발송, 이심 재발송 등의 요청에 사용합니다.",
+        "enabled":      True,
+        "graph":        esim_fault_replacement_graph,
+        "parameters": {
+            "intent_confirmed": {
+                "type":        "bool",
+                "description": "이심 재발급 업무 진행 의사 여부. 사용자가 업무 취소 의사를 표현하면 false로 설정.",
+                "required":    True,
+            },
+            "order_id": {
+                "type":        "str",
+                "description": "이심 인트라넷 주문번호 (E로 시작, 예: E26031101886)",
+                "required":    True,
+            },
+            "request_days": {
+                "type":        "int",
+                "description": "재발급할 이심의 사용일수 (예: 30)",
+                "required":    True,
+            },
+            "request_qnt": {
+                "type":        "int",
+                "description": "재발급할 이심 수량 (예: 1)",
+                "required":    True,
+            },
+            "country_name": {
+                "type":        "str",
+                "description": "이심 사용 국가명. 대체 상품 검색 시 국가 기반 조회에 사용. (예: 일본, 대만, 미국)",
                 "required":    False,
             },
         },
