@@ -171,14 +171,18 @@ def route_after_details(
 
 def route_after_confirmation(
     state: GraphState,
-) -> Literal["send_esim", "confirm_payload"]:
+) -> Literal["send_esim", "confirm_payload", "select_product"]:
     """
     process_confirmation 완료 후 분기.
     confirm → send_esim 자동 진행.
     modify / change_product → confirm_payload 재표시.
     """
     params = state.collected_parameters.get(AGENT_NAME, {})
-    return "send_esim" if params.get("payload_confirmed") else "confirm_payload"
+    if params.get("payload_confirmed"):
+        return "send_esim"
+    if "raw_product_list" not in params:  # ← process_confirmation에서 지운 경우
+        return "select_product"
+    return "confirm_payload"
 
 
 def route_after_send(
@@ -262,7 +266,7 @@ workflow.add_conditional_edges(
 workflow.add_conditional_edges(
     "process_confirmation",
     route_after_confirmation,
-    {"send_esim": "send_esim", "confirm_payload": "confirm_payload"},
+    {"send_esim": "send_esim", "confirm_payload": "confirm_payload", "select_product": "select_product"},
 )
 
 # 발송 후 분기 (실패 시 프로세스 종료)

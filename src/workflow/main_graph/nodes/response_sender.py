@@ -6,7 +6,7 @@ state의 마지막 AI 메시지를 Google Chat으로 전송합니다.
 """
 from src.workflow.graph_infra.state import GraphState
 from src.core.google_chat import send_message
-from src.workflow.graph_infra.state import GraphState
+from src.core.session_logger import add_event, EventType
 
 
 async def send_response(state: GraphState) -> GraphState:
@@ -37,6 +37,10 @@ async def send_response(state: GraphState) -> GraphState:
         preview = last_ai_message[:80] + ("..." if len(last_ai_message) > 80 else "")
         print(f"[ResponseSender] 전송 완료 → {space_name}")
         print(f"[ResponseSender] 내용 미리보기: {preview}")
+        
+        await add_event(state.session_id, EventType.CHAT_SEND, "Google Chat 응답 전송",
+                        content=last_ai_message[:200],
+                        task_id=state.task_id)
 
     except Exception as e:
         print(f"[ResponseSender] Google Chat 전송 실패: {e}")

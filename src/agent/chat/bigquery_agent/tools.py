@@ -19,7 +19,7 @@ from src.core.bigquery_client import bq_client
 
 logger = logging.getLogger(__name__)
 
-BQ_PROJECT_ID = os.getenv("BQ_PROJECT_ID", "")
+BQ_SALES_PROJECT_ID = os.getenv("BQ_SALES_PROJECT_ID", "")
 
 
 # ── 동기 헬퍼 (to_thread 내부에서 실행) ───────────────────────────────────────
@@ -33,7 +33,7 @@ def _list_tables_sync(dataset_id: str) -> str:
     return json.dumps(tables or [], ensure_ascii=False)
 
 def _get_table_schema_sync(dataset_id: str, table_id: str) -> str:
-    table_ref = f"{BQ_PROJECT_ID}.{dataset_id}.{table_id}"
+    table_ref = f"{BQ_SALES_PROJECT_ID}.{dataset_id}.{table_id}"
     table = bq_client.get_table(table_ref)
     result = {
         "table": table_ref,
@@ -51,7 +51,7 @@ def _get_table_schema_sync(dataset_id: str, table_id: str) -> str:
     return json.dumps(result, ensure_ascii=False, indent=2)
 
 def _get_sample_rows_sync(dataset_id: str, table_id: str, limit: int) -> str:
-    sql = f"SELECT * FROM `{BQ_PROJECT_ID}.{dataset_id}.{table_id}` LIMIT {limit}"
+    sql = f"SELECT * FROM `{BQ_SALES_PROJECT_ID}.{dataset_id}.{table_id}` LIMIT {limit}"
     rows = [dict(row) for row in bq_client.query(sql).result()]
     return json.dumps(rows or [], ensure_ascii=False, default=str)
 

@@ -37,6 +37,12 @@ def require_login(request: Request):
         return RedirectResponse(url="/auth/login")
     return None
 
+async def is_admin(email: str) -> bool:
+    """어드민 여부 확인 (MongoDB)"""
+    from src.core.mongo_client import boa_admins_collection
+    doc = await boa_admins_collection.find_one({"email": email})
+    return doc is not None
+
 # ── 라우트 ────────────────────────────────────────────────────────────────────
 @router.get("/auth/login")
 async def login(request: Request):

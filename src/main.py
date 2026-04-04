@@ -40,6 +40,7 @@ from src.workflow.graph_infra.state import GraphState
 from src.workflow.main_graph.graph import main_graph
 from src.dashboard.auth import router as auth_router
 from src.dashboard.task_router import router as dashboard_router
+from src.dashboard.sessions_router import router as sessions_router
 from src.dashboard.knowledge_router import router as knowledge_router
 from src.dashboard.device_job_router import router as device_job_router
 from src.dashboard.members_router import router as members_router
@@ -133,11 +134,13 @@ app.add_middleware(
 
 app.include_router(auth_router)
 app.include_router(dashboard_router)
+app.include_router(sessions_router)
 app.include_router(agents_router)
 app.include_router(members_router)
 app.include_router(spaces_router)
 app.include_router(knowledge_router)
 app.include_router(device_job_router)
+
 
 
 # ── Google Chat Webhook ───────────────────────────────────────────────────────
@@ -249,15 +252,18 @@ async def receive_message(request: Request, background_tasks: BackgroundTasks):
         if state.last_activity_time and current_time - state.last_activity_time > 3600:
             print("세션 타임아웃 → 초기화")
             state = GraphState()
+            is_new_session = True
         else:
             print("기존 세션 유지")
+            is_new_session = False
     else:
         state = GraphState()
         print("새로운 세션 생성")
+        is_new_session = True
 
     state.last_activity_time = int(time.time())
     state.chat_context = {
-        "user_id":               user_id,
+        "user_id":               user_id, # 구글챗 사용자(직원)의 이메일 주소
         "user_name":             user_name,
         "space_name":            space_name,
         "space_type":            space_type,
@@ -297,7 +303,7 @@ async def receive_message(request: Request, background_tasks: BackgroundTasks):
             lines.append(f"• `{s['schedule_id'][-8:]}` | {label} {time_str}\n  _{s['query'][:40]}_")
         return {"text": "\n".join(lines)}
 
-    background_tasks.add_task(orchestrate_chat_event, state, config)
+    background_tasks.add_task(orchestrate_chat_event, state, config, is_new_session)
     return {}
 
 

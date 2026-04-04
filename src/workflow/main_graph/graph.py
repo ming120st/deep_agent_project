@@ -42,15 +42,17 @@ from src.core.task_manager import create_task, TaskStatus
 from src.core.mongo_client import checkpointer
 from src.core.mongo_client import boa_agents_collection
 
+from src.core.session_logger import add_event, session_event, update_turn_meta, EventType, build_llm_meta
+
 # ── 임시 노드 (틀) ─────────────────────────────────────────────────────────────
 
 async def execute_rag(state: GraphState):
     """
     RAG 노드: 지식베이스 검색 → LLM 답변 생성
-    1. search_knowledge()로 관련 문서 검색
-    2. 검색 결과를 컨텍스트로 LLM_LIGHT 호출
-    3. 답변 생성
     """
+    session_id = state.session_id
+    await update_turn_meta(session_id, intent="rag")
+
     import json
     from src.core.rag_engine import search_knowledge
     from src.core.llm_config import LLM_LIGHT
@@ -61,6 +63,10 @@ async def execute_rag(state: GraphState):
     try:
         rag_result = await search_knowledge(query=user_query, top_k=3)
         docs = rag_result.get("results", [])
+        
+        await add_event(session_id, EventType.RAG_SEARCH, "지식베이스 검색",
+                        content=f"{len(docs)}건 검색됨",
+                        meta={"docs": [{"title": d["title"], "score": d.get("score")} for d in docs]})
     except Exception as e:
         print(f"[RAG] 검색 실패: {e}")
         docs = []
@@ -120,16 +126,19 @@ async def execute_rag(state: GraphState):
             elif role == "assistant":
                 lc_messages.append(AIMessage(content=content))
 
-        response = await LLM_LIGHT.ainvoke(lc_messages)
-        # Gemini response.content가 list로 올 수 있음
-        raw = response.content
-        if isinstance(raw, list):
-            answer = " ".join(
-                block.get("text", "") if isinstance(block, dict) else str(block)
-                for block in raw
-            )
-        else:
-            answer = str(raw)
+        async with session_event(session_id, EventType.LLM_RESPONSE, "RAG 답변 생성") as ev:
+            response = await LLM_LIGHT.ainvoke(lc_messages)
+            # Gemini response.content가 list로 올 수 있음
+            raw = response.content
+            if isinstance(raw, list):
+                answer = " ".join(
+                    block.get("text", "") if isinstance(block, dict) else str(block)
+                    for block in raw
+                )
+            else:
+                answer = str(raw)
+            ev.content = answer[:200]
+            ev.llm = build_llm_meta("gemini-2.0-flash", getattr(response, "usage_metadata", {}))
     except Exception as e:
         print(f"[RAG] LLM 호출 실패: {e}")
         answer = "죄송합니다. 답변 생성 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요."
@@ -148,6 +157,7 @@ def handle_error(state: GraphState):
 
 # ── 파라미터 업데이트 노드 ─────────────────────────────────────────────────────────────
 async def update_parameters(state: GraphState):
+    session_id = state.session_id
     action_data = getattr(state, "action", {})
     updates = {}
 
@@ -174,7 +184,6 @@ async def update_parameters(state: GraphState):
         updates["collected_parameters"] = collected_parameters
 
     if action_data.get("action") == "new_agent":
-
         agent_doc = await boa_agents_collection.find_one({"agent_id": current_agent})
         if agent_doc and not agent_doc.get("enabled", True):
             msg = "죄송합니다. 현재 해당 에이전트는 사용이 중지되어 있습니다. AI팀에 문의해 주세요."
@@ -186,11 +195,10 @@ async def update_parameters(state: GraphState):
 
     # ── new_task True이면 task 생성 ──────────────────────────────
     if action_data.get("new_task") is True:
-        updates["error_message"] = None # 새로운 업무 시작이므로 기존 오류 메시지 초기화. 안하면 그래프 시작과 동시에 에러로 라우팅 됨
+        updates["error_message"] = None # 새로운 업무 시작이므로 기존 오류 메시지 초기화
         updates["task_status"] = None
         updates["response"] = {}
 
-        # 새 태스크니까 이전 플래그(chat_sent, email_sent 등) 초기화
         collected_parameters[current_agent] = {}
         if action_data.get("parameters"):
             collected_parameters[current_agent].update(action_data["parameters"])
@@ -205,7 +213,16 @@ async def update_parameters(state: GraphState):
             parameters={},
         )
         updates["task_id"] = task_id
+        
+        await update_turn_meta(session_id, intent="new_agent", task_id=task_id)
+        await add_event(session_id, EventType.AGENT_ROUTE, "에이전트 라우팅",
+                        content=current_agent, task_id=task_id)
         print(f"[Task] 새 task 생성: {task_id} ({current_agent})")
+    else:
+        # continue_task 시
+        await update_turn_meta(session_id, intent="continue_task")
+        await add_event(session_id, EventType.AGENT_ROUTE, "에이전트 라우팅",
+                        content=current_agent, task_id=state.task_id)
 
     return updates
 

@@ -1,6 +1,7 @@
 from src.workflow.graph_infra.state import GraphState
 from src.core.internal_esim_client import esim_client
 from src.core.task_manager import set_waiting, set_completed, set_cancelled
+from src.core.session_logger import add_event, session_event, EventType
 import httpx
 
 ################################################################################
@@ -41,6 +42,7 @@ async def ask_order_id(state: GraphState) -> GraphState:
         "이심 재발송을 진행합니다.\n"
         "재발송할 **인트라넷 주문번호(E로 시작)**를 알려주세요."
     )
+    await add_event(state.session_id, EventType.HITL_WAIT, "주문번호 입력 요청", task_id=state.task_id)
     await set_waiting(state, result="주문번호 입력 요청")
     return state
 
@@ -56,22 +58,25 @@ async def fetch_order(state: GraphState) -> GraphState:
     formatted_order_id = esim_client.encrypt(order_id)
 
     try:
-        response     = await esim_client.call_esim_api_get(
-            f"https://wapi.wifidosirak.com/api/v1/order/{formatted_order_id}"
-        )
-        result_value  = response["resultValue"]
-        orders_detail = result_value["ordersDetail"]
+        async with session_event(state.session_id, EventType.API_CALL, "주문 조회 API",
+                                  task_id=state.task_id) as ev:
+            response     = await esim_client.call_esim_api_get(
+                f"https://wapi.wifidosirak.com/api/v1/order/{formatted_order_id}"
+            )
+            result_value  = response["resultValue"]
+            orders_detail = result_value["ordersDetail"]
 
-        if not orders_detail:
-            raise ValueError("ordersDetail이 비어있습니다.")
+            if not orders_detail:
+                raise ValueError("ordersDetail이 비어있습니다.")
 
-        # 주문자 연락처: ask_send_target에서 기본값으로 제안
-        _set_param(state, "orders_detail", orders_detail)
-        _set_param(state, "order_contact", {
-            "name":   result_value.get("name", ""),
-            "email":  result_value.get("email", ""),
-            "mobile": result_value.get("mobile", ""),
-        })
+            # 주문자 연락처: ask_send_target에서 기본값으로 제안
+            _set_param(state, "orders_detail", orders_detail)
+            _set_param(state, "order_contact", {
+                "name":   result_value.get("name", ""),
+                "email":  result_value.get("email", ""),
+                "mobile": result_value.get("mobile", ""),
+            })
+            ev.content = f"order_id={order_id}, 상품 수={len(orders_detail)}"
         print(f"[{AGENT_NAME}] 주문 조회 성공 | order_id={order_id}, 상품 수={len(orders_detail)}")
 
     except (httpx.HTTPStatusError, KeyError, ValueError) as e:
@@ -104,6 +109,7 @@ async def show_product_list(state: GraphState) -> GraphState:
 
     lines.append("\n전부 다 재발송할까요?, 일부만 재발송 하시려면 번호 또는 상세주문번호를 알려주세요.")
     state.add_ai_message("\n".join(lines))
+    await add_event(state.session_id, EventType.HITL_WAIT, "재발송 대상 선택 요청", task_id=state.task_id)
     await set_waiting(state, result="재발송 대상 선택 요청")
     return state
 
@@ -143,6 +149,7 @@ async def ask_send_target(state: GraphState) -> GraphState:
         )
 
     state.add_ai_message(message)
+    await add_event(state.session_id, EventType.HITL_WAIT, "재발송 수신처 확인 요청", task_id=state.task_id)
     await set_waiting(state, result="재발송 수신처 확인 요청")
     return state
 
@@ -152,6 +159,7 @@ async def cancel_inquiry(state: GraphState) -> GraphState:
     state.add_ai_message(
         "이심 재발송 업무를 취소했습니다. 다른 문의가 있으시면 말씀해주세요."
     )
+    await add_event(state.session_id, EventType.CANCEL, "업무 취소", task_id=state.task_id)
     await set_cancelled(state, result="담당자 취소 - 업무 취소")
     state.current_agent = None
     return state
@@ -177,9 +185,12 @@ async def resend_esim(state: GraphState) -> GraphState:
             "mobile":        mobile,
         }
         try:
-            response       = await esim_client.call_esim_api_post(RESEND_URL, json=payload)
-            result_code    = response.get("resultCode", False)
-            result_message = response.get("resultMessage", "응답 없음")
+            async with session_event(state.session_id, EventType.API_CALL, "이심 재발송 API",
+                                      task_id=state.task_id) as ev:
+                response       = await esim_client.call_esim_api_post(RESEND_URL, json=payload)
+                result_code    = response.get("resultCode", False)
+                result_message = response.get("resultMessage", "응답 없음")
+                ev.content = f"id={order_detail_id}, code={result_code}"
             print(f"[{AGENT_NAME}] 재발송 결과 | id={order_detail_id}, code={result_code}, msg={result_message}")
             results.append((order_detail_id, result_message, result_code))
 
@@ -200,8 +211,10 @@ async def resend_esim(state: GraphState) -> GraphState:
     _set_param(state, "resend_success", success == total)
 
     if success == total:
+        await add_event(state.session_id, EventType.COMPLETE, f"이심 재발송 완료 ({total}건)", task_id=state.task_id)
         await set_completed(state, result=f"이심 재발송 완료 ({total}건)")
     else:
+        await add_event(state.session_id, EventType.CANCEL, f"이심 재발송 부분 실패 ({success}/{total})", task_id=state.task_id)
         await set_cancelled(state, result=f"이심 재발송 부분 실패 ({success}/{total})")
 
     state.current_agent = None

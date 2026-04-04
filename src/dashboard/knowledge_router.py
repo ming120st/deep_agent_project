@@ -872,6 +872,7 @@ header { background: var(--bg2); border-bottom: 1px solid var(--border); box-sha
     <a href="/agents" class="nav-link">에이전트</a>
     <a href="/spaces" class="nav-link">스페이스</a>
     <a href="/members" class="nav-link">구성원</a>
+    <a href="/sessions" class="nav-link">대화 로그</a>
   </nav>
   <div class="header-right">
     <div class="user-info">

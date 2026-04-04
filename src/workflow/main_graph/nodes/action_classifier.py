@@ -85,14 +85,15 @@ action_classify_chain: Runnable = (
     | action_parser
 )
 
+from src.core.session_logger import session_event, add_event, EventType, build_llm_meta
+
 # ── 메인 노드 ─────────────────────────────────────────────────────────────────
 async def classify_agent_action(state: GraphState):
+    session_id = state.session_id
 
-    """ 해보니까 구려서 주석처리함
-    # 의도 분석 중임을 알림
-    space_name = state.chat_context.get("space_name", "")
-    await send_message(space_name, "에이전트가 해야 할 일을 분석 중입니다...")
-    """
+    # 사용자 메시지 기록 (턴의 첫 이벤트)
+    await add_event(session_id, EventType.USER_MESSAGE, "사용자 메시지 수신",
+                    content=state.get_last_user_message())
 
     start_time = time.time()
     print(f"[Node] Start: classify_agent_action")
@@ -104,16 +105,25 @@ async def classify_agent_action(state: GraphState):
     descriptions = await get_enabled_agent_descriptions()
     agent_list = json.dumps(descriptions, indent=2, ensure_ascii=False)
 
-    result = await action_classify_chain.ainvoke({
-        "classify_prompt": CLASSIFY_PROMPT,
-        "format_instructions": format_instructions,
-        "messages": messages,
-        "user_query": user_query,
-        "current_agent": current_agent,
-        "agent_list": agent_list,
-    })
+    # 의도 분류 LLM 호출
+    async with session_event(session_id, EventType.LLM_INTENT, "의도 분류") as ev:
+        llm_response = await (action_classify_prompt | LLM_LIGHT).ainvoke({
+            "classify_prompt": CLASSIFY_PROMPT,
+            "format_instructions": format_instructions,
+            "messages": messages,
+            "user_query": user_query,
+            "current_agent": current_agent,
+            "agent_list": agent_list,
+        })
+        result = action_parser.invoke(llm_response)
+        
+        ev.content = result.action
+        ev.llm = build_llm_meta("gemini-2.0-flash", getattr(llm_response, "usage_metadata", {}))
 
     end_time = time.time()
     print(f"[Node] End: classify_agent_action | Duration: {end_time - start_time:.2f}s")
     print(f"[ActionClassifier] {result}")
-    return {"action": result.dict()}
+
+    action_dict = result.dict()
+
+    return {"action": action_dict}

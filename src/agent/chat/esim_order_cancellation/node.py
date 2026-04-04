@@ -1,6 +1,7 @@
 from src.workflow.graph_infra.state import GraphState
 from src.core.internal_esim_client import esim_client
 from src.core.task_manager import set_waiting, set_completed, set_cancelled
+from src.core.session_logger import add_event, session_event, EventType
 import httpx
 
 ################################################################################
@@ -39,6 +40,7 @@ async def ask_order_id(state: GraphState) -> GraphState:
         "• 취소신청/승인/불가 처리가 없는 주문만 취소신청이 가능하며 설치 이력이 없는 경우에만 환불이 진행됩니다.\n"
         "• 부분 취소는 인트라넷에서 직접 처리해주세요."
     )
+    await add_event(state.session_id, EventType.HITL_WAIT, "주문번호 입력 요청", task_id=state.task_id)
     await set_waiting(state, result="주문번호 입력 요청")
     return state
 
@@ -49,26 +51,29 @@ async def fetch_order(state: GraphState) -> GraphState:
     formatted_order_id = esim_client.encrypt(order_id)
 
     try:
-        response = await esim_client.call_esim_api_get(
-            f"https://wapi.wifidosirak.com/api/v1/order/{formatted_order_id}"
-        )
-        result_value = response["resultValue"]
-        order_status    = result_value["status"]
-        order_date      = result_value["orderDate"]
-        orders_detail   = result_value["ordersDetail"]
-        product_count   = len(orders_detail)
-        cancelable_count = sum(
-            1 for item in orders_detail if item.get("cancelStatus", "") == ""
-        )
+        async with session_event(state.session_id, EventType.API_CALL, "주문 조회 API",
+                                  task_id=state.task_id) as ev:
+            response = await esim_client.call_esim_api_get(
+                f"https://wapi.wifidosirak.com/api/v1/order/{formatted_order_id}"
+            )
+            result_value = response["resultValue"]
+            order_status    = result_value["status"]
+            order_date      = result_value["orderDate"]
+            orders_detail   = result_value["ordersDetail"]
+            product_count   = len(orders_detail)
+            cancelable_count = sum(
+                1 for item in orders_detail if item.get("cancelStatus", "") == ""
+            )
 
-        # 주문상태가 정상(4101001)이고 전체 상품이 취소 이력 없는 경우만 취소 가능
-        cancelable = (order_status == "4101001" and product_count == cancelable_count)
+            # 주문상태가 정상(4101001)이고 전체 상품이 취소 이력 없는 경우만 취소 가능
+            cancelable = (order_status == "4101001" and product_count == cancelable_count)
 
-        _set_param(state, "cancelable", cancelable)
-        _set_param(state, "order_info", {
-            "order_date":    order_date,
-            "product_count": product_count,
-        })
+            _set_param(state, "cancelable", cancelable)
+            _set_param(state, "order_info", {
+                "order_date":    order_date,
+                "product_count": product_count,
+            })
+            ev.content = f"order_id={order_id}, cancelable={cancelable}"
         print(f"[{AGENT_NAME}] 주문 조회 성공 | order_id={order_id}, cancelable={cancelable}")
 
     except httpx.HTTPStatusError as e:
@@ -98,6 +103,7 @@ async def confirm_cancelable(state: GraphState) -> GraphState:
         "• 취소 신청 후 담당부서에서 설치 이력을 확인하며, 설치 이력이 있을 경우 취소환불이 거절된다는 점을 안내해주세요.\n\n"
         "구매 상품 전체 취소신청을 진행하시겠습니까?"
     )
+    await add_event(state.session_id, EventType.HITL_WAIT, "취소 진행 의사 확인 요청", task_id=state.task_id)
     await set_waiting(state, result="취소 진행 의사 확인 요청")
     return state
 
@@ -111,6 +117,7 @@ async def handle_non_cancelable(state: GraphState) -> GraphState:
         f"{order_date}에 구매하신 이심 중 이미 취소 요청이 되었거나 처리 진행 중인 이심이 있어 "
         "취소 접수가 불가합니다.\n"
     )
+    await add_event(state.session_id, EventType.CANCEL, "취소 불가 처리", task_id=state.task_id)
     await set_cancelled(state, result="취소 불가 - 처리 진행 중인 이심 존재")
     state.current_agent = None
     return state
@@ -121,6 +128,7 @@ async def cancel_inquiry(state: GraphState) -> GraphState:
     state.add_ai_message(
         "취소신청 업무가 중단되었습니다.\n"
     )
+    await add_event(state.session_id, EventType.CANCEL, "업무 취소", task_id=state.task_id)
     await set_cancelled(state, result="사용자 취소 의사 없음 - 업무 취소")
     state.current_agent = None
     return state
@@ -138,10 +146,13 @@ async def cancel_order(state: GraphState) -> GraphState:
             "cancelReason": "5801007",
             "cancelMemo":   "시락이 에이전트를 통한 직원의 취소요청 처리",
         }
-        cancel_response = await esim_client.call_esim_api_post(
-            "https://wapi.wifidosirak.com/api/v1/order/cancelorder",
-            json=cancel_payload,
-        )
+        async with session_event(state.session_id, EventType.API_CALL, "이심 취소 API",
+                                  task_id=state.task_id) as ev:
+            cancel_response = await esim_client.call_esim_api_post(
+                "https://wapi.wifidosirak.com/api/v1/order/cancelorder",
+                json=cancel_payload,
+            )
+            ev.content = f"resultCode={cancel_response.get('resultCode')}"
         print(f"[{AGENT_NAME}] 취소 API 결과: {cancel_response}")
 
         if cancel_response.get("resultCode") is True:
@@ -151,6 +162,7 @@ async def cancel_order(state: GraphState) -> GraphState:
                 "취소상태는 따로 확인해주세요!"
                 "일부 상품은 즉시 주문취소 및 플랜취소 처리되며, 나머지는 담당자 확인 후 설치 이력이 없다면 취소가 승인되고 환불이 진행됩니다.\n"
             )
+            await add_event(state.session_id, EventType.COMPLETE, "이심 취소 신청 완료", task_id=state.task_id)
             await set_completed(state, result="이심 취소 신청 접수 완료")
 
         else:

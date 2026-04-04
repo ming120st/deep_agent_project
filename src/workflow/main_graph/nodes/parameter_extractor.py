@@ -33,7 +33,7 @@ EXTRACT_PROMPT = """
 [추출 규칙]
 - current_agent_spec에 정의된 파라미터 필드만 추출하세요.
 - 사용자의 현재 발화를 최우선으로 고려하고, 누락된 정보는 대화 내역을 참고하여 보완하세요.
-- 이미 수집되었거나 변경이 없는 파라미터(collected_parameters)는 다시 추출하지 않아도 됩니다. 새로 추가되거나 변경된 것만 추출하세요.
+- 이미 수집된 파라미터(collected_parameters에 있는 값)는 사용자가 명시적으로 변경을 요청한 경우에만 업데이트하세요. 그 외에는 절대 덮어쓰지 마세요.
 - AI가 "맞나요?", "할까요?" 라고 물었을 때 사용자가 "맞아", "응" 이라고 대답하면 해당 파라미터를 true로 설정하세요.
 
 [SOP 참고]
@@ -84,15 +84,11 @@ extract_chain: Runnable = (
     | param_parser
 )
 
+from src.core.session_logger import session_event, build_llm_meta, EventType
+
 # ── 메인 노드 ─────────────────────────────────────────────────────────────────
 async def extract_parameters(state: GraphState):
-
-    """ 해보니까 구려서 주석처리함
-    # 파라미터 추출 중임을 알림
-    space_name = state.chat_context.get("space_name", "")
-    agent_name = AGENT_REGISTRY.get(state.current_agent, {}).get("display_name", "")
-    await send_message(space_name, f"에이전트가 '{agent_name}'작업에 필요한 정보를 확인 중입니다...")
-    """
+    session_id = state.session_id
 
     start_time = time.time()
     print(f"[Node] Start: extract_parameters")
@@ -128,16 +124,20 @@ async def extract_parameters(state: GraphState):
     if exp_doc:
         print(f"[ExtractParameters] Experience 주입: {current_agent}")
 
-    result = await extract_chain.ainvoke({
-        "extract_prompt": EXTRACT_PROMPT,
-        "format_instructions": format_instructions,
-        "messages": messages,
-        "user_query": user_query,
-        "agent_spec": agent_spec_str,
-        "collected_parameters": collected_parameters_str,
-        "sop": sop,
-        "experience": experience,
-    })
+    async with session_event(session_id, EventType.LLM_EXTRACT, "파라미터 추출") as ev:
+        llm_response = await (extract_prompt | LLM_LIGHT).ainvoke({
+            "extract_prompt": EXTRACT_PROMPT,
+            "format_instructions": format_instructions,
+            "messages": messages,
+            "user_query": user_query,
+            "agent_spec": agent_spec_str,
+            "collected_parameters": collected_parameters_str,
+            "sop": sop,
+            "experience": experience,
+        })
+        result = param_parser.invoke(llm_response)
+        ev.content = str(result.parameters)
+        ev.llm = build_llm_meta("gemini-2.0-flash", getattr(llm_response, "usage_metadata", {}))
 
     end_time = time.time()
     print(f"[Node] End: extract_parameters | Duration: {end_time - start_time:.2f}s")
@@ -147,5 +147,6 @@ async def extract_parameters(state: GraphState):
     updated_action = {
         **action_data,
         "parameters": result.parameters,
+        "_extract_llm_meta": ev.llm,
     }
     return {"action": updated_action}

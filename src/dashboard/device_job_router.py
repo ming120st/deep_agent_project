@@ -43,15 +43,16 @@ async def device_callback(
 
     config = {"configurable": {"thread_id": thread_id}}
 
+    # job 먼저 완료 처리 → 중복 콜백 재시도가 들어와도 get_thread_id_by_job에서 차단됨
+    await complete_device_job(
+        payload.job_id,
+        status="done" if payload.status == "success" else "error"
+    )
+
     # 그래프 재개 — interrupt()가 멈춘 지점부터 재시작
     await main_graph.ainvoke(
         Command(resume=payload.model_dump()),
         config=config,
-    )
-
-    await complete_device_job(
-        payload.job_id,
-        status="done" if payload.status == "success" else "error"
     )
 
     print(f"[DeviceCallback] 그래프 재개 완료: job={payload.job_id}, thread={thread_id}")

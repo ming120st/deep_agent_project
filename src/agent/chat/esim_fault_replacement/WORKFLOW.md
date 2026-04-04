@@ -116,6 +116,8 @@
       - response["resultValue"]["products"][{i}]["price"]/response["resultValue"]["products"][{i}]["useDay"]가 price/days (3.2.2에서 추출한 값. 기존 구매상품의 하루환산 단가) 값보다 큰 것
       ※ 하루 단가 기준 초과 조건은 의도적임. 재발급이므로 기존보다 저렴한 상품은 품질 저하로 간주하여 제외.
       - 위 조건에 맞는 상품이 하나도 없으면 프로세스 종료하고 사용자에게 죄송하지만 조건에 맞는 대체상품이 없습니다 라고 반환.
+      - 위 조건에 맞는 상품이 있으면 최대 20개까지 alt_product_list_sorted에 가격 오름차순으로 정렬하여 저장 (3.3.8에서 AI 선정 전에 상위 20개로 제한)
+
     3.3.8 alt_product_list를 AI에게 전달하여 최종 product_list 구성.
       AI 프롬프트 지시사항:
       - alt_product_list의 각 상품 name과 3.2.2에서 추출한 product_name(기존 구매상품명)을 참고하여 기존 구매상품보다 데이터제공량이 적지 않은 상품을 대체상품으로 선정. (무제한은 무제한만 매칭)
@@ -227,7 +229,8 @@
               results.append({"index": i+1, "status": "success"})
               success = True
               break
-          # 실패 시 다음 시도로
+          # 실패 시 다음 시도로. 
+          # 근데 {"resultCode":false,"resultMessage":"이미 처리된 외부주문번호 오류"}면 confirm_payload 노드에서 이 payload에서 "OutOrderId":   f"{order_id}재발송" 뒤에 숫자를 1,2,3..붙여가면서 재시도해야함.
 
       if not success:
           # 이 건에 대해 MAX_RETRY 모두 소진

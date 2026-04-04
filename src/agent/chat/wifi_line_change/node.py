@@ -16,6 +16,7 @@ from src.workflow.graph_infra.state import GraphState
 from src.workflow.device_job.schemas import DeviceJobRequest, DeviceJobCallback
 from src.core.device_job_manager import create_device_job
 from src.core.task_manager import set_waiting, set_completed, set_cancelled
+from src.core.session_logger import add_event, session_event, EventType
 
 AGENT_NAME = "wifi_line_change"
 
@@ -45,6 +46,7 @@ async def ask_device_number(state: GraphState) -> GraphState:
         "와이파이 회선변경을 진행합니다!\n"
         "단말기 번호(IMEI)를 알려주세요."
     )
+    await add_event(state.session_id, EventType.HITL_WAIT, "단말기 번호 입력 요청", task_id=state.task_id)
     await set_waiting(state, result="단말기 번호 입력 요청")
     return state
 
@@ -54,6 +56,7 @@ async def ask_country_code(state: GraphState) -> GraphState:
     state.add_ai_message(
         "SIM을 배정할 하나의 국가를 알려주세요."
     )
+    await add_event(state.session_id, EventType.HITL_WAIT, "국가코드 입력 요청", task_id=state.task_id)
     await set_waiting(state, result="국가코드 입력 요청")
     return state
 
@@ -62,6 +65,7 @@ async def ask_expiry_date(state: GraphState) -> GraphState:
     state.add_ai_message(
         "서비스 만료일을 알려주세요. 해당일자까지 유효하도록 설정하겠습니다. (YYYYMMDD 형식, 예: 20260131)"
     )
+    await add_event(state.session_id, EventType.HITL_WAIT, "회선 만료일 입력 요청", task_id=state.task_id)
     await set_waiting(state, result="회선 만료일 입력 요청")
     return state
 
@@ -69,6 +73,7 @@ async def ask_expiry_date(state: GraphState) -> GraphState:
 async def cancel_inquiry(state: GraphState) -> GraphState:
     """업무 취소."""
     state.add_ai_message("와이파이 회선변경 업무가 취소되었습니다.")
+    await add_event(state.session_id, EventType.CANCEL, "업무 취소", task_id=state.task_id)
     await set_cancelled(state, result="사용자 취소 의사")
     state.current_agent = None
     return state
@@ -110,14 +115,17 @@ async def request_device_job(state: GraphState) -> GraphState:
 
         # device_agent에 전송
         try:
-            async with httpx.AsyncClient() as client:
-                resp = await client.post(
-                    f"{DEVICE_JOB_URL}/device-job",
-                    json=req.model_dump(),
-                    headers={"X-Device-Job-Key": DEVICE_JOB_SECRET},
-                    timeout=10.0,
-                )
-                resp.raise_for_status()
+            async with session_event(state.session_id, EventType.DEVICE_JOB, "DeviceJob 요청",
+                                      task_id=state.task_id) as ev:
+                async with httpx.AsyncClient() as client:
+                    resp = await client.post(
+                        f"{DEVICE_JOB_URL}/device-job",
+                        json=req.model_dump(),
+                        headers={"X-Device-Job-Key": DEVICE_JOB_SECRET},
+                        timeout=10.0,
+                    )
+                    resp.raise_for_status()
+                ev.content = f"job_id: {job_id}"
         except Exception as e:
             state.add_ai_message(f"⚠️ PC 에이전트 연결에 실패했습니다. 잠시 후 다시 시도해주세요.\n({e})")
             await set_cancelled(state, result=f"DeviceJob 전송 실패: {e}")
@@ -128,12 +136,14 @@ async def request_device_job(state: GraphState) -> GraphState:
             "✅ 회선변경 작업을 PC에이전트에 전달했습니다.\n"
             "완료되면 결과를 알려드릴게요! 잠시만 기다려주세요."
         )
+        await add_event(state.session_id, EventType.HITL_WAIT, "DeviceJob 콜백 대기", task_id=state.task_id)
         await set_waiting(state, result=f"DeviceJob 대기 중: {job_id}")
 
     # interrupt — /device-callback 수신 시 자동 재개
     callback_payload: dict = interrupt({"job_id": job_id, "status": "waiting"})
 
     # ── 재개 후 이 라인부터 실행 ──────────────────────────────────────────────
+    await add_event(state.session_id, EventType.HITL_RESUME, "DeviceJob 콜백 수신", task_id=state.task_id)
     callback = DeviceJobCallback(**callback_payload)
 
     if callback.status == "error":
@@ -155,6 +165,7 @@ async def handle_result(state: GraphState) -> GraphState:
     if not result.get("success"):
         reason = result.get("reason", "UNKNOWN")
         state.add_ai_message(_error_message(reason))
+        await add_event(state.session_id, EventType.CANCEL, f"회선변경 실패: {reason}", task_id=state.task_id)
         await set_cancelled(state, result=f"회선변경 실패: {reason}")
     else:
         imsi      = result.get("changed_imsi", "")
@@ -169,9 +180,11 @@ async def handle_result(state: GraphState) -> GraphState:
             f"• SIM 유형: {plan_note}\n\n"
             "_단말기를 재부팅하면 새 회선이 적용됩니다._"
         )
+        await add_event(state.session_id, EventType.COMPLETE, f"회선변경 완료: {imsi}", task_id=state.task_id)
         await set_completed(state, result=f"회선변경 완료: {imsi}")
 
     state.current_agent = None
+    _set_param(state, "job_done", True)
     return state
 
 

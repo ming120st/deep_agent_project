@@ -8,12 +8,15 @@ import httpx
 from langchain_core.messages import HumanMessage
 from langgraph.types import interrupt
 
-from src.core.device_job_manager import create_device_job
+from src.core.device_job_manager import create_device_job, get_job_id_by_task_id
 from src.core.internal_esim_client import esim_client
 from src.core.llm_config import LLM_LIGHT
 from src.core.task_manager import set_cancelled, set_completed, set_waiting
+from src.core.session_logger import add_event, session_event, build_llm_meta, EventType
 from src.workflow.device_job.schemas import DeviceJobCallback, DeviceJobRequest
 from src.workflow.graph_infra.state import GraphState
+from datetime import datetime, timezone, timedelta
+from src.core.bq_logger import insert_row
 
 ################################################################################
 #  이심 재발급 업무 노드 (esim_fault_replacement)
@@ -31,6 +34,7 @@ from src.workflow.graph_infra.state import GraphState
 #                      → register_consultation (interrupt)
 ################################################################################
 
+BQ_TABLE = "esim_fault_replacement_log"
 AGENT_NAME = "esim_fault_replacement"
 REGIST_URL = "https://wapi.wifidosirak.com/api/v1/order/agentregist"
 MAX_RETRY  = 5
@@ -38,6 +42,8 @@ MAX_RETRY  = 5
 DEVICE_JOB_URL    = os.getenv("DEVICE_JOB_URL", "")
 DEVICE_JOB_SECRET = os.getenv("DEVICE_JOB_SECRET", "")
 
+
+KST = timezone(timedelta(hours=9))
 
 # ── 헬퍼 ─────────────────────────────────────────────────────────────────────
 
@@ -84,6 +90,7 @@ async def request_parameters(state: GraphState) -> GraphState:
         "이심 재발급을 진행합니다.\n"
         "아래 정보를 알려주세요.\n\n" + "\n".join(missing)
     )
+    await add_event(state.session_id, EventType.HITL_WAIT, "파라미터 입력 요청", task_id=state.task_id)
     await set_waiting(state, result="파라미터 입력 요청")
     return state
 
@@ -97,9 +104,12 @@ async def fetch_order(state: GraphState) -> GraphState:
     formatted_order_id = esim_client.encrypt(order_id)
 
     try:
-        response = await esim_client.call_esim_api_get(
-            f"https://wapi.wifidosirak.com/api/v1/order/{formatted_order_id}"
-        )
+        async with session_event(state.session_id, EventType.API_CALL, "주문 조회 API",
+                                  task_id=state.task_id) as ev:
+            response = await esim_client.call_esim_api_get(
+                f"https://wapi.wifidosirak.com/api/v1/order/{formatted_order_id}"
+            )
+            ev.content = f"order_id={order_id}"
     except Exception as e:
         print(f"[{AGENT_NAME}] 주문 조회 오류 | order_id={order_id}, error={e}")
         state.add_ai_message("현재 내부 전산 오류로 주문 조회가 되지 않습니다. 잠시 후 다시 시도해주세요.")
@@ -108,12 +118,17 @@ async def fetch_order(state: GraphState) -> GraphState:
         return state
 
     if response.get("resultCode") is not True:
+        await add_event(state.session_id, EventType.ERROR, "주문 조회 실패",
+                        content="resultCode=False", task_id=state.task_id)
         state.add_ai_message("현재 내부 전산 오류로 주문 조회가 되지 않습니다. 잠시 후 다시 시도해주세요.")
         await set_cancelled(state, result="주문 조회 resultCode=False")
         state.current_agent = None
         return state
 
     rv = response["resultValue"]
+    print(f"[{AGENT_NAME}] 주문 조회 응답 resultValue: {json.dumps(rv, ensure_ascii=False)[:500]}...")
+    print(f"[{AGENT_NAME}] fetch_order resultValue keys: {list(rv.keys())}")
+    print(f"[{AGENT_NAME}] fetch_order name-related fields: name={rv.get('name')!r}, userName={rv.get('userName')!r}, buyerName={rv.get('buyerName')!r}, receiverName={rv.get('receiverName')!r}")
 
     # 공통 주문자 정보
     order_info = {
@@ -172,6 +187,7 @@ async def select_iccid(state: GraphState) -> GraphState:
 
     state.add_ai_message("\n".join(lines))
     _set_param(state, "iccid_list_shown", True)
+    await add_event(state.session_id, EventType.HITL_WAIT, "iccid 선택 요청", task_id=state.task_id)
     await set_waiting(state, result="iccid 선택 요청")
     return state
 
@@ -209,7 +225,11 @@ async def validate_iccid(state: GraphState) -> GraphState:
         "JSON만 반환."
     )
 
-    llm_resp = await LLM_LIGHT.ainvoke([HumanMessage(content=prompt)])
+    async with session_event(state.session_id, EventType.LLM_GENERIC, "iccid 선택 파싱",
+                              task_id=state.task_id) as ev:
+        llm_resp = await LLM_LIGHT.ainvoke([HumanMessage(content=prompt)])
+        ev.content = str(llm_resp.content)[:200]
+        ev.llm = build_llm_meta(LLM_LIGHT.model, llm_resp.usage_metadata)
     try:
         result   = _parse_llm_json(llm_resp.content)
         selected = result.get("selected_iccids", [])
@@ -268,72 +288,114 @@ async def select_product(state: GraphState) -> GraphState:
     price: float        = params.get("price", 0)
     request_days: int   = params.get("request_days")
 
+    print(f"[{AGENT_NAME}][3.3] ══════════ select_product 진입 ══════════")
+    print(f"[{AGENT_NAME}][3.3] product_code={product_code!r}")
+    print(f"[{AGENT_NAME}][3.3] product_name={product_name!r}")
+    print(f"[{AGENT_NAME}][3.3] 구매일수(days)={days!r}  요청일수(request_days)={request_days!r}")
+    print(f"[{AGENT_NAME}][3.3] price={price!r}")
+
     # 3.3.1: 동일 일수 → 기존 상품코드 즉시 사용
     if request_days == days:
-        _set_param(state, "raw_product_list", [product_code])
-        print(f"[{AGENT_NAME}] 상품 선정: 동일 일수 → {product_code}")
+        print(f"[{AGENT_NAME}][3.3.1] 동일 일수 → 기존 코드 사용: {product_code}")
+        _set_param(state, "raw_product_list",    [product_code])
+        _set_param(state, "product_request_days", request_days)  # ★ 선정 시점 request_days 저장
         return state
 
-    # 3.3.1~3.3.3: alt_product_code 시도
+    print(f"[{AGENT_NAME}][3.3] 요청일수({request_days}) ≠ 구매일수({days}) → alt 코드 시도")
+
+    # 3.3.2~3.3.3: alt_product_code 시도
     alt_product_code = re.sub(r"\d+D$", f"{request_days}D", product_code)
-    try:
-        alt_response = await esim_client.call_esim_api_get(
-            f"https://wapi.wifidosirak.com/api/v1/product/{alt_product_code}"
-        )
-        if alt_response.get("resultCode") is True:
-            _set_param(state, "raw_product_list", [alt_product_code])
-            print(f"[{AGENT_NAME}] 상품 선정: alt_product_code → {alt_product_code}")
-            return state
-    except Exception:
-        pass
+    print(f"[{AGENT_NAME}][3.3.2] re.sub 결과: {product_code!r} → {alt_product_code!r}")
+
+    if alt_product_code != product_code:
+        print(f"[{AGENT_NAME}][3.3.2] alt 코드가 다름 → API 조회 시도: {alt_product_code!r}")
+        try:
+            async with session_event(state.session_id, EventType.API_CALL, "대체 상품 조회 API",
+                                      task_id=state.task_id) as ev:
+                alt_response = await esim_client.call_esim_api_get(
+                    f"https://wapi.wifidosirak.com/api/v1/product/{alt_product_code}"
+                )
+                ev.content = f"code={alt_product_code}, resultCode={alt_response.get('resultCode')}"
+            print(f"[{AGENT_NAME}][3.3.2] alt API 응답 resultCode={alt_response.get('resultCode')!r}")
+            if alt_response.get("resultCode") is True:
+                print(f"[{AGENT_NAME}][3.3.2] alt 코드 조회 성공 → {alt_product_code}")
+                _set_param(state, "raw_product_list",    [alt_product_code])
+                _set_param(state, "product_request_days", request_days)  # ★
+                return state
+            else:
+                print(f"[{AGENT_NAME}][3.3.2] alt 코드 조회 실패 → 국가 기반 검색으로 fallback")
+        except Exception as e:
+            print(f"[{AGENT_NAME}][3.3.2] alt API 예외 발생: {e} → 국가 기반 검색으로 fallback")
+    else:
+        print(f"[{AGENT_NAME}][3.3.2] alt 코드가 원본과 동일 (D패턴 없는 코드) → 바로 국가 기반 검색")
 
     # alt 실패 → 국가 기반 검색 필요
     country_name: str = params.get("country_name", "")
+    print(f"[{AGENT_NAME}][3.3.3] country_name={country_name!r}")
 
     if not country_name:
+        print(f"[{AGENT_NAME}][3.3.3] country_name 없음 → 국가명 입력 요청")
         _set_param(state, "needs_country", True)
         state.add_ai_message(
             "대체 상품 검색을 위해 이심을 사용할 **국가명**을 알려주세요.\n"
             "(예시: 일본, 대만, 미국)"
         )
+        await add_event(state.session_id, EventType.HITL_WAIT, "국가명 입력 요청", task_id=state.task_id)
         await set_waiting(state, result="국가명 입력 요청")
         return state
 
     # 3.3.5: ISO 3166-1 Alpha-3 변환
+    print(f"[{AGENT_NAME}][3.3.5] ISO 변환 시작: {country_name!r}")
     conversion_prompt = (
         f"국가명을 ISO 3166-1 Alpha-3 기준 3자리 국가코드로 변환하세요.\n"
         f"가능하면: {{\"code\": \"JPN\"}}\n불가능하면: {{\"code\": null}}\n"
         f"국가명: {country_name}\nJSON만 반환."
     )
-    llm_resp = await LLM_LIGHT.ainvoke([HumanMessage(content=conversion_prompt)])
+    async with session_event(state.session_id, EventType.LLM_GENERIC, "국가명 ISO 변환",
+                              task_id=state.task_id) as ev:
+        llm_resp = await LLM_LIGHT.ainvoke([HumanMessage(content=conversion_prompt)])
+        ev.content = str(llm_resp.content)[:200]
+        ev.llm = build_llm_meta(LLM_LIGHT.model, llm_resp.usage_metadata)
+    print(f"[{AGENT_NAME}][3.3.5] ISO 변환 LLM 원본 응답: {llm_resp.content!r}")
     try:
         country_data = _parse_llm_json(llm_resp.content)
         country      = country_data.get("code")
-    except Exception:
+        print(f"[{AGENT_NAME}][3.3.5] ISO 변환 결과: {country!r}")
+    except Exception as e:
+        print(f"[{AGENT_NAME}][3.3.5] ISO 변환 파싱 오류: {e}")
         country = None
 
     if not country:
+        print(f"[{AGENT_NAME}][3.3.5] ISO 코드 없음 → 국가명 재입력 요청")
         state.add_ai_message(
             f"죄송하지만 '{country_name}'의 국가코드를 변환할 수 없습니다. "
             "다시 정확한 국가명을 알려주세요. (예시: 일본, 대만, 미국)"
         )
         state.collected_parameters[AGENT_NAME].pop("country_name", None)
+        await add_event(state.session_id, EventType.HITL_WAIT, "국가코드 변환 실패, 재입력 요청", task_id=state.task_id)
         await set_waiting(state, result="국가코드 변환 실패, 재입력 요청")
         return state
 
     # 3.3.5: 국가 상품 목록 조회
+    print(f"[{AGENT_NAME}][3.3.5] 국가 상품 조회: countryId={country!r}")
     try:
-        country_response = await esim_client.call_esim_api_post(
-            api_url="https://wapi.wifidosirak.com/api/v1/product/detail/country",
-            json={"countryId": country},
-        )
+        async with session_event(state.session_id, EventType.API_CALL, "국가 상품 조회 API",
+                                  task_id=state.task_id) as ev:
+            country_response = await esim_client.call_esim_api_post(
+                api_url="https://wapi.wifidosirak.com/api/v1/product/detail/country",
+                json={"countryId": country},
+            )
+            ev.content = f"countryId={country}, resultCode={country_response.get('resultCode')}"
+        print(f"[{AGENT_NAME}][3.3.5] 국가 상품 조회 resultCode={country_response.get('resultCode')!r}")
     except Exception as e:
+        print(f"[{AGENT_NAME}][3.3.5] 국가 상품 조회 예외: {e}")
         state.add_ai_message("현재 내부 전산 오류로 나중에 다시 시도해주세요.")
         await set_cancelled(state, result=f"국가 상품 조회 오류: {e}")
         state.current_agent = None
         return state
 
     if country_response.get("resultCode") is not True:
+        print(f"[{AGENT_NAME}][3.3.5] 국가 상품 조회 실패")
         state.add_ai_message("현재 내부 전산 오류로 나중에 다시 시도해주세요.")
         await set_cancelled(state, result="국가 상품 조회 resultCode=False")
         state.current_agent = None
@@ -342,25 +404,44 @@ async def select_product(state: GraphState) -> GraphState:
     # 3.3.7: 필터링
     products    = country_response["resultValue"].get("products", [])
     daily_price = price / days if days else 0
+    print(f"[{AGENT_NAME}][3.3.7] 전체 상품 수={len(products)}, daily_price={daily_price:.1f}, request_days={request_days}")
 
     alt_product_list = []
+    skipped_useday = skipped_kaetong = skipped_silmyeong = skipped_price = 0
     for p in products:
         if p.get("useDay") != request_days:
+            skipped_useday += 1
             continue
         if "개통희망일" in (p.get("description") or ""):
+            skipped_kaetong += 1
             continue
         if "실명인증" in (p.get("name") or ""):
+            skipped_silmyeong += 1
             continue
         p_use_day = p.get("useDay") or 1
         if p.get("price", 0) / p_use_day <= daily_price:
+            skipped_price += 1
             continue
         alt_product_list.append(p)
 
+    print(f"[{AGENT_NAME}][3.3.7] 필터링 결과: 통과={len(alt_product_list)}개")
+    print(f"[{AGENT_NAME}][3.3.7] 탈락 상세: useDay불일치={skipped_useday}, 개통희망일={skipped_kaetong}, 실명인증={skipped_silmyeong}, 단가조건미달={skipped_price}")
+    if alt_product_list:
+        print(f"[{AGENT_NAME}][3.3.7] 통과 상품 목록:")
+        for p in alt_product_list:
+            code = p.get("code", p.get("productCode", ""))
+            print(f"[{AGENT_NAME}][3.3.7]   - code={code!r}, name={p.get('name')!r}, price={p.get('price')}, useDay={p.get('useDay')}")
+
     if not alt_product_list:
+        print(f"[{AGENT_NAME}][3.3.7] 조건 통과 상품 없음 → 종료")
         state.add_ai_message("죄송하지만 조건에 맞는 대체상품이 없습니다.")
         await set_cancelled(state, result="조건에 맞는 대체상품 없음")
         state.current_agent = None
         return state
+
+    # AI 선정 전에 상위 20개로 제한 (가격 오름차순)
+    alt_product_list_sorted = sorted(alt_product_list, key=lambda p: p.get("price", 0))[:20]
+    print(f"[{AGENT_NAME}][3.3.8] AI 선정 입력 상품 수={len(alt_product_list_sorted)} (가격 오름차순 상위 20개)")
 
     # 3.3.8: AI 선정 (최대 5개)
     product_json = json.dumps(
@@ -371,7 +452,7 @@ async def select_product(state: GraphState) -> GraphState:
                 "price":  p.get("price", 0),
                 "useDay": p.get("useDay", 0),
             }
-            for p in alt_product_list
+            for p in alt_product_list_sorted
         ],
         ensure_ascii=False,
     )
@@ -387,18 +468,27 @@ async def select_product(state: GraphState) -> GraphState:
         '반환 형식 (JSON 배열, 상품코드만): ["코드1", "코드2", ...]\n'
         "JSON만 반환."
     )
-    llm_resp = await LLM_LIGHT.ainvoke([HumanMessage(content=ai_select_prompt)])
+    async with session_event(state.session_id, EventType.LLM_GENERIC, "대체 상품 AI 선정",
+                              task_id=state.task_id) as ev:
+        llm_resp = await LLM_LIGHT.ainvoke([HumanMessage(content=ai_select_prompt)])
+        ev.content = str(llm_resp.content)[:200]
+        ev.llm = build_llm_meta(LLM_LIGHT.model, llm_resp.usage_metadata)
+    print(f"[{AGENT_NAME}][3.3.8] AI 선정 LLM 원본 응답: {llm_resp.content!r}")
     try:
         selected_codes = _parse_llm_json(llm_resp.content)
         if not isinstance(selected_codes, list):
-            raise ValueError("list 아님")
-    except Exception:
+            raise ValueError(f"list 아님: {type(selected_codes)}")
+        print(f"[{AGENT_NAME}][3.3.8] AI 선정 성공: {selected_codes}")
+    except Exception as e:
+        print(f"[{AGENT_NAME}][3.3.8] AI 선정 파싱 오류: {e} → fallback(상위 5개)")
         selected_codes = [
-            p.get("code", p.get("productCode", "")) for p in alt_product_list[:5]
+            p.get("code", p.get("productCode", "")) for p in alt_product_list_sorted[:5]
         ]
+        print(f"[{AGENT_NAME}][3.3.8] fallback 선정: {selected_codes}")
 
-    _set_param(state, "raw_product_list", selected_codes)
-    print(f"[{AGENT_NAME}] 상품 선정: 국가 기반 → {selected_codes}")
+    _set_param(state, "raw_product_list",    selected_codes)
+    _set_param(state, "product_request_days", request_days)  # ★
+    print(f"[{AGENT_NAME}][3.3] ══════════ select_product 완료: {selected_codes} ══════════")
     return state
 
 
@@ -412,9 +502,12 @@ async def fetch_product_details(state: GraphState) -> GraphState:
 
     for code in raw_product_list:
         try:
-            response = await esim_client.call_esim_api_get(
-                f"https://wapi.wifidosirak.com/api/v1/product/{code}"
-            )
+            async with session_event(state.session_id, EventType.API_CALL, "상품 상세 조회 API",
+                                      task_id=state.task_id) as ev:
+                response = await esim_client.call_esim_api_get(
+                    f"https://wapi.wifidosirak.com/api/v1/product/{code}"
+                )
+                ev.content = f"code={code}, resultCode={response.get('resultCode')}"
         except Exception as e:
             print(f"[{AGENT_NAME}] 상품 상세 조회 오류 | code={code}, error={e}")
             state.add_ai_message("현재 내부 전산 오류로 나중에 다시 시도해주세요.")
@@ -490,6 +583,7 @@ async def confirm_payload(state: GraphState) -> GraphState:
     state.add_ai_message("\n".join(lines))
     _set_param(state, "payload_shown",     True)
     _set_param(state, "payload_confirmed", False)
+    await add_event(state.session_id, EventType.HITL_WAIT, "payload 컨펌 요청", task_id=state.task_id)
     await set_waiting(state, result="payload 컨펌 요청")
     return state
 
@@ -498,7 +592,20 @@ async def process_confirmation(state: GraphState) -> GraphState:
     """
     AI 노드 - 사용자 응답 의도 파악 및 payload 수정 (3.5.3).
     """
-    params                = _get_params(state)
+    params = _get_params(state)
+
+    # ★ request_days 변경 감지 → 상품 재선정 트리거
+    current_days = params.get("request_days")
+    product_days = params.get("product_request_days")
+    if product_days is not None and current_days != product_days:
+        print(f"[{AGENT_NAME}] request_days 변경 감지: {product_days} → {current_days}, 상품 재선정 트리거")
+        for key in ["raw_product_list", "product_list", "current_payload",
+                    "product_request_days", "country_name", "needs_country"]:
+            state.collected_parameters[AGENT_NAME].pop(key, None)
+        state.collected_parameters[AGENT_NAME]["payload_shown"]     = False
+        state.collected_parameters[AGENT_NAME]["payload_confirmed"] = False
+        return state  # → route_after_confirmation → select_product로 빠짐
+
     current_payload: dict = params.get("current_payload", {})
     product_list: list    = params.get("product_list", [])
     current_product_index = params.get("current_product_index", 0)
@@ -545,7 +652,11 @@ async def process_confirmation(state: GraphState) -> GraphState:
         "JSON만 반환."
     )
 
-    llm_resp = await LLM_LIGHT.ainvoke([HumanMessage(content=prompt)])
+    async with session_event(state.session_id, EventType.LLM_GENERIC, "컨펌 응답 분석",
+                              task_id=state.task_id) as ev:
+        llm_resp = await LLM_LIGHT.ainvoke([HumanMessage(content=prompt)])
+        ev.content = str(llm_resp.content)[:200]
+        ev.llm = build_llm_meta(LLM_LIGHT.model, llm_resp.usage_metadata)
     try:
         result = _parse_llm_json(llm_resp.content)
     except Exception as e:
@@ -598,44 +709,135 @@ async def send_esim(state: GraphState) -> GraphState:
     """
     이심 발송 API 호출 노드.
     request_qnt만큼 반복 호출 (건당 1개). 건당 최대 MAX_RETRY회 재시도.
-    어느 건이든 MAX_RETRY 소진 시 전체 중단.
+    - 외부주문번호 중복 오류(400 포함): OutOrderId suffix 증가 후 재시도
+    - 전체 완료 후 종합 리포트 출력
     """
     params      = _get_params(state)
     payload     = params.get("current_payload", {})
     request_qnt = params.get("request_qnt", 1)
     order_id    = params.get("order_id", "")
 
-    for i in range(request_qnt):
-        payload_i = {**payload, "OutOrderId": f"{order_id}재발송_{i + 1}", "Qty": 1}
-        success   = False
+    print(f"[{AGENT_NAME}][3.6] ══════════ send_esim 진입 ══════════")
+    print(f"[{AGENT_NAME}][3.6] request_qnt={request_qnt}, order_id={order_id!r}")
+    print(f"[{AGENT_NAME}][3.6] current_payload={json.dumps(payload, ensure_ascii=False)}")
 
-        for attempt in range(MAX_RETRY):
-            try:
+    # ── 결과 누적 ────────────────────────────────────────────────────────────
+    results: list[dict] = []  # {"seq": int, "success": bool, "out_order_id": str, "reason": str}
+    out_order_num = 1
+
+    success            = False
+    final_out_order_id = f"{order_id}재발송_{out_order_num}"
+    fail_reason        = "MAX_RETRY 소진"
+
+    for attempt in range(MAX_RETRY):
+        out_order_id       = f"{order_id}재발송_{out_order_num}"
+        final_out_order_id = out_order_id
+        payload_i          = {**payload, "OutOrderId": out_order_id, "Qty": request_qnt}
+
+        print(f"[{AGENT_NAME}][3.6] 시도 {attempt + 1}/{MAX_RETRY} | OutOrderId={out_order_id!r}")
+        print(f"[{AGENT_NAME}][3.6] 전송 payload: {json.dumps(payload_i, ensure_ascii=False)}")
+
+        try:
+            async with session_event(state.session_id, EventType.API_CALL, "이심 발송 API",
+                                      task_id=state.task_id) as ev:
                 response = await esim_client.call_esim_api_post(
                     api_url=REGIST_URL,
                     json=payload_i,
                 )
-                if response.get("resultCode") is True:
-                    success = True
-                    break
-            except Exception as e:
-                print(f"[{AGENT_NAME}] 발송 오류 | index={i + 1}, attempt={attempt + 1}, error={e}")
+                ev.content = f"수량={request_qnt}, 시도={attempt + 1}, resultCode={response.get('resultCode')}, OutOrderId={out_order_id}"
 
-        if not success:
-            print(f"[{AGENT_NAME}] 발송 최종 실패 | index={i + 1}, MAX_RETRY={MAX_RETRY}")
-            state.add_ai_message(
-                f"이심 발송 시스템에 문제가 발생했습니다.\n"
-                f"({i + 1}번째 발송에서 {MAX_RETRY}회 시도 후 실패)\n"
-                "직접 재발급 처리를 진행해주세요."
-            )
-            await set_cancelled(state, result=f"이심 발송 실패: {i + 1}번째 {MAX_RETRY}회 소진")
-            state.current_agent = None
-            return state
+            result_msg = response.get("resultMessage", "")
+            print(f"[{AGENT_NAME}][3.6] 응답 resultCode={response.get('resultCode')!r}, resultMessage={result_msg!r}")
+            print(f"[{AGENT_NAME}][3.6] 응답 전체: {json.dumps(response, ensure_ascii=False)}")
 
-    # 전체 성공
-    state.add_ai_message(f"총 {request_qnt}건의 이심 재발급 발송이 완료되었습니다.")
+            if response.get("resultCode") is True:
+                print(f"[{AGENT_NAME}][3.6] 발송 성공 (attempt={attempt + 1}, 수량={request_qnt})")
+                success = True
+                out_order_num += 1
+
+                await insert_row(BQ_TABLE, {
+                    "timestamp":      datetime.now(KST).isoformat(),
+                    "order_id":       order_id,
+                    "out_order_id":   out_order_id,
+                    "product_code":   payload_i.get("ProductCode", ""),
+                    "product_name":   payload_i.get("ProductName", ""),
+                    "qty":            request_qnt,
+                    "requester_id":   state.chat_context.get("user_id", ""),
+                    "requester_name": state.chat_context.get("user_name", ""),
+                })
+                break
+
+            elif "이미 처리된 외부주문번호" in result_msg:
+                out_order_num += 1  # ← _1_1 대신 그냥 숫자 올림: _2, _3, ...
+                fail_reason = result_msg
+                print(f"[{AGENT_NAME}][3.6] 외부주문번호 중복 → {out_order_id!r} → {order_id}재발송_{out_order_num}로 재시도")
+
+            else:
+                fail_reason = result_msg or "resultCode=False"
+                print(f"[{AGENT_NAME}][3.6] resultCode False → 재시도")
+
+        except httpx.HTTPStatusError as e:
+            # ★ 400 등 HTTP 오류 응답 바디에서 resultMessage 추출 시도
+            result_msg = ""
+            try:
+                err_body   = e.response.json()
+                result_msg = err_body.get("resultMessage", "")
+                print(f"[{AGENT_NAME}][3.6] HTTP {e.response.status_code} 응답 바디: {err_body}")
+            except Exception:
+                print(f"[{AGENT_NAME}][3.6] HTTP {e.response.status_code} 바디 파싱 실패: {e.response.text}")
+
+            if "이미 처리된 외부주문번호" in result_msg:
+                out_order_num += 1
+                fail_reason = result_msg
+                print(f"[{AGENT_NAME}][3.6] 외부주문번호 중복 오류({e.response.status_code}) → {out_order_id!r} → {order_id}재발송_{out_order_num}로 재시도")
+            else:
+                fail_reason = result_msg or f"HTTP {e.response.status_code}"
+                print(f"[{AGENT_NAME}][3.6] HTTP 오류 | attempt={attempt + 1}, status={e.response.status_code}")
+
+        except Exception as e:
+            fail_reason = f"{type(e).__name__}: {e}"
+            print(f"[{AGENT_NAME}][3.6] 예외 발생 | attempt={attempt + 1}, error={fail_reason}")
+
+    results.append({
+        "seq":          1,
+        "success":      success,
+        "out_order_id": final_out_order_id,
+        "reason":       "" if success else fail_reason,
+    })
+    print(f"[{AGENT_NAME}][3.6] 발송 결과: success={success}, OutOrderId={final_out_order_id!r}, reason={fail_reason!r}")
+
+    # ── 종합 리포트 ───────────────────────────────────────────────────────────
+    state.response["send_results"] = results  # 결과를 GraphState에 저장하여 다음노드 상담등록에서 활용
+    success_list = [r for r in results if r["success"]]
+    fail_list    = [r for r in results if not r["success"]]
+    product_name = payload.get("ProductName", "")
+
+    success_cnt = request_qnt if success_list else 0
+    lines = [f"**이심 재발급 발송 결과** ({success_cnt}/{request_qnt}건 처리)\n"]
+    lines.append(f"• 상품명: {product_name}")
+
+    for r in results:
+        status = "✅ 성공" if r["success"] else "❌ 실패"
+        line   = f"• {status} | 주문번호: {r['out_order_id']}"
+        if not r["success"]:
+            line += f" | 사유: {r['reason']}"
+        lines.append(line)
+
+    if fail_list:
+        lines.append(f"\n{request_qnt}건 발송 실패 — 수동으로 재발급 처리가 필요합니다.")
+
+    state.add_ai_message("\n".join(lines))
+
+    if fail_list:
+        print(f"[{AGENT_NAME}][3.6] 발송 실패 | 요청수량={request_qnt}")
+        await add_event(state.session_id, EventType.CANCEL,
+                        f"이심 발송 실패: {request_qnt}건",
+                        task_id=state.task_id)
+        await set_cancelled(state, result=f"이심 발송 실패: {[r['out_order_id'] for r in fail_list]}")
+        return state
+
     _set_param(state, "send_success", True)
-    print(f"[{AGENT_NAME}] 이심 발송 전체 성공 | {request_qnt}건")
+    print(f"[{AGENT_NAME}][3.6] ══════════ send_esim 전체 성공 ({request_qnt}건) ══════════")
     return state
 
 
@@ -647,14 +849,27 @@ async def register_consultation(state: GraphState) -> GraphState:
     device_agent에 register_consultation 작업 요청 후 interrupt로 대기.
     콜백 수신 시 재개되어 결과 처리.
     """
-    params         = _get_params(state)
-    thread_id      = state.chat_context.get("user_id", "")
-    order_info     = params.get("order_info", {})
-    payload        = params.get("current_payload", {})
+    params          = _get_params(state)
+    thread_id       = state.chat_context.get("user_id", "")
+    order_info      = params.get("order_info", {})
+    payload         = params.get("current_payload", {})
     selected_iccids = params.get("selected_iccids", [])
 
     # ── LangGraph 재실행 방지 ────────────────────────────────────────────────
     job_id = params.get("_job_id")
+
+    # interrupt() raise 시 _job_id가 checkpoint에 저장 안 되는 경우 → task_id로 복구
+    # task_id는 다른 노드(update_parameters)에서 return으로 세팅되므로 checkpoint에 안전하게 저장됨
+    if not job_id and state.task_id:
+        recovered = await get_job_id_by_task_id(state.task_id)
+        if recovered and recovered.startswith("__already_"):
+            # 이미 완료된 job → device_agent 재전송 없이 interrupt만 대기
+            print(f"[{AGENT_NAME}] task_id={state.task_id} → job 이미 완료, 재전송 차단")
+            job_id = params.get("_job_id") or "__completed__"
+        elif recovered:
+            print(f"[{AGENT_NAME}] _job_id checkpoint 누락 → task_id로 복구: {recovered}")
+            job_id = recovered
+            _set_param(state, "_job_id", job_id)
 
     if not job_id:
         req = DeviceJobRequest(
@@ -667,22 +882,29 @@ async def register_consultation(state: GraphState) -> GraphState:
                 "iccid_list":   selected_iccids,
                 "memo":         f"이심 재발급 완료. 발송 상품: {payload.get('ProductName', '')}",
             },
-            context={"user_name": state.chat_context.get("user_name")},
+            context={
+                "user_name": state.chat_context.get("user_name"),
+                "user_id":   state.chat_context.get("user_id", ""),
+                "send_results": state.response.get("send_results", []),
+                },
         )
         job_id = req.job_id
         _set_param(state, "_job_id", job_id)  # ★ interrupt() 전에 반드시 저장
 
-        await create_device_job(job_id, thread_id)
+        await create_device_job(job_id, thread_id, task_id=state.task_id)
 
         try:
-            async with httpx.AsyncClient() as client:
-                resp = await client.post(
-                    f"{DEVICE_JOB_URL}/device-job",
-                    json=req.model_dump(),
-                    headers={"X-Device-Job-Key": DEVICE_JOB_SECRET},
-                    timeout=10.0,
-                )
-                resp.raise_for_status()
+            async with session_event(state.session_id, EventType.DEVICE_JOB, "상담 등록 DeviceJob 요청",
+                                      task_id=state.task_id) as ev:
+                async with httpx.AsyncClient() as client:
+                    resp = await client.post(
+                        f"{DEVICE_JOB_URL}/device-job",
+                        json=req.model_dump(),
+                        headers={"X-Device-Job-Key": DEVICE_JOB_SECRET},
+                        timeout=10.0,
+                    )
+                    resp.raise_for_status()
+                ev.content = f"job_id: {job_id}"
         except Exception as e:
             state.add_ai_message(
                 f"⚠️ PC 에이전트 연결에 실패했습니다. 잠시 후 다시 시도해주세요.\n({e})"
@@ -692,21 +914,50 @@ async def register_consultation(state: GraphState) -> GraphState:
             return state
 
         state.add_ai_message("상담 등록 작업을 PC에이전트에 전달했습니다. 잠시만 기다려주세요.")
+        await add_event(state.session_id, EventType.HITL_WAIT, "DeviceJob 콜백 대기", task_id=state.task_id)
         await set_waiting(state, result=f"DeviceJob 대기 중: {job_id}")
 
     # interrupt — /device-callback 수신 시 자동 재개
     callback_payload: dict = interrupt({"job_id": job_id, "status": "waiting"})
+
+    # 중복 실행 방지
+    if params.get("_callback_processed"):
+        state.current_agent = None
+        return state
+    _set_param(state, "_callback_processed", True)
+
+    await add_event(state.session_id, EventType.HITL_RESUME, "DeviceJob 콜백 수신", task_id=state.task_id)
     callback = DeviceJobCallback(**callback_payload)
 
     if callback.status == "success":
-        state.add_ai_message("이심 재발급 및 상담 등록이 완료되었습니다.")
+        p = payload
+        lines = [
+            "✅ 이심 재발급 및 상담 등록이 완료되었습니다.\n",
+            f"• 주문번호: {p.get('OutOrderId', '')}",
+            f"• 수신자: {p.get('Name', '')}",
+            f"• 상품명: {p.get('ProductName', '')}",
+            f"• 상품코드: {p.get('ProductCode', '')}",
+            f"• 수량: {p.get('Qty', '')}",
+            f"• 이메일: {p.get('Email', '')}",
+            f"• 전화번호: {p.get('Mobile', '')}",
+        ]
+        state.add_ai_message("\n".join(lines))
+        await add_event(state.session_id, EventType.COMPLETE, "이심 재발급 및 상담 등록 완료", task_id=state.task_id)
         await set_completed(state, result="이심 재발급 및 상담 등록 완료")
     else:
         error_msg = callback.error_message or "알 수 없는 오류"
-        state.add_ai_message(
-            "이심 발송은 완료되었으나 상담 등록 중 오류가 발생했습니다.\n"
-            f"수동으로 상담 등록을 진행해주세요. (사유: {error_msg})"
-        )
+        lines = [
+            "⚠️ 이심 발송은 완료되었으나 상담 등록 중 오류가 발생했습니다.\n",
+            f"• 주문번호: {payload.get('OutOrderId', '')}",
+            f"• 수신자: {payload.get('Name', '')}",
+            f"• 상품명: {payload.get('ProductName', '')}",
+            f"• 상품코드: {payload.get('ProductCode', '')}",
+            f"• 수량: {payload.get('Qty', '')}",
+            f"• 이메일: {payload.get('Email', '')}",
+            f"• 전화번호: {payload.get('Mobile', '')}",
+            f"\n수동으로 상담 등록을 진행해주세요. (사유: {error_msg})",
+        ]
+        state.add_ai_message("\n".join(lines))
         await set_completed(state, result=f"이심 발송 완료, 상담 등록 실패: {error_msg}")
 
     _set_param(state, "job_done", True)
@@ -719,6 +970,7 @@ async def register_consultation(state: GraphState) -> GraphState:
 async def cancel_inquiry(state: GraphState) -> GraphState:
     """업무 취소 노드."""
     state.add_ai_message("이심 재발급 업무를 취소했습니다. 다른 문의가 있으시면 말씀해주세요.")
+    await add_event(state.session_id, EventType.CANCEL, "업무 취소", task_id=state.task_id)
     await set_cancelled(state, result="담당자 취소 - 업무 취소")
     state.current_agent = None
     return state

@@ -24,13 +24,13 @@ def _build_bq_client() -> bigquery.Client:
     )
     return bigquery.Client(
         credentials=credentials,
-        project=os.getenv("BQ_PROJECT_ID")
+        project=os.getenv("BQ_SALES_PROJECT_ID")
     )
 
 bq_client = _build_bq_client()
 
-BQ_DATASET = os.getenv("BQ_DATASET", "dataset")
-BQ_TABLE   = os.getenv("BQ_TABLE",   "esim_sales")
+BQ_SALES_DATASET = os.getenv("BQ_SALES_DATASET", "dataset")
+BQ_SALES_TABLE   = os.getenv("BQ_SALES_TABLE",   "esim_sales")
 
 
 # ── 날짜 헬퍼 ─────────────────────────────────────────────────────────────────
@@ -74,7 +74,7 @@ def get_daily_summary(target_date: Optional[str] = None) -> dict:
           COUNT(*)                           AS order_count,
           COALESCE(SUM(Payment_Amount), 0)   AS total_revenue,
           COALESCE(AVG(Payment_Amount), 0)   AS avg_payment
-        FROM `{BQ_DATASET}.{BQ_TABLE}`
+        FROM `{BQ_SALES_DATASET}.{BQ_SALES_TABLE}`
         WHERE DATE(Order_Date) = '{date}'
           AND Order_Status = '주문완료'
       ),
@@ -82,7 +82,7 @@ def get_daily_summary(target_date: Optional[str] = None) -> dict:
         SELECT
           COUNT(*)                           AS order_count,
           COALESCE(SUM(Payment_Amount), 0)   AS total_revenue
-        FROM `{BQ_DATASET}.{BQ_TABLE}`
+        FROM `{BQ_SALES_DATASET}.{BQ_SALES_TABLE}`
         WHERE DATE(Order_Date) = '{prev_date}'
           AND Order_Status = '주문완료'
       )
@@ -114,7 +114,7 @@ def get_channel_breakdown(target_date: Optional[str] = None) -> list[dict]:
         NULLIF(SUM(SUM(Payment_Amount)) OVER (), 0),
         1
       )                                AS revenue_pct
-    FROM `{BQ_DATASET}.{BQ_TABLE}`
+    FROM `{BQ_SALES_DATASET}.{BQ_SALES_TABLE}`
     WHERE DATE(Order_Date) = '{date}'
       AND Order_Status = '주문완료'
     GROUP BY Sales_Channel
@@ -136,7 +136,7 @@ def get_top_products(target_date: Optional[str] = None, limit: int = 5) -> list[
       Data_Amount,
       COUNT(*)            AS order_count,
       SUM(Payment_Amount) AS revenue
-    FROM `{BQ_DATASET}.{BQ_TABLE}`
+    FROM `{BQ_SALES_DATASET}.{BQ_SALES_TABLE}`
     WHERE DATE(Order_Date) = '{date}'
       AND Order_Status = '주문완료'
     GROUP BY Product_Name, Data_Type, Data_Amount
@@ -160,7 +160,7 @@ def get_data_type_breakdown(target_date: Optional[str] = None) -> list[dict]:
         COUNT(*) * 100.0 / NULLIF(SUM(COUNT(*)) OVER (), 0),
         1
       )                                AS pct
-    FROM `{BQ_DATASET}.{BQ_TABLE}`
+    FROM `{BQ_SALES_DATASET}.{BQ_SALES_TABLE}`
     WHERE DATE(Order_Date) = '{date}'
       AND Order_Status = '주문완료'
     GROUP BY Data_Type
@@ -179,7 +179,7 @@ def get_order_status_summary(target_date: Optional[str] = None) -> list[dict]:
     SELECT
       Order_Status,
       COUNT(*) AS count
-    FROM `{BQ_DATASET}.{BQ_TABLE}`
+    FROM `{BQ_SALES_DATASET}.{BQ_SALES_TABLE}`
     WHERE DATE(Order_Date) = '{date}'
     GROUP BY Order_Status
     ORDER BY count DESC

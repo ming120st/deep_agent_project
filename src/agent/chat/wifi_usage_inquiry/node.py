@@ -2,6 +2,7 @@ from src.workflow.graph_infra.state import GraphState # 상태 관리 모델
 from src.tools.mos_client import mos_client # MOS 클라이언트
 from src.tools.smtp_mail import send_mail # 이메일 전송 함수
 from src.core.task_manager import update_task_status, TaskStatus, set_waiting, set_completed, set_cancelled
+from src.core.session_logger import add_event, session_event, EventType
 from typing import Optional
 import asyncio
 
@@ -16,6 +17,8 @@ import asyncio
 
 # 조회 업무 취소
 async def cancel_inquiry(state: GraphState) -> GraphState:
+    await add_event(state.session_id, EventType.CANCEL, "업무 취소",
+                    task_id=state.task_id)
     state.add_ai_message("네, 알겠습니다. 와이파이도시락 사용량 조회 업무를 취소합니다. 다른 도움이 필요하시면 말씀해주세요.")
     state.current_agent = None
     await set_cancelled(state, result="사용량 확인 업무 취소")
@@ -23,6 +26,8 @@ async def cancel_inquiry(state: GraphState) -> GraphState:
 
 # IMEI 번호 리스트 요청
 async def request_imei_list(state: GraphState) -> GraphState:
+    await add_event(state.session_id, EventType.HITL_WAIT, "IMEI 입력 요청",
+                    task_id=state.task_id)
     state.add_ai_message("사용량을 조회할 imei를 알려주세요")
     await set_waiting(state, result="IMEI 번호 입력 요청")
     return state
@@ -38,11 +43,15 @@ async def fetch_usage(state: GraphState) -> GraphState:
     params = state.collected_parameters.get("wifi_usage_inquiry", {})
 
     try:
-        usage_data = mos_client.get_usage_by_date_range(
-            imeis=params.get("imei_list", []),
-            start_yyyymmdd=params.get("start_date", ""),
-            end_yyyymmdd=params.get("end_date", ""),
-        )
+        async with session_event(state.session_id, EventType.API_CALL, "MOS 사용량 조회 API",
+                                  task_id=state.task_id) as ev:
+            usage_data = mos_client.get_usage_by_date_range(
+                imeis=params.get("imei_list", []),
+                start_yyyymmdd=params.get("start_date", ""),
+                end_yyyymmdd=params.get("end_date", ""),
+            )
+            ev.content = f"{len(usage_data)}건 조회"
+            
         await set_waiting(state, result="사용량 조회 성공")
         state.response["usage_data"] = usage_data
 

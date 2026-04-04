@@ -126,6 +126,7 @@ async def members_page(request: Request):
     <a href="/agents" class="nav-link">에이전트</a>
     <a href="/spaces" class="nav-link">스페이스</a>
     <a href="/members" class="nav-link active">구성원</a>
+    <a href="/sessions" class="nav-link">대화 로그</a>
   </div>
   <a href="/auth/logout" class="btn-logout">로그아웃</a>
 </nav>

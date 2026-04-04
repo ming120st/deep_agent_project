@@ -10,10 +10,11 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 from typing import Optional
 from datetime import datetime
-from src.core.task_manager import get_all_tasks, get_tasks_by_user, update_task_status
+from src.core.task_manager import get_all_tasks, get_tasks_by_user, update_task_status, get_task
 from src.dashboard.auth import require_login, get_current_user
 from src.core.mongo_client import boa_admins_collection
 from src.agent.registry import AGENT_REGISTRY
+from src.core.trace_logger import get_trace
 
 router = APIRouter()
 
@@ -93,6 +94,25 @@ async def api_update_task_status(task_id: str, body: StatusUpdateRequest, reques
         return {"ok": True}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
+  
+@router.get("/api/tasks/{task_id}/trace")
+async def api_get_trace(task_id: str, request: Request):
+    """task_id에 대한 실행 시퀀스 + summary 반환"""
+    user = get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="로그인 필요")
+
+    # 본인 task이거나 관리자만 조회 가능
+    task = await get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="태스크를 찾을 수 없습니다")
+    if task["user_id"] != user["email"] and not await is_admin(user["email"]):
+        raise HTTPException(status_code=403, detail="권한이 없습니다")
+
+    trace = await get_trace(task_id)
+    if not trace:
+        return {"task_id": task_id, "steps": [], "summary": None}
+    return trace
 
 
 # ── HTML 대시보드 ──────────────────────────────────────────────────────────────
@@ -225,6 +245,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     <a href="/agents" class="nav-link">에이전트</a>
     <a href="/spaces" class="nav-link">스페이스</a>
     <a href="/members" class="nav-link">구성원</a>
+    <a href="/sessions" class="nav-link">대화 로그</a>
   </nav>
   <div class="header-right">
     <div class="live-badge"><div class="live-dot"></div><span id="last-updated">—</span></div>
@@ -561,3 +582,19 @@ async def dashboard(request: Request):
     if redirect:
         return redirect
     return HTMLResponse(content=DASHBOARD_HTML)
+from src.core.session_logger import get_task_trace
+
+@router.get("/api/tasks/{task_id}/trace")
+async def api_get_task_trace(task_id: str, request: Request):
+    user = get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="로그인 필요")
+
+    task = await get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="태스크를 찾을 수 없습니다")
+    if task["user_id"] != user["email"] and not await is_admin(user["email"]):
+        raise HTTPException(status_code=403, detail="권한이 없습니다")
+
+    events = await get_task_trace(task_id)
+    return {"task_id": task_id, "events": events}
