@@ -81,63 +81,69 @@ async def cancel_inquiry(state: GraphState) -> GraphState:
 
 async def request_device_job(state: GraphState) -> GraphState:
     """
-    device_agent에 회선변경 작업 요청 후 interrupt로 대기.
-    콜백 수신 시 재개되어 결과 처리.
+    device_agent에 회선변경 작업 요청 후 job_id를 상태에 저장하고 반환.
+    (대기는 다음 노드에서 수행)
     """
     params    = _get_params(state)
     thread_id = state.chat_context.get("user_id", "")
-
-    # ── LangGraph 재실행 방지 ─────────────────────────────────────────────────
-    # interrupt() 후 Command(resume=...) 재개 시, LangGraph는 이 노드를
-    # 처음부터 다시 실행합니다. job_id가 이미 state에 있으면 재실행이므로
-    # device_agent 재전송을 건너뜁니다.
     
-    job_id = params.get("_job_id")  # ← 추가
+    # 이미 job_id가 있다면 그대로 통과 (재실행 방지 최후 보루)
+    if params.get("_job_id"):
+        return state
 
-    if not job_id:  # ← 이 블록 전체를 if로 감쌈
-        req = DeviceJobRequest(
-            thread_id=thread_id,
-            task="wifi_sim_change",
-            parameters={
-                "imei":         params.get("device_number", ""),
-                "country_code": params.get("country_code", ""),
-                "expiry_date":  params.get("expiry_date", ""),
-            },
-            context={"user_name": state.chat_context.get("user_name")},
-        )
-        job_id = req.job_id
+    req = DeviceJobRequest(
+        thread_id=thread_id,
+        task="wifi_sim_change",
+        parameters={
+            "imei":         params.get("device_number", ""),
+            "country_code": params.get("country_code", ""),
+            "expiry_date":  params.get("expiry_date", ""),
+        },
+        context={"user_name": state.chat_context.get("user_name")},
+    )
+    job_id = req.job_id
 
-        # ★ interrupt() 전에 반드시 job_id를 state에 저장
-        _set_param(state, "_job_id", job_id)
+    # 상태 업데이트
+    _set_param(state, "_job_id", job_id)
 
-        # MongoDB에 job 저장
-        await create_device_job(job_id, thread_id)
+    # MongoDB에 job 저장
+    await create_device_job(job_id, thread_id)
 
-        # device_agent에 전송
-        try:
-            async with session_event(state.session_id, EventType.DEVICE_JOB, "DeviceJob 요청",
-                                      task_id=state.task_id) as ev:
-                async with httpx.AsyncClient() as client:
-                    resp = await client.post(
-                        f"{DEVICE_JOB_URL}/device-job",
-                        json=req.model_dump(),
-                        headers={"X-Device-Job-Key": DEVICE_JOB_SECRET},
-                        timeout=10.0,
-                    )
-                    resp.raise_for_status()
-                ev.content = f"job_id: {job_id}"
-        except Exception as e:
-            state.add_ai_message(f"⚠️ PC 에이전트 연결에 실패했습니다. 잠시 후 다시 시도해주세요.\n({e})")
-            await set_cancelled(state, result=f"DeviceJob 전송 실패: {e}")
-            state.current_agent = None
-            return state
+    # device_agent에 전송
+    try:
+        async with session_event(state.session_id, EventType.DEVICE_JOB, "DeviceJob 요청",
+                                  task_id=state.task_id) as ev:
+            async with httpx.AsyncClient() as client:
+                resp = await client.post(
+                    f"{DEVICE_JOB_URL}/device-job",
+                    json=req.model_dump(),
+                    headers={"X-Device-Job-Key": DEVICE_JOB_SECRET},
+                    timeout=10.0,
+                )
+                resp.raise_for_status()
+            ev.content = f"job_id: {job_id}"
+    except Exception as e:
+        state.add_ai_message(f"⚠️ PC 에이전트 연결에 실패했습니다. 잠시 후 다시 시도해주세요.\n({e})")
+        await set_cancelled(state, result=f"DeviceJob 전송 실패: {e}")
+        state.current_agent = None
+        return state
 
-        state.add_ai_message(
-            "✅ 회선변경 작업을 PC에이전트에 전달했습니다.\n"
-            "완료되면 결과를 알려드릴게요! 잠시만 기다려주세요."
-        )
-        await add_event(state.session_id, EventType.HITL_WAIT, "DeviceJob 콜백 대기", task_id=state.task_id)
-        await set_waiting(state, result=f"DeviceJob 대기 중: {job_id}")
+    state.add_ai_message(
+        "✅ 회선변경 작업을 PC에이전트에 전달했습니다.\n"
+        "완료되면 결과를 알려드릴게요! 잠시만 기다려주세요."
+    )
+    await add_event(state.session_id, EventType.HITL_WAIT, "DeviceJob 콜백 대기", task_id=state.task_id)
+    await set_waiting(state, result=f"DeviceJob 대기 중: {job_id}")
+
+    return state
+
+
+async def wait_for_device_job(state: GraphState) -> GraphState:
+    """
+    이전 노드에서 저장된 job_id를 기반으로 인터럽트 대기.
+    """
+    params = _get_params(state)
+    job_id = params.get("_job_id")
 
     # interrupt — /device-callback 수신 시 자동 재개
     callback_payload: dict = interrupt({"job_id": job_id, "status": "waiting"})
@@ -148,13 +154,10 @@ async def request_device_job(state: GraphState) -> GraphState:
 
     if callback.status == "error":
         reason = callback.error_message or "UNKNOWN"
-        # 실패 결과를 state.response에 저장하여 handle_result에서 메시지 생성
         state.response.update({"success": False, "reason": reason})
-        state.current_agent = None
-        return state  # handle_result가 처리
-
-    # 성공 결과를 state.response에 저장 (handle_result 노드에서 사용)
-    state.response.update(callback.result)
+    else:
+        state.response.update(callback.result)
+        
     return state
 
 

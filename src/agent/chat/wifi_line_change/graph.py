@@ -20,6 +20,7 @@ from src.agent.chat.wifi_line_change.node import (
     ask_expiry_date,
     cancel_inquiry,
     request_device_job,
+    wait_for_device_job,
     handle_result,
 )
 
@@ -34,6 +35,7 @@ def route_wifi_line_change(state: GraphState) -> Literal[
     "ask_expiry_date",
     "cancel_inquiry",
     "request_device_job",
+    "wait_for_device_job",
     "end",
 ]:
     params = state.collected_parameters.get(AGENT_NAME, {})
@@ -59,7 +61,9 @@ def route_wifi_line_change(state: GraphState) -> Literal[
 
     # 3단계: DeviceJob 실행 (아직 안 했으면)
     if "job_done" not in params:
-        return "request_device_job"
+        if not params.get("_job_id"):
+            return "request_device_job"
+        return "wait_for_device_job"
 
     return "end"
 
@@ -67,12 +71,13 @@ def route_wifi_line_change(state: GraphState) -> Literal[
 # ── 그래프 구성 ───────────────────────────────────────────────────────────────
 
 _NODE_MAP = {
-    "ask_device_number":  "ask_device_number",
-    "ask_country_code":   "ask_country_code",
-    "ask_expiry_date":    "ask_expiry_date",
-    "cancel_inquiry":     "cancel_inquiry",
-    "request_device_job": "request_device_job",
-    "end":                END,
+    "ask_device_number":   "ask_device_number",
+    "ask_country_code":    "ask_country_code",
+    "ask_expiry_date":     "ask_expiry_date",
+    "cancel_inquiry":      "cancel_inquiry",
+    "request_device_job":  "request_device_job",
+    "wait_for_device_job": "wait_for_device_job",
+    "end":                 END,
 }
 
 workflow = StateGraph(GraphState)
@@ -82,6 +87,7 @@ workflow.add_node("ask_country_code",   ask_country_code)
 workflow.add_node("ask_expiry_date",    ask_expiry_date)
 workflow.add_node("cancel_inquiry",     cancel_inquiry)
 workflow.add_node("request_device_job", request_device_job)
+workflow.add_node("wait_for_device_job", wait_for_device_job)
 workflow.add_node("handle_result",      handle_result)
 
 # 진입점: 단일 라우터
@@ -95,7 +101,8 @@ workflow.add_edge("ask_expiry_date",    END)
 workflow.add_edge("cancel_inquiry",    END)
 
 # DeviceJob → handle_result → END
-workflow.add_edge("request_device_job", "handle_result")
+workflow.add_edge("request_device_job", "wait_for_device_job")
+workflow.add_edge("wait_for_device_job", "handle_result")
 workflow.add_edge("handle_result",      END)
 
 wifi_line_change_graph = workflow.compile()
