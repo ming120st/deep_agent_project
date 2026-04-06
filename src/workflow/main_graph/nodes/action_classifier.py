@@ -48,7 +48,7 @@ CLASSIFY_PROMPT = """
 
 [new_task 판단 기준]
 - action이 new_agent일 때: new_task는 항상 True
-- 동일 에이전트 진행 중이지만 이전 업무 완료 후 새 건 요청: True
+- 동일 에이전트 진행 중이지만 새로운 파라미터로 다른 작업 요청: True
 - 진행 중인 업무 이어가기: False
 - rag, light_response: False
 """

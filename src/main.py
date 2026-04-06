@@ -66,52 +66,60 @@ from src.agent.schedule.bq_analysis_schedule.cards import (
 
 
 # ── 스케줄러 ──────────────────────────────────────────────────────────────────
+# 스케줄/트리거 에이전트는 다음 scheduler에 등록된다.
+# AsyncIOScheduler는 앱이 시작된 후에도 job 추가/삭제/수정이 가능하다.
 scheduler = AsyncIOScheduler(timezone="Asia/Seoul")
 
 
-@asynccontextmanager
+@asynccontextmanager 
 async def lifespan(app: FastAPI):
+    """
+    앱의 시작과 종료 시 수행될 작업을 관리하는 함수.
+    yield 전까지는 앱 시작 시 실행되고, yield 이후는 앱 종료 시 실행된다.
+    """
 
-    # 1. registry → MongoDB sync (앱 시작 시 1회)
+    # 1. Registry에 등록된 에이전트를 몽고DB에 등록/제거된 에이전트는 몽고DB에서 삭제
     await sync_registry_to_mongo()
 
     # 2. RAG 엔진 초기화 (Blob → 없으면 MongoDB 전체 빌드)
     from src.core.rag_engine import init_rag_engine
     await init_rag_engine()
 
-    # 2. 앱 시작 시 스케줄 에이전트 등록
+    # 3. scheduler엔진에 스케줄 에이전트 등록
     for agent_id, meta in SCHEDULE_REGISTRY.items():
         scheduler.add_job(
-            meta["func"],
+            meta["func"], # 실제 실행할 함수
             trigger="cron",
             **meta["cron"],
             id=agent_id,
-            replace_existing=True,
-            misfire_grace_time=600,
-            coalesce=True,
+            replace_existing=True, # 기존에 같은 이름의 job이 있으면 덮어쓰기
+            misfire_grace_time=600, # 실행이 지연되었을 때 최대 10분까지 허용
+            coalesce=True, # 실행이 지연되어서 여러개의 job이 밀렸으면 하나로 합침
+            max_instances=1, # 동시에 여러 인스턴스 실행 방지. A에이전트 실행 중인데 다음 A에이전트의 실행 시간이 되면 바로 실행하지 않고, 최대 10분까지 기다렸다가 실행. 만약 10분이 지나도 이전 작업이 끝나지 않으면 다음 작업은 건너뜀.
         )
         print(f"[Scheduler] 스케줄 등록: {agent_id}")
 
-    # 3. 앱 시작 시 트리거 에이전트 등록
+    # 4. scheduler엔진에 트리거 에이전트 등록
     for agent_id, meta in TRIGGER_REGISTRY.items():
         scheduler.add_job(
-            meta["func"],
+            meta["func"], # 실제 실행할 함수
             trigger="interval",
             **meta["interval"],
             id=agent_id,
-            replace_existing=True,
-            misfire_grace_time=600,
-            coalesce=True,
-            max_instances=1,
+            replace_existing=True,  # 기존에 같은 이름의 job이 있으면 덮어쓰기
+            misfire_grace_time=600, # 실행이 지연되었을 때 최대 10분까지 허용
+            coalesce=True, # 실행이 지연되어서 여러개의 job이 밀렸으면 하나로 합침
+            max_instances=1, # 동시에 여러 인스턴스 실행 방지. A에이전트 실행 중인데 다음 A에이전트의 실행 시간이 되면 바로 실행하지 않고, 최대 10분까지 기다렸다가 실행. 만약 10분이 지나도 이전 작업이 끝나지 않으면 다음 작업은 건너뜀.
         )
         print(f"[Scheduler] 트리거 등록: {agent_id}")
 
-    # 4. MongoDB에 저장된 BQ 분석 스케줄 복원 (서버 재시작 시 유지)
-    await restore_bq_schedules(scheduler)
+    # 5. MongoDB에 저장된 BQ 분석 스케줄 복원 (사용자가 등록한 스케줄 에이전트가 추가된다면 여기 추가해줘야함)
+    await restore_bq_schedules(scheduler) # 실적분석 빅쿼리 스케줄을 몽고DB에서 읽어서 여기 scheduler에 등록
 
-    # 5. MongoDB enabled=False인 job은 시작 시 바로 pause
+    # 6. MongoDB enabled=False인 job은 시작 시 바로 pause
     from src.core.mongo_client import boa_agents_collection
     cursor = boa_agents_collection.find({"enabled": False, "type": {"$in": ["schedule", "trigger"]}})
+    # 위의 cursor는 결과를 바로 반환하는 것이 아니라, find() 메서드가 반환하는 커서 객체. 실제 데이터를 얻으려면 아래처럼 to_list() 메서드를 사용해야 한다.
     disabled = await cursor.to_list(length=None)
     for agent in disabled:
         job = scheduler.get_job(agent["agent_id"])
@@ -147,22 +155,22 @@ app.include_router(device_job_router)
 @app.post("/chat")
 async def receive_message(request: Request, background_tasks: BackgroundTasks):
     event = await request.json()
-    print(f"[DEBUG FULL EVENT] {json.dumps(event, ensure_ascii=False)}")
+    print(f"[수신데이터 전문] {json.dumps(event, ensure_ascii=False)}")
 
     event_type = event.get("type")
 
-    # ── 스페이스 추가/제거 이벤트 무시 ────────────────────────────────────────
+    # ── 스페이스 추가/제거 이벤트도 API로 들어오지만 무시 ────────────────────────────────────────
     if event_type in ("ADDED_TO_SPACE", "REMOVED_FROM_SPACE"):
         return {}
 
     # ── 공통 필드 파싱 (확인된 실제 구조 기반) ─────────────────────────────────
-    user       = event.get("user", {})
-    user_id    = user.get("email", "")
-    user_name  = user.get("displayName", "")
-    space      = event.get("space", {})
-    space_name = space.get("name", "")
-    space_type = space.get("type", "")
-    display_name = space.get("displayName", "")
+    user       = event.get("user", {})              # 구글챗 사용자 정보 (json)
+    user_id    = user.get("email", "")              # 구글챗 사용자 이메일
+    user_name  = user.get("displayName", "")        # 구글챗 사용자 이름
+    space      = event.get("space", {})             # 구글챗 스페이스 정보 (json)
+    space_name = space.get("name", "")              # 구글챗 스페이스 이름
+    space_type = space.get("type", "")              # 구글챗 스페이스 타입
+    display_name = space.get("displayName", "")     # 구글챗 스페이스 표시 이름
 
     # ── 카드 인터랙션 처리 ────────────────────────────────────────────────────
     if event_type == "CARD_CLICKED":
@@ -171,7 +179,6 @@ async def receive_message(request: Request, background_tasks: BackgroundTasks):
         action_method = event.get("action", {}).get("actionMethodName", "")
 
         # BQ 분석 스케줄 등록
-        # BQ 스케줄 등록
         if action_method == "submitBqSchedule":
             form_inputs = event.get("common", {}).get("formInputs", {})
 

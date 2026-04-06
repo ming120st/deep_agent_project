@@ -27,7 +27,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from src.core.mongo_client import db
 from src.agent.schedule.bq_analysis_schedule.runner import run_scheduled_bq_analysis
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger(__name__) # 로깅
 
 bq_schedules_collection = db["boa_bq_schedules"]
 
@@ -71,13 +71,14 @@ def _add_to_scheduler(
     """APScheduler에 job 추가. interval 타입별 트리거 분기."""
     kwargs = {"query": query, "space_name": space_name, "schedule_id": schedule_id}
     common = dict(
-        id=schedule_id,
-        replace_existing=True,
-        misfire_grace_time=600,
-        coalesce=True,
+        id=schedule_id, # APScheduler job ID와 동일하게
+        replace_existing=True, # 기존에 같은 이름의 job이 있으면 덮어쓰기
+        misfire_grace_time=600, # 실행이 지연되었을 때 최대 10분까지 허용
+        coalesce=True, # 실행이 지연되어서 여러개의 job이 밀렸으면 하나로 합침
         kwargs=kwargs,
     )
 
+    # 현재 사용자가 /데이터분석스케줄 설정하는 카드에서 시간 간격 자체가 매시간/매일/매주월요일로 고정해놨다. 그냥 편의를 위해 그렇게 분류 해둔것.
     if interval == "hourly":
         scheduler.add_job(run_scheduled_bq_analysis, trigger="interval", hours=1, **common)
     elif interval == "weekly":
@@ -119,6 +120,7 @@ async def register_bq_schedule(
 
     schedule_id = _make_schedule_id(user_id)
 
+    # 몽고DB에 저장
     await bq_schedules_collection.insert_one({
         "schedule_id": schedule_id,
         "agent_name":  agent_name,
@@ -133,7 +135,9 @@ async def register_bq_schedule(
         "created_at":  datetime.utcnow(),
     })
 
+    # APScheduler에 등록
     _add_to_scheduler(scheduler, schedule_id, query, space_name, hour, minute, interval)
+    
     logger.info(f"[BqScheduleManager] 등록: {schedule_id} ({agent_name}) / {interval} {hour:02d}:{minute:02d}")
     return schedule_id
 
@@ -176,9 +180,9 @@ async def toggle_bq_schedule(
     if result.matched_count == 0:
         return False
 
-    job = scheduler.get_job(schedule_id)
+    job = scheduler.get_job(schedule_id) # 성공적으로 찾았다면 해당 작업을 조작할 수 있는 apscheduler.job.Job 객체를 넘겨준다.
     if job:
-        job.resume() if enabled else job.pause()
+        job.resume() if enabled else job.pause() # APScheduler는 job.pause()로 일시정지, job.resume()으로 재개, job.remove()로 삭제 가능
 
     logger.info(f"[BqScheduleManager] {'활성화' if enabled else '비활성화'}: {schedule_id}")
     return True

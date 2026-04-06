@@ -478,6 +478,8 @@ async def select_product(state: GraphState) -> GraphState:
         selected_codes = _parse_llm_json(llm_resp.content)
         if not isinstance(selected_codes, list):
             raise ValueError(f"list 아님: {type(selected_codes)}")
+        if not selected_codes:
+            raise ValueError("AI가 대체상품을 매칭하지 못하고 빈 배열을 반환함")
         print(f"[{AGENT_NAME}][3.3.8] AI 선정 성공: {selected_codes}")
     except Exception as e:
         print(f"[{AGENT_NAME}][3.3.8] AI 선정 파싱 오류: {e} → fallback(상위 5개)")
@@ -560,7 +562,7 @@ async def confirm_payload(state: GraphState) -> GraphState:
             "Qty":          params.get("request_qnt", 1),
             "Email":        order_info.get("email", ""),
             "Mobile":       order_info.get("mobile", ""),
-            "PaymentPrice": first["product_price"],
+            "PaymentPrice": 0,
             "UserID":       state.chat_context.get("user_id", ""),
         }
         _set_param(state, "current_payload",       payload)
@@ -571,13 +573,13 @@ async def confirm_payload(state: GraphState) -> GraphState:
     lines = [
         "아래 내용으로 이심 재발급을 진행할까요?\n",
         f"• 주문번호: {p.get('OutOrderId', '')}",
-        f"• 수신자: {p.get('Name', '')}",
+        f"• 이름: {p.get('Name', '')}",
+        f"• 이메일: {p.get('Email', '')}",
+        f"• 전화번호: {p.get('Mobile', '')}",
         f"• 상품명: {p.get('ProductName', '')}",
         f"• 상품코드: {p.get('ProductCode', '')}",
         f"• 수량: {p.get('Qty', '')}",
-        f"• 이메일: {p.get('Email', '')}",
-        f"• 전화번호: {p.get('Mobile', '')}",
-        f"• 건당 결제금액: {p.get('PaymentPrice', '')}원",
+        f"• 결제금액: {p.get('PaymentPrice', '')}원",
         "\n**확인** 또는 수정·상품변경 요청을 말씀해주세요.",
     ]
     state.add_ai_message("\n".join(lines))
@@ -693,7 +695,7 @@ async def process_confirmation(state: GraphState) -> GraphState:
             updated_payload = dict(updated_payload)
             updated_payload["ProductCode"]  = selected["product_code"]
             updated_payload["ProductName"]  = selected["product_name"]
-            updated_payload["PaymentPrice"] = selected["product_price"]
+            updated_payload["PaymentPrice"] = 0
             _set_param(state, "current_payload",       updated_payload)
             _set_param(state, "current_product_index", next_index)
             if msg:

@@ -158,7 +158,7 @@ AGENT_REGISTRY: dict = {
             },
             "order_id": {
                 "type":        "str",
-                "description": "이심 인트라넷 주문번호 (E로 시작, 예: E26031101886)",
+                "description": "이심 인트라넷 주문번호 (E로 시작, 예: E26031101886). 링크 제공 시 주문번호만 추출하여 사용.",
                 "required":    True,
             },
             "request_days": {
