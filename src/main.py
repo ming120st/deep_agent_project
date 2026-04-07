@@ -220,6 +220,29 @@ async def receive_message(request: Request, background_tasks: BackgroundTasks):
                 return {"text": msg}
             return {}
 
+        # 도움말 카드 — 에이전트 상세 사용방법 보기
+        if action_method == "showAgentHelp":
+            from src.agent.registry import AGENT_REGISTRY, SCHEDULE_REGISTRY, TRIGGER_REGISTRY
+            from src.core.google_chat import send_card
+            from src.workflow.main_graph.nodes.help_request import _build_agent_detail_card
+
+            # 버튼에서 전달된 agent_key 파싱
+            raw_params = event.get("action", {}).get("parameters", [])
+            agent_key  = next(
+                (p["value"] for p in raw_params if p.get("key") == "agent_key"),
+                None,
+            )
+
+            if agent_key:
+                all_registries = {**AGENT_REGISTRY, **SCHEDULE_REGISTRY, **TRIGGER_REGISTRY}
+                info = all_registries.get(agent_key)
+                if info:
+                    card_body = _build_agent_detail_card(agent_key, info)
+                    await send_card(space_name, card_body)
+                    return {}
+
+            return {"text": "⚠️ 해당 에이전트 정보를 찾을 수 없습니다."}
+
         # 다른 카드 클릭 이벤트는 여기서 추가 처리
         return {}
 

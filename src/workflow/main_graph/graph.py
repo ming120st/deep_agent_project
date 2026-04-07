@@ -98,16 +98,16 @@ async def execute_rag(state: GraphState):
 
     # ── 3. LLM 답변 생성 ──────────────────────────────────────────
     system_prompt = """당신은 와이드모바일의 내부 업무 지원 AI(BOA)입니다.
-아래 지식베이스 문서를 참고하여 질문에 답변하세요.
+    아래 지식베이스 문서를 참고하여 질문에 답변하세요.
 
-규칙:
-- 문서에 있는 내용만 답변하세요.
-- 문서에 없는 내용은 "해당 내용은 지식베이스에서 찾을 수 없습니다."라고 안내하세요.
-- 출처 문서 제목을 답변 마지막에 간략히 표시하세요.
-- 간결하고 명확하게 답변하세요.
+    규칙:
+    - 문서에 있는 내용만 답변하세요.
+    - 문서에 없는 내용은 "해당 내용은 지식베이스에서 찾을 수 없습니다."라고 안내하세요.
+    - 출처 문서 제목을 답변 마지막에 간략히 표시하세요.
+    - 간결하고 명확하게 답변하세요.
 
-[지식베이스 검색 결과]
-{context}"""
+    [지식베이스 검색 결과]
+    {context}"""
 
     prompt = system_prompt.format(context=context)
 
@@ -239,8 +239,10 @@ def route_by_action(state: GraphState):
         return "execute_rag"
     elif action_type == "light_response":
         return "execute_light_response"
+    elif action_type == "help_request":
+        return "execute_help_request"
     elif action_type in ("new_agent", "continue_task"):
-        return "extract_parameters"  # ← 파라미터 추출 노드로
+        return "extract_parameters"
 
     return "handle_unclear"
 
@@ -259,6 +261,7 @@ def build_main_graph():
     from src.workflow.main_graph.nodes.parameter_extractor import extract_parameters
     from src.workflow.main_graph.nodes.light_response import execute_light_response
     from src.agent.registry import AGENT_REGISTRY
+    from src.workflow.main_graph.nodes.help_request import execute_help_request
 
     # 그래프 인스턴스 생성
     workflow = StateGraph(GraphState)
@@ -272,6 +275,7 @@ def build_main_graph():
     workflow.add_node("handle_unclear", handle_unclear)
     workflow.add_node("handle_error", handle_error)
     workflow.add_node("send_response", send_response)
+    workflow.add_node("execute_help_request", execute_help_request)
 
     # ── 에이전트 노드/엣지 자동 등록 ─────────────────────────────────────
     for agent_name, agent_info in AGENT_REGISTRY.items():
@@ -288,6 +292,7 @@ def build_main_graph():
             "extract_parameters": "extract_parameters",  # ← new_agent, continue_task 둘 다
             "execute_rag": "execute_rag",
             "execute_light_response": "execute_light_response",
+            "execute_help_request":    "execute_help_request",
             "handle_unclear": "handle_unclear",
         },
     )
@@ -304,6 +309,7 @@ def build_main_graph():
     for node_name in ["execute_rag", "execute_light_response", "handle_unclear", "handle_error"]:
         workflow.add_edge(node_name, "send_response")
 
+    workflow.add_edge("execute_help_request", END) # 도움말 노드는 send_response를 거치지 않고 바로 END로 연결 (카드 전송 후 대화 종료)
     workflow.add_edge("send_response", END)
 
     return workflow.compile(checkpointer=checkpointer)

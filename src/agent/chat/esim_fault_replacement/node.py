@@ -17,6 +17,8 @@ from src.workflow.device_job.schemas import DeviceJobCallback, DeviceJobRequest
 from src.workflow.graph_infra.state import GraphState
 from datetime import datetime, timezone, timedelta
 from src.core.bq_logger import insert_row
+from google.oauth2 import service_account
+from google.cloud import bigquery as bq
 
 ################################################################################
 #  이심 재발급 업무 노드 (esim_fault_replacement)
@@ -42,6 +44,10 @@ MAX_RETRY  = 5
 DEVICE_JOB_URL    = os.getenv("DEVICE_JOB_URL", "")
 DEVICE_JOB_SECRET = os.getenv("DEVICE_JOB_SECRET", "")
 
+# 상품리스트 조회를 위한 BigQuery 설정
+_BQ_SALES_PROJECT = os.getenv("BQ_SALES_PROJECT_ID", "daily-report-widemobile")
+_BQ_SALES_DATASET = os.getenv("BQ_SALES_DATASET", "data_set")
+_BQ_KEY_RAW       = os.getenv("GOOGLE_SERVICE_ACCOUNT_KEY_PATH_GBQ", "")
 
 KST = timezone(timedelta(hours=9))
 
@@ -74,6 +80,55 @@ def _parse_llm_json(content):
         cleaned = "\n".join(lines)
     return json.loads(cleaned)
 
+def _get_bq_sales_client() -> bq.Client:
+    """판매 데이터용 BigQuery 클라이언트 생성."""
+    if _BQ_KEY_RAW:
+        import json as _json
+        key_info = _json.loads(_BQ_KEY_RAW)
+        creds = service_account.Credentials.from_service_account_info(
+            key_info,
+            scopes=["https://www.googleapis.com/auth/bigquery"],
+        )
+        return bq.Client(project=_BQ_SALES_PROJECT, credentials=creds)
+    return bq.Client(project=_BQ_SALES_PROJECT)  # ADC fallback
+
+
+async def _resolve_internal_product_code(product_code_public: str) -> str | None:
+    """
+    외부 상품코드(숫자) → 내부 상품코드(Product_Code) 변환.
+    esim_product_list 테이블에서 Product_Code_public 기준으로 조회.
+    못 찾으면 None 반환.
+    """
+    if not product_code_public:
+        return None
+
+    query = f"""
+        SELECT Product_Code
+        FROM `{_BQ_SALES_PROJECT}.{_BQ_SALES_DATASET}.esim_product_list`
+        WHERE Product_Code_public = @pub_code
+        LIMIT 1
+    """
+
+    job_config = bq.QueryJobConfig(
+        query_parameters=[
+            bq.ScalarQueryParameter("pub_code", "STRING", str(product_code_public))
+        ]
+    )
+    try:
+        import asyncio
+        loop = asyncio.get_event_loop()
+        client = _get_bq_sales_client()
+
+        def _run_query():
+            rows = list(client.query(query, job_config=job_config).result())
+            return rows[0]["Product_Code"] if rows else None
+
+        result = await loop.run_in_executor(None, _run_query)
+        print(f"[{AGENT_NAME}] BQ 코드 변환 | pub={product_code_public!r} → internal={result!r}")
+        return result
+    except Exception as e:
+        print(f"[{AGENT_NAME}] BQ 코드 변환 오류: {e}")
+        return None
 
 # ── 3.1 주요 파라미터 확보 ────────────────────────────────────────────────────
 
@@ -275,21 +330,30 @@ async def validate_iccid(state: GraphState) -> GraphState:
 # ── 3.3 상품 선정 ─────────────────────────────────────────────────────────────
 
 async def select_product(state: GraphState) -> GraphState:
-    """
-    상품 선정 노드 (3.3 전체).
-    - 동일 일수: 기존 상품코드 사용
-    - 다른 일수: alt_product_code 시도
-    - alt 실패: 국가명 입력 요청 → ISO 변환 → 국가 상품 조회 → AI 선정
-    """
     params        = _get_params(state)
-    product_code: str   = params.get("product_code", "")
-    product_name: str   = params.get("product_name", "")
-    days: int           = params.get("days")
-    price: float        = params.get("price", 0)
-    request_days: int   = params.get("request_days")
+    product_code_public: str = params.get("product_code", "")  # 외부(숫자) 코드
+    product_name: str        = params.get("product_name", "")
+    days: int                = params.get("days")
+    price: float             = params.get("price", 0)
+    request_days: int        = params.get("request_days")
 
     print(f"[{AGENT_NAME}][3.3] ══════════ select_product 진입 ══════════")
-    print(f"[{AGENT_NAME}][3.3] product_code={product_code!r}")
+    print(f"[{AGENT_NAME}][3.3] product_code_public(외부)={product_code_public!r}")
+
+    # ── 외부 코드 → 내부 코드 변환 ──────────────────────────────────────────
+    # 이미 변환된 내부 코드가 저장돼 있으면 재사용 (루프 재진입 시 중복 조회 방지)
+    product_code: str = params.get("_internal_product_code", "")
+    if not product_code:
+        resolved = await _resolve_internal_product_code(product_code_public)
+        if resolved:
+            product_code = resolved
+            _set_param(state, "_internal_product_code", product_code)
+        else:
+            # BQ 조회 실패 시 외부 코드를 그대로 fallback으로 사용
+            print(f"[{AGENT_NAME}][3.3] 내부 코드 변환 실패 → 외부 코드 fallback: {product_code_public!r}")
+            product_code = product_code_public
+
+    print(f"[{AGENT_NAME}][3.3] product_code(내부)={product_code!r}")
     print(f"[{AGENT_NAME}][3.3] product_name={product_name!r}")
     print(f"[{AGENT_NAME}][3.3] 구매일수(days)={days!r}  요청일수(request_days)={request_days!r}")
     print(f"[{AGENT_NAME}][3.3] price={price!r}")
@@ -304,11 +368,12 @@ async def select_product(state: GraphState) -> GraphState:
     print(f"[{AGENT_NAME}][3.3] 요청일수({request_days}) ≠ 구매일수({days}) → alt 코드 시도")
 
     # 3.3.2~3.3.3: alt_product_code 시도
+    # 우선 동일상품의 request_days 일수 버전이 있는지 시도해보고, 없으면 국가 기반 검색으로 fallback
     alt_product_code = re.sub(r"\d+D$", f"{request_days}D", product_code)
     print(f"[{AGENT_NAME}][3.3.2] re.sub 결과: {product_code!r} → {alt_product_code!r}")
 
     if alt_product_code != product_code:
-        print(f"[{AGENT_NAME}][3.3.2] alt 코드가 다름 → API 조회 시도: {alt_product_code!r}")
+        print(f"[{AGENT_NAME}][3.3.2] alt 코드가 다름(일수만 바꿔서 상품코드가 만들어짐) → API 조회 시도: {alt_product_code!r}")
         try:
             async with session_event(state.session_id, EventType.API_CALL, "대체 상품 조회 API",
                                       task_id=state.task_id) as ev:
@@ -320,7 +385,7 @@ async def select_product(state: GraphState) -> GraphState:
             if alt_response.get("resultCode") is True:
                 print(f"[{AGENT_NAME}][3.3.2] alt 코드 조회 성공 → {alt_product_code}")
                 _set_param(state, "raw_product_list",    [alt_product_code])
-                _set_param(state, "product_request_days", request_days)  # ★
+                _set_param(state, "product_request_days", request_days)
                 return state
             else:
                 print(f"[{AGENT_NAME}][3.3.2] alt 코드 조회 실패 → 국가 기반 검색으로 fallback")
@@ -554,7 +619,7 @@ async def confirm_payload(state: GraphState) -> GraphState:
         first    = product_list[0]
         order_id = params.get("order_id", "")
         payload  = {
-            "OutOrderId":   f"{order_id}재발송",
+            "OutOrderId":   f"{order_id}재발급",
             "Name":         order_info.get("name", ""),
             "ProductName":  first["product_name"],
             "ProductCode":  first["product_code"],
@@ -572,7 +637,7 @@ async def confirm_payload(state: GraphState) -> GraphState:
 
     lines = [
         "아래 내용으로 이심 재발급을 진행할까요?\n",
-        f"• 주문번호: {p.get('OutOrderId', '')}",
+        f"• 외부주문번호: {p.get('OutOrderId', '')}",
         f"• 이름: {p.get('Name', '')}",
         f"• 이메일: {p.get('Email', '')}",
         f"• 전화번호: {p.get('Mobile', '')}",
@@ -728,11 +793,11 @@ async def send_esim(state: GraphState) -> GraphState:
     out_order_num = 1
 
     success            = False
-    final_out_order_id = f"{order_id}재발송_{out_order_num}"
+    final_out_order_id = f"{order_id}재발급_{out_order_num}"
     fail_reason        = "MAX_RETRY 소진"
 
     for attempt in range(MAX_RETRY):
-        out_order_id       = f"{order_id}재발송_{out_order_num}"
+        out_order_id       = f"{order_id}재발급_{out_order_num}"
         final_out_order_id = out_order_id
         payload_i          = {**payload, "OutOrderId": out_order_id, "Qty": request_qnt}
 
@@ -772,7 +837,7 @@ async def send_esim(state: GraphState) -> GraphState:
             elif "이미 처리된 외부주문번호" in result_msg:
                 out_order_num += 1  # ← _1_1 대신 그냥 숫자 올림: _2, _3, ...
                 fail_reason = result_msg
-                print(f"[{AGENT_NAME}][3.6] 외부주문번호 중복 → {out_order_id!r} → {order_id}재발송_{out_order_num}로 재시도")
+                print(f"[{AGENT_NAME}][3.6] 외부주문번호 중복 → {out_order_id!r} → {order_id}재발급_{out_order_num}로 재시도")
 
             else:
                 fail_reason = result_msg or "resultCode=False"
@@ -791,7 +856,7 @@ async def send_esim(state: GraphState) -> GraphState:
             if "이미 처리된 외부주문번호" in result_msg:
                 out_order_num += 1
                 fail_reason = result_msg
-                print(f"[{AGENT_NAME}][3.6] 외부주문번호 중복 오류({e.response.status_code}) → {out_order_id!r} → {order_id}재발송_{out_order_num}로 재시도")
+                print(f"[{AGENT_NAME}][3.6] 외부주문번호 중복 오류({e.response.status_code}) → {out_order_id!r} → {order_id}재발급_{out_order_num}로 재시도")
             else:
                 fail_reason = result_msg or f"HTTP {e.response.status_code}"
                 print(f"[{AGENT_NAME}][3.6] HTTP 오류 | attempt={attempt + 1}, status={e.response.status_code}")
@@ -935,7 +1000,7 @@ async def register_consultation(state: GraphState) -> GraphState:
         p = payload
         lines = [
             "✅ 이심 재발급 및 상담 등록이 완료되었습니다.\n",
-            f"• 주문번호: {p.get('OutOrderId', '')}",
+            f"• 외부주문번호: {p.get('OutOrderId', '')}",
             f"• 수신자: {p.get('Name', '')}",
             f"• 상품명: {p.get('ProductName', '')}",
             f"• 상품코드: {p.get('ProductCode', '')}",
@@ -950,7 +1015,7 @@ async def register_consultation(state: GraphState) -> GraphState:
         error_msg = callback.error_message or "알 수 없는 오류"
         lines = [
             "⚠️ 이심 발송은 완료되었으나 상담 등록 중 오류가 발생했습니다.\n",
-            f"• 주문번호: {payload.get('OutOrderId', '')}",
+            f"• 외부주문번호: {payload.get('OutOrderId', '')}",
             f"• 수신자: {payload.get('Name', '')}",
             f"• 상품명: {payload.get('ProductName', '')}",
             f"• 상품코드: {payload.get('ProductCode', '')}",

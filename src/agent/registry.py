@@ -29,6 +29,7 @@ from src.core.rag_engine import reload_rag_index_if_updated
 # from src.triggers.xxx import xxx  ← 트리거 추가할 때마다 import
 
 from src.core.mongo_client import boa_agents_collection
+import src.agent.usage_guide as usage_guide  # 에이전트별 사용 가이드 텍스트 (src/agent/usage_guide.py에서 정의)
 
 # ── 대화형 에이전트 ────────────────────────────────────────────────────────────
 AGENT_REGISTRY: dict = {
@@ -36,6 +37,9 @@ AGENT_REGISTRY: dict = {
         "type":         "chat",
         "display_name": "와이파이 사용량 조회",
         "description":  "와이파이도시락 데이터 사용량을 조회하여 알려주는 에이전트입니다. 사용자가 단말 IMEI와 조회 기간을 입력하면, 해당 기간 동안의 데이터 사용량을 조회하여 알려줍니다. 또한, 결과를 이메일로 발송할 수 있습니다.",
+        "description_short": "와이파이도시락 데이터 사용량 조회(당일데이터 조회불가)",
+        "visible":      True,  # 도움말 카드 노출 여부
+        "usage_guide": usage_guide.wifi_usage_inquiry, # 도움말 카드 상세설명
         "enabled":      True,
         "graph":        wifi_usage_inquiry_graph,
         "parameters": {
@@ -77,6 +81,9 @@ AGENT_REGISTRY: dict = {
         "description":  "eSIM 주문 취소 신청을 처리하는 에이전트. "
                         "이심 인트라넷 주문번호를 제공하면 취소 가능 여부를 확인 후 취소신청을 접수합니다. "
                         "이심 취소, 이심 주문 취소, eSIM 취소 등 이심 주문 취소 관련 요청에 사용합니다.",
+        "description_short": "eSIM 주문 취소 처리 (부분취소 불가, 전체 취소만 가능)",
+        "visible":      True,  # 도움말 카드 노출 여부
+        "usage_guide": usage_guide.esim_order_cancellation, # 도움말 카드 상세설명
         "enabled":      True,
         "graph":        esim_order_cancellation_graph,
         "parameters": {
@@ -99,19 +106,26 @@ AGENT_REGISTRY: dict = {
     },
     "bigquery_agent": {
         "type": "chat",
-        "display_name": "데이터 분석 에이전트",
+        "display_name": "데이터 분석 에이전트(판매/매출)",
         "description": "BigQuery 데이터 조회 및 매출 분석 리포트 생성."
                        "와이파이,유심,이심 대상으로 간단한 분석부터 복잡한 분석까지 데이터 분석이 필요한 모든 요청에 사용합니다.",
+        "description_short": "와이파이/유심/이심 판매 데이터분석 및 리포트 생성",
+        "visible": True,
+        "usage_guide": usage_guide.sales_data_analysis, # 도움말 카드 상세설명
         "graph": bigquery_agent_node,  # DeepAgent 노드 함수 (LangGraph subgraph 아님)
         "enabled": True,
     },
     "esim_resend": {
         "type":         "chat",
-        "display_name": "이심 재발송",
+        "display_name": "이심 QR 재발송",
         "description":  "고객의 eSIM QR코드를 재발송하는 에이전트. "
                         "담당자가 주문번호를 입력하면 해당 주문의 이심 상품 목록을 조회하고, "
                         "재발송할 항목과 수신처(이메일/전화번호)를 확인하여 재발송을 처리합니다. "
-                        "이심 재발송, QR 재전송, eSIM 재발송 등 재발송 관련 요청에 사용합니다.",
+                        "이심 재발송, QR 재전송, eSIM 재발송 등 재발송 관련 요청에 사용합니다."
+                        "이심 재발급 업무와 달리, 재발송은 기존 주문의 상품을 그대로 재발송하는 것으로, 기존 구매한 eSIM의 문제로 상품 변경이나 재발급이 필요한 경우에는 이심 재발급 에이전트를 이용해야 합니다.",
+        "visible":      True,
+        "usage_guide": usage_guide.esim_resend, # 도움말 카드 상세설명
+        "description_short": "고객의 eSIM QR코드 재발송 처리(재발급과는 다름)",
         "enabled":      True,
         "graph":        esim_resend_graph,
         "parameters": {
@@ -147,7 +161,10 @@ AGENT_REGISTRY: dict = {
         "display_name": "이심 재발급",
         "description":  "고객이 구매한 이심 사용 중 문제 발생 시 대체 이심을 발송하는 에이전트. "
                         "주문번호, 재발급 사용일수, 수량을 입력하면 대체 상품을 선정하여 재발급 처리 및 상담 등록을 진행합니다. "
-                        "이심 재발급, 이심 불량 교체, eSIM 대체 발송, 이심 재발송 등의 요청에 사용합니다.",
+                        "이심 재발급, 이심 불량 교체, eSIM 대체 발송 등의 요청에 사용합니다.",
+        "visible":      True,
+        "usage_guide": usage_guide.esim_fault_replacement, # 도움말 카드 상세설명
+        "description_short": "이심 재발급. 사용 중 문제 발생 시 대체 이심 발송 처리",
         "enabled":      True,
         "graph":        esim_fault_replacement_graph,
         "parameters": {
@@ -181,6 +198,9 @@ AGENT_REGISTRY: dict = {
                     "단말기 번호(IMEI)와 사용 국가, 만료일을 입력하면 잔여량이 충분한 "
                     "SIM을 찾아 자동으로 회선을 변경합니다. "
                     "와이파이 회선변경, SIM 교체, 회선 교체, 회선 변경 등의 요청에 사용합니다.",
+        "visible":      True,
+        "usage_guide": usage_guide.wifi_line_change, # 도움말 카드 상세설명
+        "description_short": "와이파이 회선 변경 에이전트",
         "enabled":      True,
         "graph":        wifi_line_change_graph,
         "parameters": {
@@ -215,6 +235,9 @@ AGENT_REGISTRY: dict = {
     "type":         "schedule",
     "display_name": "일일 리포트",
     "description":  "매일 오전 8시 영업 리포트를 구성원에게 발송합니다.",
+    "description_short": "매일 오전 8시 영업 리포트 발송",
+    "visible":      True,
+    "usage_guide": usage_guide.daily_report, # 도움말 카드 상세설명
     "enabled":      True,
     "cron":         {"hour": 8, "minute": 0},   # APScheduler cron 파라미터
     "func":         run_daily_report,
@@ -231,6 +254,8 @@ TRIGGER_REGISTRY: dict = {
         "type":         "trigger",
         "display_name": "지식베이스 검토 요청",
         "description":  "검토 기한이 지난 지식베이스 문서를 매일 오전 9시에 확인하여 담당자에게 검토를 요청합니다.",
+        "visible":      False,
+        "usage_guide": usage_guide.stale_docs, # 도움말 카드 상세설명
         "enabled":      True,
         "interval":     {"hours": 24},
         "func":         check_stale_docs,
@@ -240,6 +265,8 @@ TRIGGER_REGISTRY: dict = {
         "type":         "trigger",
         "display_name": "RAG 인덱스 동기화",
         "description":  "10분마다 Azure Blob Storage의 FAISS 인덱스 버전을 체크하여 변경 시 reload합니다.",
+        "visible":      False,
+        "usage_guide": usage_guide.rag_index_reload, # 도움말 카드 상세설명
         "enabled":      True,
         "interval":     {"minutes": 10},
         "func":         reload_rag_index_if_updated,

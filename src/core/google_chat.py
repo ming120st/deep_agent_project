@@ -158,6 +158,36 @@ async def send_message(space_name: str, message: str) -> bool:
         print(f"[GoogleChat] 전송 실패 ({space_name}): {e}")
         return False
 
+# ── 카드 메시지 전송 ───────────────────────────────────────────────────────────
+
+def _send_card_sync(space_name: str, card_body: dict) -> bool:
+    """동기 카드 전송 (내부용)."""
+    chat_service.spaces().messages().create(
+        parent=space_name,
+        body=card_body,
+    ).execute()
+    return True
+
+
+async def send_card(space_name: str, card_body: dict) -> bool:
+    """
+    space_name으로 Card v2 메시지를 전송합니다.
+
+    Args:
+        space_name: Google Chat space 리소스명 (예: "spaces/XXXXXXXXXX")
+        card_body:  cardsV2 포함한 메시지 body dict
+
+    Returns:
+        True: 성공 / False: 실패
+    """
+    try:
+        await asyncio.to_thread(_send_card_sync, space_name, card_body)
+        print(f"[GoogleChat] 카드 전송 완료 → {space_name}")
+        return True
+    except Exception as e:
+        print(f"[GoogleChat] 카드 전송 실패 ({space_name}): {e}")
+        return False
+
 
 # ── DM 유틸리티 ───────────────────────────────────────────────────────────────
 def _find_or_create_dm_space_sync(user_name: str) -> str:
@@ -211,3 +241,5 @@ async def send_dm(user_name: str, message: str) -> bool:
     except Exception as e:
         print(f"[GoogleChat] DM 발송 실패 ({user_name}): {e}")
         return False
+
+
