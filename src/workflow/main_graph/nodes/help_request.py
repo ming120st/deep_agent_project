@@ -121,8 +121,8 @@ def _build_help_list_card() -> dict:
             "cardId": "boa-help-card",
             "card": {
                 "header": {
-                    "title": "BOA 기능 안내",
-                    "subtitle": "사용 가능한 에이전트 목록",
+                    "title": "시락이가 할 수 있는 일들",
+                    "subtitle": "리스트 아래 토글버튼을 눌러 사용방법도 확인해보세요!",
                     "imageUrl": (
                         "https://fonts.gstatic.com/s/i/googlematerialicons"
                         "/smart_toy/v1/googlematerialicons-smart_toy-24px.svg"
