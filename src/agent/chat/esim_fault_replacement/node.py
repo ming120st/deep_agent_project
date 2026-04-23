@@ -43,6 +43,7 @@ MAX_RETRY  = 5
 
 DEVICE_JOB_URL    = os.getenv("DEVICE_JOB_URL", "")
 DEVICE_JOB_SECRET = os.getenv("DEVICE_JOB_SECRET", "")
+JOB_CALLBACK_TIMEOUT = 60  # DeviceJob 콜백 최대 대기 시간 (초, 기본 1분)
 
 # 상품리스트 조회를 위한 BigQuery 설정
 _BQ_SALES_PROJECT = os.getenv("BQ_SALES_PROJECT_ID", "daily-report-widemobile")
@@ -704,18 +705,20 @@ async def process_confirmation(state: GraphState) -> GraphState:
         f"사용자 메시지: {user_message}\n\n"
         "응답 형식:\n"
         "{\n"
-        '  "action": "confirm" | "modify" | "change_product",\n'
+        '  "action": "confirm" | "modify" | "change_product" | "show",\n'
         '  "updated_payload": { },\n'
         f'  "next_product_index": {current_product_index},\n'
         '  "message_to_user": "..."\n'
         "}\n\n"
         "규칙:\n"
-        "- confirm: 사용자가 내용에 동의함\n"
+        "- confirm: 사용자가 '확인', '진행', '맞아요' 등 명확하게 동의·승인 의사를 표현한 경우\n"
+        "- show: '다시 보여줘', '보여줘', '내용 알려줘', '재발급 내용은?' 등 조회만 요청거나 이전 응답이 채팅방에 전달되지 않은 오류로 에이전트를 부르는 경우 (확인·승인 아님)\n"
         "- modify: 특정 필드 수정 요청 (수정 가능 필드: Email, Mobile, Qty)\n"
         "- change_product: 상품 교체 요청 (next_product_index로 product_list에서 선택)\n"
         "- 수정 불가 필드(OutOrderId, UserID, JoinRoute, ProductCode, ProductName, PaymentPrice) "
         "변경 요청 시 action=modify, updated_payload 변경 없이, message_to_user에 '해당 항목은 수정이 불가합니다' 안내\n"
         "- updated_payload는 전체 payload를 반환 (수정된 버전 또는 기존 그대로)\n"
+        "- 단순 조회·확인 요청은 반드시 show로 분류하고 절대 confirm으로 분류하지 말 것\n"
         "JSON만 반환."
     )
 
@@ -766,6 +769,11 @@ async def process_confirmation(state: GraphState) -> GraphState:
             if msg:
                 state.add_ai_message(msg)
         _set_param(state, "payload_shown", False)
+
+    elif action == "show":
+        # 재발급 내용 다시 보여달라는 요청 → confirm_payload가 재표시되도록 payload_shown 리셋
+        _set_param(state, "payload_shown", False)
+        print(f"[{AGENT_NAME}] process_confirmation: show 요청 → confirm_payload 재표시")
 
     return state
 
@@ -957,6 +965,7 @@ async def register_consultation(state: GraphState) -> GraphState:
         )
         job_id = req.job_id
         _set_param(state, "_job_id", job_id)  # ★ interrupt() 전에 반드시 저장
+        _set_param(state, "_job_sent_at", datetime.now(timezone.utc).isoformat())  # ★ 타임아웃 계산용
 
         await create_device_job(job_id, thread_id, task_id=state.task_id)
 
@@ -983,6 +992,38 @@ async def register_consultation(state: GraphState) -> GraphState:
         state.add_ai_message("상담 등록 작업을 PC에이전트에 전달했습니다. 잠시만 기다려주세요.")
         await add_event(state.session_id, EventType.HITL_WAIT, "DeviceJob 콜백 대기", task_id=state.task_id)
         await set_waiting(state, result=f"DeviceJob 대기 중: {job_id}")
+
+    # ── 콜백 타임아웃 체크 (재진입 시) ──────────────────────────────────────
+    # 새 사용자 메시지가 오면 graph는 START부터 재실행되므로 register_consultation에 재진입함.
+    # job이 이미 발송됐지만 JOB_CALLBACK_TIMEOUT 초 이상 콜백이 없으면 수동 처리 안내 후 종료.
+    job_sent_at_str = params.get("_job_sent_at")
+    if job_id and job_sent_at_str and not params.get("_callback_processed"):
+        try:
+            job_sent_at = datetime.fromisoformat(job_sent_at_str)
+            elapsed = (datetime.now(timezone.utc) - job_sent_at).total_seconds()
+            if elapsed > JOB_CALLBACK_TIMEOUT:
+                print(f"[{AGENT_NAME}] DeviceJob 콜백 타임아웃 ({elapsed:.0f}초 경과) → 수동 처리 안내")
+                p = payload
+                lines = [
+                    "⚠️ 이심 발송은 완료되었으나 상담 등록 응답 대기 시간이 초과되었습니다.\n",
+                    f"• 외부주문번호: {p.get('OutOrderId', '')}",
+                    f"• 수신자: {p.get('Name', '')}",
+                    f"• 상품명: {p.get('ProductName', '')}",
+                    f"• 상품코드: {p.get('ProductCode', '')}",
+                    f"• 수량: {p.get('Qty', '')}",
+                    f"• 이메일: {p.get('Email', '')}",
+                    f"• 전화번호: {p.get('Mobile', '')}",
+                    "\n수동으로 상담 등록을 확인해주세요.",
+                ]
+                state.add_ai_message("\n".join(lines))
+                await add_event(state.session_id, EventType.COMPLETE,
+                                "이심 발송 완료, 상담 등록 타임아웃", task_id=state.task_id)
+                await set_completed(state, result="이심 발송 완료, 상담 등록 타임아웃")
+                _set_param(state, "job_done", True)
+                state.current_agent = None
+                return state  # interrupt() 호출 없이 종료
+        except Exception as e:
+            print(f"[{AGENT_NAME}] 타임아웃 체크 오류: {e}")
 
     # interrupt — /device-callback 수신 시 자동 재개
     callback_payload: dict = interrupt({"job_id": job_id, "status": "waiting"})
