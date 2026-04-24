@@ -33,3 +33,7 @@ session_logs_collection = db['session_logs']
 # session_logs_collection.create_index('user_id')
 # session_logs_collection.create_index('started_at')
 # session_logs_collection.create_index('turns.events.task_id')
+
+boa_knowledge_conflicts_collection  = db["boa_knowledge_conflicts"]
+boa_knowledge_gaps_collection       = db["boa_knowledge_gaps"]
+boa_knowledge_ingest_log_collection = db["boa_knowledge_ingest_log"]

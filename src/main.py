@@ -41,7 +41,7 @@ from src.workflow.main_graph.graph import main_graph
 from src.dashboard.auth import router as auth_router
 from src.dashboard.task_router import router as dashboard_router
 from src.dashboard.sessions_router import router as sessions_router
-from src.dashboard.knowledge_router import router as knowledge_router
+from src.dashboard.knowledge_v2_router import router as knowledge_v2_router
 from src.dashboard.device_job_router import router as device_job_router
 from src.dashboard.members_router import router as members_router
 from src.dashboard.spaces_router import router as spaces_router
@@ -84,6 +84,10 @@ async def lifespan(app: FastAPI):
     # 2. RAG 엔진 초기화 (Blob → 없으면 MongoDB 전체 빌드)
     from src.core.rag_engine import init_rag_engine
     await init_rag_engine()
+
+    # 2-1. KB v2 인덱스 확인/생성
+    from src.dashboard.knowledge_v2_router import ensure_kb_v2_indexes
+    await ensure_kb_v2_indexes()
 
     # 3. scheduler엔진에 스케줄 에이전트 등록
     for agent_id, meta in SCHEDULE_REGISTRY.items():
@@ -146,7 +150,7 @@ app.include_router(sessions_router)
 app.include_router(agents_router)
 app.include_router(members_router)
 app.include_router(spaces_router)
-app.include_router(knowledge_router)
+app.include_router(knowledge_v2_router)
 app.include_router(device_job_router)
 
 

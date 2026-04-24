@@ -200,9 +200,8 @@ class RAGEngine:
             start = time.time()
 
             cursor = boa_knowledge_collection.find(
-                {"status": {"$ne": "archived"}},
-                {"doc_id": 1, "title": 1, "content": 1, "service": 1,
-                 "category": 1, "status": 1, "tags": 1}
+                {"schema_version": 2},
+                {"_id": 1, "title": 1, "description": 1, "tags": 1, "status": 1, "domain": 1}
             )
             docs = await cursor.to_list(length=None)
 
@@ -213,8 +212,13 @@ class RAGEngine:
                 await asyncio.to_thread(self._save_index_to_blob_sync)
                 return
 
-            # 임베딩 생성 (제목 + 내용 결합)
-            texts = [f"{d.get('title', '')} {d.get('content', '')}" for d in docs]
+            # 임베딩 생성 (description + tags)
+            def _make_embed_text(d: dict) -> str:
+                desc = d.get("description") or d.get("title", "")
+                tags = d.get("tags") or []
+                return desc + (" " + " ".join(tags) if tags else "")
+
+            texts = [_make_embed_text(d) for d in docs]
             embeddings = await self.embed(texts)
 
             # FAISS 인덱스 구성
@@ -224,12 +228,12 @@ class RAGEngine:
             self.index = index
             self.meta  = [
                 {
-                    "doc_id":   str(d["doc_id"]),
-                    "title":    d.get("title", ""),
-                    "service":  d.get("service", ""),
-                    "category": d.get("category", ""),
-                    "status":   d.get("status", ""),
-                    "tags":     d.get("tags", []),
+                    "_id":         str(d["_id"]),
+                    "title":       d.get("title", ""),
+                    "description": d.get("description", ""),
+                    "tags":        d.get("tags", []),
+                    "status":      d.get("status", ""),
+                    "domain":      d.get("domain"),
                 }
                 for d in docs
             ]
@@ -241,7 +245,9 @@ class RAGEngine:
     # ── 단일 문서 업데이트 ─────────────────────────────────────────────────────
 
     async def upsert_doc(self, doc_id: str, title: str, content: str,
-                          service: str, category: str, status: str, tags: list) -> None:
+                          service: str = "", category: str = "",
+                          status: str = "", tags: list = None,
+                          description: str = "", domain: str = None) -> None:
         """
         문서 저장/수정 시 호출. 기존 항목 제거 후 재추가.
         FAISS는 단일 삭제가 안 돼서 IDMap2로 감싸는 방식 사용.
@@ -251,12 +257,17 @@ class RAGEngine:
                 await self.build_from_mongo()
                 return
 
-            text = f"{title} {content}"
-            embedding = await self.embed([text])  # (1, DIM)
+            tags = tags or []
+            # description이 있으면 description+tags 임베딩, 없으면 title+content 폴백
+            if description:
+                embed_text = description + (" " + " ".join(tags) if tags else "")
+            else:
+                embed_text = f"{title} {content}"
+            embedding = await self.embed([embed_text])  # (1, DIM)
 
             # 기존 항목 제거 (meta에서 찾아서 해당 FAISS 행 마킹)
             existing_idx = next(
-                (i for i, m in enumerate(self.meta) if m["doc_id"] == doc_id), None
+                (i for i, m in enumerate(self.meta) if m["_id"] == doc_id), None
             )
 
             if existing_idx is not None:
@@ -269,12 +280,12 @@ class RAGEngine:
             # 새 항목 추가
             self.index.add(embedding)
             self.meta.append({
-                "doc_id":   doc_id,
-                "title":    title,
-                "service":  service,
-                "category": category,
-                "status":   status,
-                "tags":     tags,
+                "_id":         doc_id,
+                "title":       title,
+                "description": description,
+                "tags":        tags,
+                "status":      status,
+                "domain":      domain,
             })
 
             await asyncio.to_thread(self._save_index_to_blob_sync)
@@ -287,7 +298,7 @@ class RAGEngine:
                 return
 
             existing_idx = next(
-                (i for i, m in enumerate(self.meta) if m["doc_id"] == doc_id), None
+                (i for i, m in enumerate(self.meta) if m["_id"] == doc_id), None
             )
             if existing_idx is None:
                 return
@@ -303,20 +314,22 @@ class RAGEngine:
             self.index = faiss.IndexFlatIP(EMBEDDING_DIM)
             return
 
-        doc_ids = [m["doc_id"] for m in self.meta]
+        topic_ids = [m["_id"] for m in self.meta]
         cursor = boa_knowledge_collection.find(
-            {"doc_id": {"$in": doc_ids}},
-            {"doc_id": 1, "title": 1, "content": 1}
+            {"_id": {"$in": topic_ids}},
+            {"_id": 1, "title": 1, "description": 1, "tags": 1}
         )
         docs = await cursor.to_list(length=None)
-        doc_map = {d["doc_id"]: d for d in docs}
+        doc_map = {str(d["_id"]): d for d in docs}
 
         texts = []
         valid_meta = []
         for m in self.meta:
-            d = doc_map.get(m["doc_id"])
+            d = doc_map.get(m["_id"])
             if d:
-                texts.append(f"{d.get('title', '')} {d.get('content', '')}")
+                desc = d.get("description") or d.get("title", "")
+                tags = d.get("tags") or []
+                texts.append(desc + (" " + " ".join(tags) if tags else ""))
                 valid_meta.append(m)
 
         if not texts:
@@ -514,119 +527,70 @@ async def search_knowledge(
     query: str,
     top_k: int = 3,
     service: Optional[str] = None,
-    use_hyde: bool = True,
-    use_rerank: bool = True,
+    use_hyde: bool = False,   # P2: description 기반 직접 검색으로 변경. HyDE 효과 재검증 후 결정.
+    use_rerank: bool = False, # P2: TopicGraphRetriever가 자체 선택 로직 수행.
 ) -> dict:
     """
-    전체 RAG 파이프라인 실행.
-
-    1. HyDE: 질문 → 가상 문서 생성
-    2. Vector Search: FAISS에서 top_k*3 후보 검색
-    3. Reranking: Claude로 top_k로 압축
-    4. MongoDB에서 실제 content 로드
-    5. 반환
+    FAISS 벡터 검색 → topic 후보 반환.
 
     반환:
     {
-        "results": [{"doc_id", "title", "service", "category",
-                     "content_preview", "score", "url"}, ...],
-        "pipeline": "hyde+vector+rerank" | "vector" | "fallback"
+        "results": [{"topic_id", "title", "description", "score"}, ...],
+        "pipeline": "vector" | "fallback" | "empty"
     }
     """
     engine = get_engine()
     pipeline_steps = []
 
-    # ── Step 1: HyDE ──────────────────────────────────────────────────────────
-    search_query = query
-    if use_hyde and engine.index and engine.index.ntotal > 0:
-        hyde_doc = await generate_hyde_document(query)
-        search_query = hyde_doc
-        pipeline_steps.append("hyde")
-        logger.info(f"[RAG] HyDE 생성: {hyde_doc[:60]}...")
-
-    # ── Step 2: Vector Search ─────────────────────────────────────────────────
+    # ── Vector Search ─────────────────────────────────────────────────────────
     candidates = []
     if engine.index and engine.index.ntotal > 0:
         candidates = await engine.vector_search(
-            query=search_query,
-            top_k=top_k * 3,
+            query=query,
+            top_k=top_k,
             service=service,
         )
         pipeline_steps.append("vector")
         logger.info(f"[RAG] 벡터 검색 후보: {len(candidates)}건")
 
-    # ── Step 3: MongoDB 텍스트 검색 fallback ──────────────────────────────────
+    # ── MongoDB 텍스트 검색 fallback ──────────────────────────────────────────
     if not candidates:
         logger.info("[RAG] FAISS 결과 없음 → MongoDB 텍스트 검색 fallback")
         mongo_query: dict = {
-            "status": {"$ne": "archived"},
+            "schema_version": 2,
             "$or": [
-                {"title":   {"$regex": query, "$options": "i"}},
-                {"content": {"$regex": query, "$options": "i"}},
-                {"tags":    {"$elemMatch": {"$regex": query, "$options": "i"}}},
+                {"title":       {"$regex": query, "$options": "i"}},
+                {"description": {"$regex": query, "$options": "i"}},
+                {"tags":        {"$elemMatch": {"$regex": query, "$options": "i"}}},
             ]
         }
-        if service:
-            mongo_query["service"] = service
-
         cursor = boa_knowledge_collection.find(
             mongo_query,
-            {"doc_id": 1, "title": 1, "service": 1, "category": 1, "status": 1}
+            {"_id": 1, "title": 1, "description": 1, "tags": 1, "status": 1, "domain": 1}
         ).limit(top_k)
         docs = await cursor.to_list(length=None)
         candidates = [
-            {"doc_id": str(d["doc_id"]), "title": d.get("title", ""),
-             "service": d.get("service", ""), "category": d.get("category", ""),
-             "status": d.get("status", ""), "score": 0.5}
+            {
+                "_id":         str(d["_id"]),
+                "title":       d.get("title", ""),
+                "description": d.get("description", ""),
+                "tags":        d.get("tags", []),
+                "status":      d.get("status", ""),
+                "domain":      d.get("domain"),
+                "score":       0.5,
+            }
             for d in docs
         ]
         pipeline_steps.append("fallback")
 
-    # ── Step 4: Reranking ─────────────────────────────────────────────────────
-    if use_rerank and len(candidates) > top_k:
-        candidates = await rerank_results(query, candidates, top_n=top_k)
-        pipeline_steps.append("rerank")
-        logger.info(f"[RAG] 리랭킹 후: {len(candidates)}건")
-    else:
-        candidates = candidates[:top_k]
-
-    # ── Step 5: MongoDB에서 content_preview 로드 ──────────────────────────────
-    doc_ids = [c["doc_id"] for c in candidates]
-    cursor = boa_knowledge_collection.find(
-        {"doc_id": {"$in": doc_ids}},
-        {"doc_id": 1, "content": 1, "updated_at": 1}
-    )
-    content_map = {}
-    async for doc in cursor:
-        full = doc.get("content", "")
-        # 질문 키워드 주변 컨텍스트 추출
-        idx = full.lower().find(query.lower())
-        if idx != -1:
-            start = max(0, idx - 80)
-            end   = min(len(full), idx + len(query) + 80)
-            preview = ("..." if start > 0 else "") + full[start:end] + ("..." if end < len(full) else "")
-        else:
-            preview = full[:160] + ("..." if len(full) > 160 else "")
-
-        updated_at = doc.get("updated_at")
-        content_map[str(doc["doc_id"])] = {
-            "preview":    preview,
-            "updated_at": updated_at.isoformat() if hasattr(updated_at, "isoformat") else str(updated_at or ""),
-        }
-
     # ── 최종 결과 조합 ────────────────────────────────────────────────────────
     results = []
     for c in candidates:
-        meta = content_map.get(c["doc_id"], {})
         results.append({
-            "doc_id":          c["doc_id"],
-            "title":           c["title"],
-            "service":         c["service"],
-            "category":        c["category"],
-            "status":          c["status"],
-            "score":           round(c["score"], 4),
-            "content_preview": meta.get("preview", ""),
-            "updated_at":      meta.get("updated_at", ""),
+            "topic_id":    c.get("_id", ""),
+            "title":       c.get("title", ""),
+            "description": c.get("description", ""),
+            "score":       round(c.get("score", 0.0), 4),
         })
 
     return {

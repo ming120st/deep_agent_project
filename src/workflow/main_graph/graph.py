@@ -44,108 +44,118 @@ from src.core.mongo_client import boa_agents_collection
 
 from src.core.session_logger import add_event, session_event, update_turn_meta, EventType, build_llm_meta
 
-# ── 임시 노드 (틀) ─────────────────────────────────────────────────────────────
+import logging
+logger = logging.getLogger(__name__)
+
+
+def _extract_text(content) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "".join(b.get("text", "") if isinstance(b, dict) else str(b) for b in content)
+    return str(content)
+
 
 async def execute_rag(state: GraphState):
     """
-    RAG 노드: 지식베이스 검색 → LLM 답변 생성
+    RAG 노드: TopicGraphRetriever로 지식 탐색 → 하이브리드 정책 적용 → LLM 답변 생성
     """
     session_id = state.session_id
     await update_turn_meta(session_id, intent="rag")
 
-    import json
-    from src.core.rag_engine import search_knowledge
+    from src.core.topic_graph_retriever import TopicGraphRetriever
+    from src.core.gap_recorder import record_gap
     from src.core.llm_config import LLM_LIGHT
 
     user_query = state.get_last_user_message() or ""
 
-    # ── 1. RAG 검색 ───────────────────────────────────────────────
+    # ── 1. TopicGraphRetriever 검색 ───────────────────────────────
+    retriever = TopicGraphRetriever()
     try:
-        rag_result = await search_knowledge(query=user_query, top_k=3)
-        docs = rag_result.get("results", [])
-        
-        await add_event(session_id, EventType.RAG_SEARCH, "지식베이스 검색",
-                        content=f"{len(docs)}건 검색됨",
-                        meta={"docs": [{"title": d["title"], "score": d.get("score")} for d in docs]})
+        result = await retriever.retrieve(query=user_query, session_id=session_id)
+
+        await add_event(session_id, EventType.RAG_SEARCH, "지식베이스 탐색",
+                        content=f"{result.total_hops}홉, {len(result.visited_topic_ids)}개 주제",
+                        meta={
+                            "visited": result.visited_topic_ids,
+                            "has_context": result.has_context,
+                            "gap_flag": result.gap_flag,
+                        })
     except Exception as e:
-        print(f"[RAG] 검색 실패: {e}")
-        docs = []
+        logger.error("[RAG] retriever 실패: %s", e)
+        result = None
 
-    # ── 2. MongoDB에서 full content 로드 ─────────────────────────
-    if docs:
-        from src.core.mongo_client import boa_knowledge_collection
-        doc_ids = [d["doc_id"] for d in docs]
-        cursor = boa_knowledge_collection.find(
-            {"doc_id": {"$in": doc_ids}},
-            {"doc_id": 1, "title": 1, "content": 1, "service": 1, "category": 1}
-        )
-        full_content_map = {}
-        async for d in cursor:
-            full_content_map[str(d["doc_id"])] = d.get("content", "")
-
-        context_parts = []
-        for i, doc in enumerate(docs, 1):
-            full_content = full_content_map.get(doc["doc_id"], doc.get("content_preview", ""))
-            context_parts.append(
-                f"[문서 {i}] {doc['title']} ({doc['service']} > {doc['category']})\n"
-                f"{full_content}"
+    # ── 2. gap 기록 ───────────────────────────────────────────────
+    if result and result.gap_flag:
+        try:
+            await record_gap(
+                query=user_query,
+                session_id=session_id,
+                user_member_id=state.member_id if hasattr(state, "member_id") else None,
+                searched_topics=[{"topic_id": t, "read": True} for t in (result.visited_topic_ids or [])],
+                ai_verdict="no_match" if not result.has_context else "insufficient_coverage",
             )
-        context = "\n\n".join(context_parts)
-        has_context = True
+        except Exception as e:
+            logger.error("[RAG] gap 기록 실패: %s", e)
+
+    # ── 3. 하이브리드 정책 적용 시스템 프롬프트 결정 ──────────────
+    # kb_architecture.md §6: visited topics 중 domain: internal이 있으면 엄격 모드
+    has_internal = False
+    if result and result.visited_topic_ids:
+        from src.core.mongo_client import boa_knowledge_collection
+        cursor = boa_knowledge_collection.find(
+            {"_id": {"$in": result.visited_topic_ids}, "domain": "internal"},
+            {"_id": 1}
+        )
+        async for _ in cursor:
+            has_internal = True
+            break
+
+    if result and result.has_context:
+        if has_internal:
+            system_prompt = """당신은 와이드모바일의 내부 업무 지원 AI(BOA)입니다.
+다음 질문은 회사 내부 정책/절차에 관한 것입니다.
+반드시 제공된 <knowledge_base_context> 내의 정보에만 근거하여 답하십시오.
+KB 컨텍스트에 근거가 없는 부분은 "해당 내용은 현재 지식베이스에 등록되어 있지 않습니다"로 답하고,
+일반적 추론이나 유사 사례로 보완하지 마십시오.
+
+{context}"""
+        else:
+            system_prompt = """당신은 와이드모바일의 내부 업무 지원 AI(BOA)입니다.
+아래 지식베이스 내용을 참고하여 질문에 답변하세요.
+문서에 없는 내용은 일반 지식을 활용해 보완할 수 있습니다.
+
+{context}"""
+        prompt = system_prompt.format(context=result.context_xml)
     else:
-        context = "관련 문서를 찾을 수 없습니다."
-        has_context = False
+        prompt = """당신은 와이드모바일의 내부 업무 지원 AI(BOA)입니다.
+지식베이스에서 관련 내용을 찾지 못했습니다.
+일반적인 답변을 제공하거나, 정확한 정보를 위해 담당자에게 확인을 권유하세요."""
 
-    # ── 3. LLM 답변 생성 ──────────────────────────────────────────
-    system_prompt = """당신은 와이드모바일의 내부 업무 지원 AI(BOA)입니다.
-    아래 지식베이스 문서를 참고하여 질문에 답변하세요.
+    # ── 4. LLM 답변 생성 ──────────────────────────────────────────
+    from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 
-    규칙:
-    - 문서에 있는 내용만 답변하세요.
-    - 문서에 없는 내용은 "해당 내용은 지식베이스에서 찾을 수 없습니다."라고 안내하세요.
-    - 출처 문서 제목을 답변 마지막에 간략히 표시하세요.
-    - 간결하고 명확하게 답변하세요.
-
-    [지식베이스 검색 결과]
-    {context}"""
-
-    prompt = system_prompt.format(context=context)
+    lc_messages = [SystemMessage(content=prompt)]
+    for m in state.messages[:-1]:
+        if m["role"] == "user":
+            lc_messages.append(HumanMessage(content=m["content"]))
+        elif m["role"] == "assistant":
+            lc_messages.append(AIMessage(content=m["content"]))
+    lc_messages.append(HumanMessage(content=user_query))
 
     try:
-        from langchain_core.prompts import ChatPromptTemplate
-        messages_for_llm = [(m["role"], m["content"]) for m in state.messages[:-1]]  # 마지막 user 메시지 제외
-        messages_for_llm = [("system", prompt)] + messages_for_llm + [("user", user_query)]
-
-        from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
-        lc_messages = []
-        for role, content in messages_for_llm:
-            if role == "system":
-                lc_messages.append(SystemMessage(content=content))
-            elif role == "user":
-                lc_messages.append(HumanMessage(content=content))
-            elif role == "assistant":
-                lc_messages.append(AIMessage(content=content))
-
         async with session_event(session_id, EventType.LLM_RESPONSE, "RAG 답변 생성") as ev:
             response = await LLM_LIGHT.ainvoke(lc_messages)
-            # Gemini response.content가 list로 올 수 있음
-            raw = response.content
-            if isinstance(raw, list):
-                answer = " ".join(
-                    block.get("text", "") if isinstance(block, dict) else str(block)
-                    for block in raw
-                )
-            else:
-                answer = str(raw)
+            answer = _extract_text(response.content)
             ev.content = answer[:200]
-            ev.llm = build_llm_meta("gemini-2.0-flash", getattr(response, "usage_metadata", {}))
+            ev.llm = build_llm_meta("gemini-2.5-flash", getattr(response, "usage_metadata", {}))
     except Exception as e:
-        print(f"[RAG] LLM 호출 실패: {e}")
-        answer = "죄송합니다. 답변 생성 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요."
+        logger.error("[RAG] LLM 호출 실패: %s", e)
+        answer = "답변 생성 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요."
 
-    new_messages = list(state.messages)
-    new_messages.append({"role": "assistant", "content": answer})
-    return {"messages": new_messages}
+    # ── 5. state에 답변 추가 (send_response 노드가 Google Chat 전송) ─
+    state.add_ai_message(answer)
+    return state
 
 def handle_unclear(state: GraphState):
     state.add_ai_message("죄송합니다. 말씀하신 내용을 정확히 이해하지 못했습니다. 다시 한 번 말씀해 주시겠어요?")
