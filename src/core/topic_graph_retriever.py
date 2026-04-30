@@ -286,6 +286,7 @@ JSON으로만 답하라: [{{"topic_id": "...", "priority": 0.0~1.0}}, ...]
         )
 
         context_xml = self._assemble_context(collected_snippets) if collected_snippets else ""
+        context_domains = list({s["domain"] for s in collected_snippets if s.get("domain")})
 
         return RetrieveResult(
             context_xml=context_xml,

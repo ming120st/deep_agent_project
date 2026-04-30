@@ -536,6 +536,7 @@ async def resolve_conflict(
             actor=user["email"],
         )
         resolution_fields["status"] = "manual_edited"
+        resolution_fields["manual_content"] = body.manual_content
     else:
         raise HTTPException(status_code=400, detail="Invalid action")
 
@@ -860,10 +861,10 @@ KNOWLEDGE_HTML = """<!DOCTYPE html>
         <table>
           <thead>
             <tr>
-              <th>Topic</th>
-              <th>Type</th>
-              <th>Confidence</th>
-              <th>Detected</th>
+              <th>Topic / Reasoning</th>
+              <th>Type / Confidence</th>
+              <th>상태 / 처리자</th>
+              <th>감지일시 / 해결일시</th>
               <th>Action</th>
             </tr>
           </thead>
@@ -900,14 +901,17 @@ KNOWLEDGE_HTML = """<!DOCTYPE html>
         </div>
 
         <div class="field" style="margin-top:18px;">
-          <label for="conflictResolutionNote">Resolution Note</label>
+          <div style="display:flex; justify-content:space-between; align-items:flex-end; margin-bottom:8px;">
+            <label for="conflictResolutionNote" style="margin-bottom:0px;">Resolution Note</label>
+            <span id="conflictResolutionInfo" style="font-size:12px; color:var(--muted);"></span>
+          </div>
           <textarea class="textarea" id="conflictResolutionNote" placeholder="처리 사유를 기록합니다."></textarea>
         </div>
         <div class="field">
           <label for="conflictManualContent">Manual Content</label>
           <textarea class="textarea content-field" id="conflictManualContent" placeholder="manual_edit 적용 시 사용할 본문입니다."></textarea>
         </div>
-        <div class="modal-footer" style="padding:0;">
+        <div class="modal-footer" style="padding:0;" id="conflictActionFooter">
           <button class="btn-secondary" id="rejectConflictBtn">기각 후 기존 유지</button>
           <button class="btn-secondary" id="manualConflictBtn">직접 수정 후 반영</button>
           <button class="btn-primary" id="mergeConflictBtn">자동 병합 반영</button>
@@ -1303,7 +1307,13 @@ KNOWLEDGE_HTML = """<!DOCTYPE html>
 
       conflictsState.classList.add('hidden');
       conflictsTableWrap.classList.remove('hidden');
-      conflictsTbody.innerHTML = conflicts.map(conflict => `
+      conflictsTbody.innerHTML = conflicts.map(conflict => {
+        const isResolved = conflict.status !== 'pending';
+        const resolvedBy = conflict.resolved_by ? conflict.resolved_by.split('@')[0] : '';
+        const btnText = isResolved ? '조회' : '처리';
+        const btnClass = isResolved ? 'btn-secondary' : 'btn-primary';
+        
+        return `
         <tr>
           <td>
             <button class="topic-title-btn" data-conflict-open="${escHtml(conflict.id)}">
@@ -1311,12 +1321,21 @@ KNOWLEDGE_HTML = """<!DOCTYPE html>
               <div class="topic-desc">${escHtml((conflict.llm_reasoning || '').slice(0, 120) || '충돌 상세를 열어 확인하세요.')}</div>
             </button>
           </td>
-          <td>${badgeHtml('conflict_type', conflict.conflict_type)}</td>
-          <td class="td-mono">${Math.round((conflict.confidence || 0) * 100)}% <span style="color:var(--muted);font-size:10px;">(매칭 ${conflict.match_confidence != null ? Math.round(conflict.match_confidence * 100) : "-"}%)</span></td>
-          <td class="td-mono">${formatDate(conflict.detected_at)}</td>
-          <td><button class="btn-secondary" data-conflict-open="${escHtml(conflict.id)}">처리</button></td>
+          <td>
+            <div>${badgeHtml('conflict_type', conflict.conflict_type)}</div>
+            <div class="td-mono" style="margin-top:6px; font-size:11px;">LLM: ${Math.round((conflict.confidence || 0) * 100)}% / Match: ${conflict.match_confidence != null ? Math.round(conflict.match_confidence * 100) : "-"}%</div>
+          </td>
+          <td>
+            <div>${badgeHtml('conflict_status', conflict.status)}</div>
+            ${resolvedBy ? `<div style="margin-top:6px; font-size:11px; color:var(--muted);">${escHtml(resolvedBy)}</div>` : ''}
+          </td>
+          <td class="td-mono">
+            <div>감지: <span style="color:var(--text);">${formatDate(conflict.detected_at)}</span></div>
+            ${conflict.resolved_at ? `<div style="margin-top:4px;">처리: <span style="color:var(--text);">${formatDate(conflict.resolved_at)}</span></div>` : ''}
+          </td>
+          <td><button class="${btnClass}" data-conflict-open="${escHtml(conflict.id)}">${btnText}</button></td>
         </tr>
-      `).join('');
+      `}).join('');
     }
 
     function openConflictDetail(conflictId) {
@@ -1331,8 +1350,30 @@ KNOWLEDGE_HTML = """<!DOCTYPE html>
       document.getElementById('conflictReasoning').textContent = conflict.llm_reasoning || '추가 메모가 없습니다.';
       document.getElementById('conflictExisting').textContent = conflict.existing_excerpt || '-';
       document.getElementById('conflictIncoming').textContent = conflict.incoming_content || '-';
-      document.getElementById('conflictResolutionNote').value = '';
-      document.getElementById('conflictManualContent').value = conflict.incoming_content || '';
+      
+      const isResolved = conflict.status !== 'pending';
+      const resolutionNoteEl = document.getElementById('conflictResolutionNote');
+      const manualContentEl = document.getElementById('conflictManualContent');
+      const resolutionInfoEl = document.getElementById('conflictResolutionInfo');
+      const actionFooter = document.getElementById('conflictActionFooter');
+      
+      resolutionNoteEl.value = conflict.resolution_note || '';
+      
+      // 미처리 상태일 때는 빈 칸이 디폴트
+      // 처리 완료(manual_edited)일 때는 저장했던 manual_content를 불러옴
+      manualContentEl.value = isResolved && conflict.status === 'manual_edited' ? (conflict.manual_content || '') : '';
+      
+      if (isResolved) {
+        resolutionNoteEl.readOnly = true;
+        manualContentEl.readOnly = true;
+        actionFooter.style.display = 'none';
+        resolutionInfoEl.textContent = `처리: ${conflict.resolved_by ? conflict.resolved_by.split('@')[0] : '알수없음'} (${formatDate(conflict.resolved_at)})`;
+      } else {
+        resolutionNoteEl.readOnly = false;
+        manualContentEl.readOnly = false;
+        actionFooter.style.display = 'flex';
+        resolutionInfoEl.textContent = '';
+      }
     }
 
     async function resolveConflict(action) {
