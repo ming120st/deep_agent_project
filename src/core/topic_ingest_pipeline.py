@@ -333,7 +333,7 @@ async def _create_new_topic(scoped_content: str, tentative_title: str, actor: st
 - 설명: 80~200자, 무엇을 다루고 언제 참고하는지
 - 태그: 3~6개
 - domain: "internal" 또는 "general"
-- 관련 주제: 아래 후보 중 관련 있는 것 0~3개의 topic_id만 선택
+- 관련 주제: 아래 후보 중 관련 있는 것 0~3개의 topic_id만 선택. 관련 주제는 내용이 겹치거나 보완되는 정도로 넓게 잡아도 무방. 후보가 있어도 모두 관련 없으면 빈 배열로.
 
 [도메인 핵심 지식]
 {DOMAIN_PRIMER}

@@ -201,7 +201,7 @@ class RAGEngine:
 
             cursor = boa_knowledge_collection.find(
                 {"schema_version": 2},
-                {"_id": 1, "title": 1, "description": 1, "tags": 1, "status": 1, "domain": 1}
+                {"_id": 1, "title": 1, "description": 1, "tags": 1, "content": 1, "status": 1, "domain": 1}
             )
             docs = await cursor.to_list(length=None)
 
@@ -212,11 +212,21 @@ class RAGEngine:
                 await asyncio.to_thread(self._save_index_to_blob_sync)
                 return
 
-            # 임베딩 생성 (description + tags)
+            # 임베딩 생성 (title + description + tags + content)
             def _make_embed_text(d: dict) -> str:
-                desc = d.get("description") or d.get("title", "")
+                title = d.get("title", "")
+                desc = d.get("description", "")
                 tags = d.get("tags") or []
-                return desc + (" " + " ".join(tags) if tags else "")
+                tags_str = " ".join(tags) if tags else ""
+                content = d.get("content", "")
+                
+                parts = []
+                if title: parts.append(f"제목: {title}")
+                if desc: parts.append(f"설명: {desc}")
+                if tags_str: parts.append(f"태그: {tags_str}")
+                if content: parts.append(f"본문: {content}")
+                
+                return "\n".join(parts)
 
             texts = [_make_embed_text(d) for d in docs]
             embeddings = await self.embed(texts)
@@ -258,11 +268,16 @@ class RAGEngine:
                 return
 
             tags = tags or []
-            # description이 있으면 description+tags 임베딩, 없으면 title+content 폴백
-            if description:
-                embed_text = description + (" " + " ".join(tags) if tags else "")
-            else:
-                embed_text = f"{title} {content}"
+            
+            # 임베딩 생성 (title + description + tags + content 전체 반영)
+            tags_str = " ".join(tags) if tags else ""
+            parts = []
+            if title: parts.append(f"제목: {title}")
+            if description: parts.append(f"설명: {description}")
+            if tags_str: parts.append(f"태그: {tags_str}")
+            if content: parts.append(f"본문: {content}")
+            embed_text = "\n".join(parts)
+            
             embedding = await self.embed([embed_text])  # (1, DIM)
 
             # 기존 항목 제거 (meta에서 찾아서 해당 FAISS 행 마킹)

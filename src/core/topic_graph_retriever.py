@@ -214,11 +214,22 @@ JSON으로만 답하라: [{{"topic_id": "...", "priority": 0.0~1.0}}, ...]
     # ── 메인 retrieve ──────────────────────────────────────────────────────────
 
     async def retrieve(self, query: str, session_id: str | None = None) -> RetrieveResult:
+        print(f"\n[{'='*50}]")
+        print(f"[RAG Debug] 0. 사용자 쿼리 수신: '{query}'")
+        
         # 1. 후보 선정
         candidate_queue = await self._select_candidates(query)
         if not candidate_queue:
+            print("[RAG Debug] 1. MIN_SCORE 이상 후보 없음 → 지식 갭(Gap) 처리")
             logger.info("[TopicGraphRetriever] MIN_SCORE 이상 후보 없음 → gap")
             return RetrieveResult(context_xml="", has_context=False, gap_flag=True)
+
+        candidate_ids = [q[0] for q in candidate_queue]
+        cursor = boa_knowledge_collection.find({"_id": {"$in": candidate_ids}}, {"title": 1})
+        title_map = {doc["_id"]: doc.get("title", "제목없음") for doc in await cursor.to_list(length=None)}
+        
+        printed_candidates = [(title_map.get(q[0], q[0]), round(q[1], 4)) for q in candidate_queue]
+        print(f"[RAG Debug] 1. 초기 벡터 검색된 후보 문서 & 점수: {printed_candidates}")
 
         visited: set[str] = set()
         visited_docs: list[dict] = []
@@ -242,7 +253,9 @@ JSON으로만 답하라: [{{"topic_id": "...", "priority": 0.0~1.0}}, ...]
             if not topic:
                 continue
                 
-            visited_docs.append({"topic_id": topic_id, "title": topic.get("title", "제목 없음"), "score": score})
+            topic_title = topic.get("title", "제목 없음")
+            visited_docs.append({"topic_id": topic_id, "title": topic_title, "score": score})
+            print(f"\n[RAG Debug] 2. >> 현재 검토 중인 문서: '{topic_title}' (탐색 깊이: {depth})")
 
             # 스니펫 추출
             try:
@@ -252,12 +265,15 @@ JSON으로만 답하라: [{{"topic_id": "...", "priority": 0.0~1.0}}, ...]
                 snippet = None
 
             if snippet:
+                print(f"[RAG Debug] 3. 추출된 필요 내용(요약):\n    - {snippet[:150]}...")
                 collected_snippets.append({
                     "topic_id": topic_id,
-                    "title":    topic.get("title", ""),
+                    "title":    topic_title,
                     "snippet":  snippet,
                     "domain":   topic.get("domain"),
                 })
+            else:
+                print(f"[RAG Debug] 3. 추출된 필요 내용 없음 (관련 내용이 본문에 없습니다.)")
 
             # 충분성 판단
             try:
@@ -268,14 +284,26 @@ JSON으로만 답하라: [{{"topic_id": "...", "priority": 0.0~1.0}}, ...]
 
             verdict = verdict_result.get("verdict", "continue")
             missing_aspects = verdict_result.get("missing_aspects", [])
+            print(f"[RAG Debug] 4. 충분성 판단 결과: '{verdict}'")
+            if missing_aspects:
+                print(f"               부족한 정보: {missing_aspects}")
 
             if verdict == "sufficient":
+                print("[RAG Debug] 5. 충분하다고 판단되어 탐색을 종료합니다.")
                 break
 
             # 다음 hop 선정
             if verdict == "continue":
                 try:
                     next_hops = await self._select_next_hops(topic, missing_aspects, visited, session_id=session_id)
+                    if next_hops:
+                        hop_ids = [h[0] for h in next_hops]
+                        cursor = boa_knowledge_collection.find({"_id": {"$in": hop_ids}}, {"title": 1})
+                        hop_title_map = {doc["_id"]: doc.get("title", "제목없음") for doc in await cursor.to_list(length=None)}
+                        printed_hops = [(hop_title_map.get(h[0], h[0]), h[1]) for h in next_hops]
+                        print(f"[RAG Debug] 5. 부족한 정보를 찾기 위해 연관 문서(Hop)들을 큐에 추가합니다: {printed_hops}")
+                    else:
+                        print("[RAG Debug] 5. 더 이상 연결된 연관 문서가 없습니다.")
                     candidate_queue.extend(next_hops)
                 except Exception as exc:
                     logger.error("[TopicGraphRetriever] next_hops 선정 예외: %s", exc)
@@ -284,9 +312,22 @@ JSON으로만 답하라: [{{"topic_id": "...", "priority": 0.0~1.0}}, ...]
             not collected_snippets
             or verdict_result.get("verdict") == "exhausted"
         )
+        
+        if verdict_result.get("verdict") == "exhausted":
+            print("[RAG Debug] 5. 관련 문서를 더 찾을 수 없습니다 (Exhausted).")
 
         context_xml = self._assemble_context(collected_snippets) if collected_snippets else ""
         context_domains = list({s["domain"] for s in collected_snippets if s.get("domain")})
+        
+        print("\n[RAG Debug] 6. === RAG 탐색 최종 결과 ===")
+        print(f"    - 총 탐색 문서 개수: {depth} 개")
+        if collected_snippets:
+            print("    - 최종 취합된 스니펫(사용할 지식 목록):")
+            for idx, s in enumerate(collected_snippets, 1):
+                print(f"      {idx}. [{s['title']}] {s['snippet'][:100]}...")
+        else:
+            print("    - 최종 수집된 스니펫이 없습니다.")
+        print(f"[{'='*50}]\n")
 
         return RetrieveResult(
             context_xml=context_xml,
