@@ -77,7 +77,7 @@ async def execute_rag(state: GraphState):
         await add_event(session_id, EventType.RAG_SEARCH, "지식베이스 탐색",
                         content=f"{result.total_hops}홉, {len(result.visited_topic_ids)}개 주제",
                         meta={
-                            "visited": result.visited_topic_ids,
+                            "docs": result.visited_docs,
                             "has_context": result.has_context,
                             "gap_flag": result.gap_flag,
                         })
@@ -100,16 +100,7 @@ async def execute_rag(state: GraphState):
 
     # ── 3. 하이브리드 정책 적용 시스템 프롬프트 결정 ──────────────
     # kb_architecture.md §6: visited topics 중 domain: internal이 있으면 엄격 모드
-    has_internal = False
-    if result and result.visited_topic_ids:
-        from src.core.mongo_client import boa_knowledge_collection
-        cursor = boa_knowledge_collection.find(
-            {"_id": {"$in": result.visited_topic_ids}, "domain": "internal"},
-            {"_id": 1}
-        )
-        async for _ in cursor:
-            has_internal = True
-            break
+    has_internal = result is not None and "internal" in result.context_domains
 
     if result and result.has_context:
         if has_internal:

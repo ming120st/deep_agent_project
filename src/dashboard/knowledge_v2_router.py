@@ -23,14 +23,20 @@ KB v2 전용 라우터 — Topic-Graph RAG 기반 지식베이스 CRUD.
 """
 import uuid
 import logging
+import asyncio
 from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Request, HTTPException
+from fastapi import APIRouter, Request, HTTPException, UploadFile, File
 from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel
 
-from src.core.mongo_client import boa_knowledge_collection
+from src.core.mongo_client import (
+    boa_knowledge_collection,
+    boa_knowledge_conflicts_collection,
+    boa_knowledge_gaps_collection,
+    boa_knowledge_versions_collection,
+)
 from src.core.knowledge_relation_manager import (
     add_relation,
     remove_relation,
@@ -38,6 +44,8 @@ from src.core.knowledge_relation_manager import (
     get_related_topics,
     check_bidirectional_consistency,
 )
+from src.core.rag_engine import get_engine
+from src.core.topic_ingest_pipeline import run_ingest_pipeline
 from src.dashboard.auth import get_current_user, is_admin
 
 logger = logging.getLogger(__name__)
@@ -127,6 +135,17 @@ class RelationAddRequest(BaseModel):
     related_topic_id: str
 
 
+class ConflictResolveRequest(BaseModel):
+    action: str
+    resolution_note: Optional[str] = None
+    manual_content: Optional[str] = None
+
+
+class GapStatusRequest(BaseModel):
+    status: str                             # in_progress | resolved | wontfix | open
+    resolved_topic_id: Optional[str] = None
+
+
 # ── 직렬화 헬퍼 ───────────────────────────────────────────────────────────────
 
 def _serialize(doc: dict) -> dict:
@@ -140,6 +159,82 @@ def _serialize(doc: dict) -> dict:
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+async def _refresh_topic_index(topic_id: str) -> None:
+    topic = await boa_knowledge_collection.find_one({"_id": topic_id})
+    if not topic:
+        return
+    await get_engine().upsert_doc(
+        doc_id=str(topic["_id"]),
+        title=topic.get("title", ""),
+        content=topic.get("content", ""),
+        status=topic.get("status", ""),
+        tags=topic.get("tags", []),
+        description=topic.get("description", ""),
+        domain=topic.get("domain"),
+    )
+
+
+async def _append_conflict_content(topic_id: str, incoming_content: str, actor: str) -> None:
+    topic = await boa_knowledge_collection.find_one({"_id": topic_id})
+    if not topic:
+        raise HTTPException(status_code=404, detail="Related topic not found")
+
+    now = _now()
+    original_content = topic.get("content", "")
+    new_content = (
+        f"{original_content}\n\n---\n*자동 병합 (conflict_resolution)*\n\n{incoming_content}"
+    )
+
+    await boa_knowledge_versions_collection.insert_one(
+        {
+            "_id": uuid.uuid4().hex,
+            "topic_id": topic_id,
+            "content": original_content,
+            "snapshot_at": now,
+            "snapshot_by": actor,
+        }
+    )
+    await boa_knowledge_collection.update_one(
+        {"_id": topic_id},
+        {
+            "$set": {
+                "content": new_content,
+                "updated_at": now,
+                "updated_by": actor,
+            }
+        },
+    )
+    await _refresh_topic_index(topic_id)
+
+
+async def _replace_topic_content(topic_id: str, manual_content: str, actor: str) -> None:
+    topic = await boa_knowledge_collection.find_one({"_id": topic_id})
+    if not topic:
+        raise HTTPException(status_code=404, detail="Related topic not found")
+
+    now = _now()
+    await boa_knowledge_versions_collection.insert_one(
+        {
+            "_id": uuid.uuid4().hex,
+            "topic_id": topic_id,
+            "content": topic.get("content", ""),
+            "snapshot_at": now,
+            "snapshot_by": actor,
+        }
+    )
+    await boa_knowledge_collection.update_one(
+        {"_id": topic_id},
+        {
+            "$set": {
+                "content": manual_content,
+                "updated_at": now,
+                "updated_by": actor,
+            }
+        },
+    )
+    await _refresh_topic_index(topic_id)
 
 
 # ── 엔드포인트 ────────────────────────────────────────────────────────────────
@@ -226,6 +321,8 @@ async def create_topic(body: TopicV2CreateRequest, request: Request):
     if body.related_topic_ids:
         await set_relations(topic_id, body.related_topic_ids, actor=user["email"])
 
+    await _refresh_topic_index(topic_id)
+
     created = await boa_knowledge_collection.find_one({"_id": topic_id})
     return _serialize(created)
 
@@ -263,6 +360,8 @@ async def patch_topic(topic_id: str, body: TopicV2PatchRequest, request: Request
             {"_id": topic_id}, {"$set": update_fields}
         )
 
+    await _refresh_topic_index(topic_id)
+
     updated = await boa_knowledge_collection.find_one({"_id": topic_id})
     return _serialize(updated)
 
@@ -276,6 +375,41 @@ async def get_related(topic_id: str, request: Request):
         return await get_related_topics(topic_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
+
+
+@api_router.post("/ingest/upload", status_code=202)
+async def ingest_upload(request: Request, file: UploadFile = File(...)):
+    user = _require_user(request)
+
+    filename = file.filename or ""
+    if not filename.lower().endswith((".txt", ".md")):
+        raise HTTPException(
+            status_code=400,
+            detail="지원하지 않는 파일 형식입니다. .txt, .md만 지원합니다.",
+        )
+
+    raw_bytes = await file.read()
+    
+    import chardet
+    detected = chardet.detect(raw_bytes)
+    encoding = detected.get("encoding") or "utf-8"
+    text = raw_bytes.decode(encoding, errors="replace").strip()
+    
+    if not text:
+        raise HTTPException(status_code=400, detail="업로드한 파일이 비어 있습니다.")
+
+    asyncio.create_task(
+        run_ingest_pipeline(
+            content=text,
+            source_type="document_upload",
+            source_ref=filename,
+            actor=user["email"],
+        )
+    )
+    return {
+        "message": "인입 파이프라인이 시작되었습니다.",
+        "filename": filename,
+    }
 
 
 @api_router.post("/topics/{topic_id}/relations", status_code=201)
@@ -331,11 +465,139 @@ async def delete_topic(topic_id: str, request: Request):
     return {"ok": True}
 
 
+@api_router.get("/conflicts")
+async def list_conflicts(request: Request, status: Optional[str] = None):
+    _require_user(request)
+
+    query: dict = {}
+    if status:
+        query["status"] = status
+
+    cursor = boa_knowledge_conflicts_collection.find(query).sort("detected_at", -1)
+    conflicts = await cursor.to_list(length=None)
+
+    topic_ids = list({c.get("topic_id") for c in conflicts if c.get("topic_id")})
+    topic_map: dict[str, dict] = {}
+    if topic_ids:
+        topic_cursor = boa_knowledge_collection.find(
+            {"_id": {"$in": topic_ids}},
+            {"title": 1},
+        )
+        topic_docs = await topic_cursor.to_list(length=None)
+        topic_map = {str(doc["_id"]): doc for doc in topic_docs}
+
+    serialized = []
+    for conflict in conflicts:
+        topic_id = conflict.get("topic_id")
+        conflict["id"] = str(conflict.pop("_id"))
+        conflict["topic_title"] = topic_map.get(topic_id, {}).get("title", "(삭제된 주제)")
+        for field in ("detected_at", "notified_at", "resolved_at"):
+            if isinstance(conflict.get(field), datetime):
+                conflict[field] = conflict[field].isoformat()
+        serialized.append(conflict)
+    return serialized
+
+
+@api_router.patch("/conflicts/{conflict_id}/resolve")
+async def resolve_conflict(
+    request: Request,
+    conflict_id: str,
+    body: ConflictResolveRequest,
+):
+    user = _require_user(request)
+    conflict = await boa_knowledge_conflicts_collection.find_one({"_id": conflict_id})
+    if not conflict:
+        raise HTTPException(status_code=404, detail="Conflict not found")
+
+    topic_id = conflict.get("topic_id")
+    action = body.action
+    now = _now()
+    resolution_fields = {
+        "resolved_at": now,
+        "resolved_by": user["email"],
+        "resolution_note": body.resolution_note,
+    }
+
+    if action == "merge":
+        await _append_conflict_content(
+            topic_id=topic_id,
+            incoming_content=conflict.get("incoming_content", ""),
+            actor=user["email"],
+        )
+        resolution_fields["status"] = "merged"
+    elif action == "reject":
+        resolution_fields["status"] = "rejected"
+    elif action == "manual_edit":
+        if not body.manual_content:
+            raise HTTPException(status_code=400, detail="manual_content is required")
+        await _replace_topic_content(
+            topic_id=topic_id,
+            manual_content=body.manual_content,
+            actor=user["email"],
+        )
+        resolution_fields["status"] = "manual_edited"
+    else:
+        raise HTTPException(status_code=400, detail="Invalid action")
+
+    await boa_knowledge_conflicts_collection.update_one(
+        {"_id": conflict_id},
+        {"$set": resolution_fields},
+    )
+
+    updated = await boa_knowledge_conflicts_collection.find_one({"_id": conflict_id})
+    updated["id"] = str(updated.pop("_id"))
+    for field in ("detected_at", "notified_at", "resolved_at"):
+        if isinstance(updated.get(field), datetime):
+            updated[field] = updated[field].isoformat()
+    return updated
+
+
 @api_router.get("/admin/consistency-check")
 async def consistency_check(request: Request):
     """양방향 링크 정합성 체크 (admin only)."""
     await _require_admin(request)
     return await check_bidirectional_consistency()
+
+
+@api_router.get("/gaps")
+async def list_gaps(
+    request: Request,
+    status: Optional[str] = None,
+    limit: int = 50,
+):
+    """Gap 목록 조회 (빈도 내림차순). query_embedding 벡터는 응답에서 제외."""
+    _require_user(request)
+    query: dict = {}
+    if status:
+        query["status"] = status
+
+    cursor = boa_knowledge_gaps_collection.find(
+        query,
+        {"query_embedding": 0},
+    ).sort("duplicate_count", -1).limit(limit)
+
+    gaps = await cursor.to_list(length=None)
+    for gap in gaps:
+        gap["id"] = str(gap.pop("_id"))
+        for field in ("created_at", "last_occurred_at"):
+            if isinstance(gap.get(field), datetime):
+                gap[field] = gap[field].isoformat()
+    return gaps
+
+
+@api_router.patch("/gaps/{gap_id}/status")
+async def update_gap_status(request: Request, gap_id: str, body: GapStatusRequest):
+    """Gap 상태 변경."""
+    _require_user(request)
+    update: dict = {"status": body.status}
+    if body.resolved_topic_id:
+        update["resolved_topic_id"] = body.resolved_topic_id
+    await boa_knowledge_gaps_collection.update_one(
+        {"_id": gap_id}, {"$set": update}
+    )
+    return {"ok": True}
+
+
 router.include_router(api_router)
 
 
@@ -493,9 +755,17 @@ KNOWLEDGE_HTML = """<!DOCTYPE html>
     .related-option:hover { background: rgba(79, 70, 229, 0.06); }
     .related-option-title { font-weight: 600; margin-bottom: 4px; }
     .related-option-desc { font-size: 12px; color: var(--muted); line-height: 1.6; }
+    .status-chip { display: inline-flex; align-items: center; gap: 6px; background: white; color: var(--muted); border: 1px solid var(--border); border-radius: 999px; padding: 8px 12px; font-size: 11px; font-family: 'IBM Plex Mono', monospace; cursor: pointer; }
+    .status-chip.active { color: var(--accent); border-color: rgba(79,70,229,0.2); background: rgba(79,70,229,0.08); }
+    .compare-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    .compare-box { background: #f8fafc; border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; white-space: pre-wrap; line-height: 1.75; max-height: 260px; overflow: auto; }
+    .subpanel { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 20px; margin-top: 18px; }
+    .subpanel h3 { font-size: 13px; font-family: 'IBM Plex Mono', monospace; text-transform: uppercase; color: var(--muted); letter-spacing: .08em; margin-bottom: 12px; }
+    .toast { position: fixed; right: 20px; bottom: 20px; background: #111827; color: white; padding: 12px 14px; border-radius: 10px; box-shadow: 0 12px 30px rgba(15, 23, 42, 0.28); z-index: 400; display: none; }
 
     @media (max-width: 860px) {
       .form-grid { grid-template-columns: 1fr; }
+      .compare-grid { grid-template-columns: 1fr; }
       .search-bar { width: 100%; }
       .toolbar { align-items: stretch; }
       .toolbar-left { width: 100%; }
@@ -549,7 +819,11 @@ KNOWLEDGE_HTML = """<!DOCTYPE html>
             <option value="archived">archived</option>
           </select>
         </div>
-        <button class="btn-primary" id="createTopicBtn">+ 새 토픽</button>
+        <div class="toolbar-left">
+          <input type="file" id="ingestFileInput" class="hidden" accept=".txt,.md">
+          <button class="btn-secondary" id="uploadIngestBtn">파일로 인입</button>
+          <button class="btn-primary" id="createTopicBtn">+ 새 토픽</button>
+        </div>
       </div>
 
       <div id="topicsState" class="loading-state">토픽을 불러오는 중입니다...</div>
@@ -572,6 +846,73 @@ KNOWLEDGE_HTML = """<!DOCTYPE html>
     </section>
 
     <section class="panel" id="panel-conflicts">
+      <div class="toolbar-left" style="margin-bottom:18px;" id="conflictStatusChips">
+        <button class="status-chip active" data-conflict-status="">all</button>
+        <button class="status-chip" data-conflict-status="pending">pending</button>
+        <button class="status-chip" data-conflict-status="merged">merged</button>
+        <button class="status-chip" data-conflict-status="rejected">rejected</button>
+        <button class="status-chip" data-conflict-status="manual_edited">manual_edited</button>
+        <button class="status-chip" data-conflict-status="stale">stale</button>
+      </div>
+
+      <div id="conflictsState" class="loading-state hidden">충돌 목록을 불러오는 중입니다...</div>
+      <div class="table-wrap hidden" id="conflictsTableWrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Topic</th>
+              <th>Type</th>
+              <th>Confidence</th>
+              <th>Detected</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody id="conflictsTbody"></tbody>
+        </table>
+      </div>
+
+      <div class="subpanel hidden" id="conflictDetailPanel">
+        <div class="detail-meta" style="justify-content:space-between; margin-bottom:18px;">
+          <div>
+            <div class="modal-title" id="conflictTopicTitle">충돌 상세</div>
+            <div class="modal-subtitle" id="conflictMetaLine"></div>
+          </div>
+          <div class="toolbar-left">
+            <span id="conflictTypeBadge"></span>
+            <span id="conflictStatusBadge"></span>
+          </div>
+        </div>
+
+        <div class="subpanel" style="margin-top:0; padding:16px;">
+          <h3>AI Reasoning</h3>
+          <div class="detail-text" id="conflictReasoning"></div>
+        </div>
+
+        <div class="compare-grid" style="margin-top:16px;">
+          <div class="subpanel" style="margin-top:0; padding:16px;">
+            <h3>Existing</h3>
+            <div class="compare-box" id="conflictExisting"></div>
+          </div>
+          <div class="subpanel" style="margin-top:0; padding:16px;">
+            <h3>Incoming</h3>
+            <div class="compare-box" id="conflictIncoming"></div>
+          </div>
+        </div>
+
+        <div class="field" style="margin-top:18px;">
+          <label for="conflictResolutionNote">Resolution Note</label>
+          <textarea class="textarea" id="conflictResolutionNote" placeholder="처리 사유를 기록합니다."></textarea>
+        </div>
+        <div class="field">
+          <label for="conflictManualContent">Manual Content</label>
+          <textarea class="textarea content-field" id="conflictManualContent" placeholder="manual_edit 적용 시 사용할 본문입니다."></textarea>
+        </div>
+        <div class="modal-footer" style="padding:0;">
+          <button class="btn-secondary" id="rejectConflictBtn">기각 후 기존 유지</button>
+          <button class="btn-secondary" id="manualConflictBtn">직접 수정 후 반영</button>
+          <button class="btn-primary" id="mergeConflictBtn">자동 병합 반영</button>
+        </div>
+      </div>
       <div class="empty-state">
         <h3>아직 감지된 충돌이 없습니다.</h3>
         <p>P4에서 conflict 데이터가 연결되면 이 탭에서 pending, merged, rejected 상태를 확인할 수 있습니다.</p>
@@ -579,12 +920,57 @@ KNOWLEDGE_HTML = """<!DOCTYPE html>
     </section>
 
     <section class="panel" id="panel-gaps">
-      <div class="empty-state">
-        <h3>아직 기록된 지식 갭이 없습니다.</h3>
-        <p>P5에서 gap recorder가 연결되면 이 탭에서 빈도 기반 갭 목록과 처리 상태를 확인할 수 있습니다.</p>
+      <div class="toolbar-left" style="margin-bottom:18px;" id="gapStatusChips">
+        <button class="status-chip active" data-gap-status="open">open</button>
+        <button class="status-chip" data-gap-status="in_progress">in_progress</button>
+        <button class="status-chip" data-gap-status="resolved">resolved</button>
+        <button class="status-chip" data-gap-status="wontfix">wontfix</button>
+        <button class="status-chip" data-gap-status="">all</button>
+      </div>
+
+      <div id="gapsState" class="loading-state hidden">갭 목록을 불러오는 중입니다...</div>
+      <div class="table-wrap hidden" id="gapsTableWrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Query</th>
+              <th>발생횟수</th>
+              <th>AI 제안</th>
+              <th>마지막발생</th>
+              <th>처리</th>
+            </tr>
+          </thead>
+          <tbody id="gapsTbody"></tbody>
+        </table>
+      </div>
+
+      <div class="subpanel hidden" id="gapDetailPanel">
+        <div class="detail-meta" style="justify-content:space-between; margin-bottom:18px;">
+          <div>
+            <div class="modal-title" id="gapDetailQuery" style="font-size:16px;"></div>
+          </div>
+          <div><span id="gapDetailVerdictBadge"></span></div>
+        </div>
+
+        <div class="subpanel" style="margin-top:0; padding:16px;">
+          <h3>AI 제안</h3>
+          <div class="detail-text" id="gapDetailSuggestion"></div>
+        </div>
+
+        <div class="subpanel" style="margin-top:16px; padding:16px;">
+          <h3>탐색한 주제</h3>
+          <div class="detail-related" id="gapDetailTopics"></div>
+        </div>
+
+        <div class="modal-footer" style="padding:0; margin-top:18px;">
+          <button class="btn-secondary" id="gapWontfixBtn">wontfix</button>
+          <button class="btn-secondary" id="gapInProgressBtn">처리중으로 변경</button>
+          <button class="btn-primary" id="gapCreateTopicBtn">새 토픽 만들기</button>
+        </div>
       </div>
     </section>
   </div>
+  <div class="toast" id="toast"></div>
 
   <div class="modal-backdrop" id="formModal">
     <div class="modal">
@@ -688,14 +1074,26 @@ KNOWLEDGE_HTML = """<!DOCTYPE html>
 
   <script>
     let topics = [];
+    let conflicts = [];
+    let gaps = [];
     let currentTab = 'topics';
     let editingTopicId = null;
     let viewingTopicId = null;
     let selectedRelatedTopicIds = [];
+    let currentConflictStatus = '';
+    let viewingConflictId = null;
+    let currentGapStatus = 'open';
+    let viewingGapId = null;
 
     const topicsState = document.getElementById('topicsState');
     const topicsTableWrap = document.getElementById('topicsTableWrap');
     const topicsTbody = document.getElementById('topicsTbody');
+    const conflictsState = document.getElementById('conflictsState');
+    const conflictsTableWrap = document.getElementById('conflictsTableWrap');
+    const conflictsTbody = document.getElementById('conflictsTbody');
+    const gapsState = document.getElementById('gapsState');
+    const gapsTableWrap = document.getElementById('gapsTableWrap');
+    const gapsTbody = document.getElementById('gapsTbody');
     const searchInput = document.getElementById('searchInput');
     const domainFilter = document.getElementById('domainFilter');
     const statusFilter = document.getElementById('statusFilter');
@@ -712,12 +1110,31 @@ KNOWLEDGE_HTML = """<!DOCTYPE html>
         .replace(/'/g, '&#39;');
     }
 
+    function showToast(message) {
+      const toast = document.getElementById('toast');
+      toast.textContent = message;
+      toast.style.display = 'block';
+      clearTimeout(showToast._timer);
+      showToast._timer = setTimeout(() => {
+        toast.style.display = 'none';
+      }, 2600);
+    }
+
     function badgeHtml(kind, value) {
       const safe = escHtml(value || '-');
       if (kind === 'domain') {
         if (value === 'internal') return '<span class="badge badge-domain-internal">internal</span>';
         if (value === 'general') return '<span class="badge badge-domain-general">general</span>';
         return '<span class="badge badge-domain-empty">-</span>';
+      }
+      if (kind === 'conflict_type') {
+        if (value === 'conflict') return '<span class="badge badge-status-archived" style="background: rgba(239, 68, 68, 0.12); color: #b91c1c;">conflict</span>';
+        return `<span class="badge badge-domain-general">${safe}</span>`;
+      }
+      if (kind === 'conflict_status') {
+        if (value === 'merged') return '<span class="badge badge-status-active">merged</span>';
+        if (value === 'pending') return '<span class="badge badge-status-draft">pending</span>';
+        return `<span class="badge badge-status-archived">${safe}</span>`;
       }
       if (value === 'active') return '<span class="badge badge-status-active">active</span>';
       if (value === 'draft') return '<span class="badge badge-status-draft">draft</span>';
@@ -820,12 +1237,13 @@ KNOWLEDGE_HTML = """<!DOCTYPE html>
     }
 
     async function apiFetch(url, options = {}) {
+      const headers = { ...(options.headers || {}) };
+      if (!(options.body instanceof FormData) && !headers['Content-Type']) {
+        headers['Content-Type'] = 'application/json';
+      }
       const response = await fetch(url, {
         credentials: 'include',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(options.headers || {}),
-        },
+        headers,
         ...options,
       });
       let payload = null;
@@ -853,6 +1271,99 @@ KNOWLEDGE_HTML = """<!DOCTYPE html>
       } catch (error) {
         setErrorState(error.message || '데이터를 불러오지 못했습니다.');
       }
+    }
+
+    async function fetchConflicts() {
+      const legacyEmpty = document.querySelector('#panel-conflicts > .empty-state');
+      if (legacyEmpty) legacyEmpty.style.display = 'none';
+      conflictsState.className = 'loading-state';
+      conflictsState.textContent = '충돌 목록을 불러오는 중입니다...';
+      conflictsState.classList.remove('hidden');
+      conflictsTableWrap.classList.add('hidden');
+      document.getElementById('conflictDetailPanel').classList.add('hidden');
+      try {
+        const query = currentConflictStatus ? `?status=${encodeURIComponent(currentConflictStatus)}` : '';
+        const data = await apiFetch(`/api/knowledge/v2/conflicts${query}`);
+        conflicts = Array.isArray(data) ? data : [];
+        renderConflicts();
+      } catch (error) {
+        conflictsState.className = 'error-state';
+        conflictsState.innerHTML = `<h3>불러오지 못했습니다</h3><p>${escHtml(error.message || '오류가 발생했습니다.')}</p>`;
+      }
+    }
+
+    function renderConflicts() {
+      if (!conflicts.length) {
+        conflictsState.className = 'empty-state';
+        conflictsState.innerHTML = '<h3>현재 조건에 맞는 충돌이 없습니다.</h3><p>새 충돌이 생기면 여기에서 검토하고 처리할 수 있습니다.</p>';
+        conflictsState.classList.remove('hidden');
+        conflictsTableWrap.classList.add('hidden');
+        return;
+      }
+
+      conflictsState.classList.add('hidden');
+      conflictsTableWrap.classList.remove('hidden');
+      conflictsTbody.innerHTML = conflicts.map(conflict => `
+        <tr>
+          <td>
+            <button class="topic-title-btn" data-conflict-open="${escHtml(conflict.id)}">
+              <div class="topic-title">${escHtml(conflict.topic_title || '(삭제된 주제)')}</div>
+              <div class="topic-desc">${escHtml((conflict.llm_reasoning || '').slice(0, 120) || '충돌 상세를 열어 확인하세요.')}</div>
+            </button>
+          </td>
+          <td>${badgeHtml('conflict_type', conflict.conflict_type)}</td>
+          <td class="td-mono">${Math.round((conflict.confidence || 0) * 100)}% <span style="color:var(--muted);font-size:10px;">(매칭 ${conflict.match_confidence != null ? Math.round(conflict.match_confidence * 100) : "-"}%)</span></td>
+          <td class="td-mono">${formatDate(conflict.detected_at)}</td>
+          <td><button class="btn-secondary" data-conflict-open="${escHtml(conflict.id)}">처리</button></td>
+        </tr>
+      `).join('');
+    }
+
+    function openConflictDetail(conflictId) {
+      const conflict = conflicts.find(item => item.id === conflictId);
+      if (!conflict) return;
+      viewingConflictId = conflictId;
+      document.getElementById('conflictDetailPanel').classList.remove('hidden');
+      document.getElementById('conflictTopicTitle').textContent = conflict.topic_title || '충돌 상세';
+      document.getElementById('conflictMetaLine').textContent = `감지 ${formatDate(conflict.detected_at)} / LLM판정 ${Math.round((conflict.confidence || 0) * 100)}% / 매칭 ${conflict.match_confidence != null ? Math.round(conflict.match_confidence * 100) : "-"}%`;
+      document.getElementById('conflictTypeBadge').innerHTML = badgeHtml('conflict_type', conflict.conflict_type);
+      document.getElementById('conflictStatusBadge').innerHTML = badgeHtml('conflict_status', conflict.status);
+      document.getElementById('conflictReasoning').textContent = conflict.llm_reasoning || '추가 메모가 없습니다.';
+      document.getElementById('conflictExisting').textContent = conflict.existing_excerpt || '-';
+      document.getElementById('conflictIncoming').textContent = conflict.incoming_content || '-';
+      document.getElementById('conflictResolutionNote').value = '';
+      document.getElementById('conflictManualContent').value = conflict.incoming_content || '';
+    }
+
+    async function resolveConflict(action) {
+      if (!viewingConflictId) return;
+      const payload = {
+        action,
+        resolution_note: document.getElementById('conflictResolutionNote').value.trim() || null,
+      };
+      if (action === 'manual_edit') {
+        payload.manual_content = document.getElementById('conflictManualContent').value;
+      }
+      try {
+        await apiFetch(`/api/knowledge/v2/conflicts/${viewingConflictId}/resolve`, {
+          method: 'PATCH',
+          body: JSON.stringify(payload),
+        });
+        showToast('충돌 상태를 업데이트했습니다.');
+        await Promise.all([fetchConflicts(), fetchTopics()]);
+      } catch (error) {
+        alert(error.message || '충돌 처리에 실패했습니다.');
+      }
+    }
+
+    async function uploadIngestFile(file) {
+      const formData = new FormData();
+      formData.append('file', file);
+      const result = await apiFetch('/api/knowledge/v2/ingest/upload', {
+        method: 'POST',
+        body: formData,
+      });
+      showToast(result.message || '인입 파이프라인이 시작되었습니다.');
     }
 
     function openModal(el) {
@@ -1085,6 +1596,95 @@ KNOWLEDGE_HTML = """<!DOCTYPE html>
       document.querySelectorAll('.panel').forEach(panel => {
         panel.classList.toggle('active', panel.id === `panel-${tab}`);
       });
+      if (tab === 'conflicts') {
+        fetchConflicts();
+      } else if (tab === 'gaps') {
+        fetchGaps();
+      }
+    }
+
+    async function fetchGaps() {
+      document.getElementById('gapDetailPanel').classList.add('hidden');
+      gapsState.className = 'loading-state';
+      gapsState.textContent = '갭 목록을 불러오는 중입니다...';
+      gapsState.classList.remove('hidden');
+      gapsTableWrap.classList.add('hidden');
+      try {
+        const query = currentGapStatus ? `?status=${encodeURIComponent(currentGapStatus)}` : '';
+        const data = await apiFetch(`/api/knowledge/v2/gaps${query}`);
+        gaps = Array.isArray(data) ? data : [];
+        renderGaps();
+      } catch (error) {
+        gapsState.className = 'error-state';
+        gapsState.innerHTML = `<h3>불러오지 못했습니다</h3><p>${escHtml(error.message || '오류가 발생했습니다.')}</p>`;
+      }
+    }
+
+    function renderGaps() {
+      if (!gaps.length) {
+        gapsState.className = 'empty-state';
+        gapsState.innerHTML = '<h3>현재 미해결 지식 갭이 없습니다.</h3><p>새 갭이 생기면 여기에서 확인하고 처리할 수 있습니다.</p>';
+        gapsState.classList.remove('hidden');
+        gapsTableWrap.classList.add('hidden');
+        return;
+      }
+      gapsState.classList.add('hidden');
+      gapsTableWrap.classList.remove('hidden');
+      gapsTbody.innerHTML = gaps.map(gap => `
+        <tr>
+          <td>
+            <button class="topic-title-btn" data-gap-open="${escHtml(gap.id)}">
+              <div class="topic-title">${escHtml(gap.query || '')}</div>
+            </button>
+          </td>
+          <td class="td-mono">${gap.duplicate_count || 1}</td>
+          <td style="max-width:260px; font-size:13px; color:var(--muted);">${escHtml((gap.ai_suggestion || '-').slice(0, 80))}</td>
+          <td class="td-mono">${formatDate(gap.last_occurred_at)}</td>
+          <td><button class="btn-secondary" data-gap-open="${escHtml(gap.id)}">처리</button></td>
+        </tr>
+      `).join('');
+    }
+
+    function openGapDetail(gapId) {
+      const gap = gaps.find(item => item.id === gapId);
+      if (!gap) return;
+      viewingGapId = gapId;
+      document.getElementById('gapDetailPanel').classList.remove('hidden');
+      document.getElementById('gapDetailQuery').textContent = gap.query || '';
+      document.getElementById('gapDetailSuggestion').textContent = gap.ai_suggestion || '(아직 생성 중입니다. 잠시 후 새로 고침하세요.)';
+      document.getElementById('gapDetailVerdictBadge').innerHTML =
+        `<span class="badge badge-domain-general">${escHtml(gap.ai_verdict || '')}</span>`;
+
+      const topicsEl = document.getElementById('gapDetailTopics');
+      const searchedTopics = Array.isArray(gap.searched_topics) ? gap.searched_topics : [];
+      if (searchedTopics.length) {
+        topicsEl.innerHTML = searchedTopics.map(t =>
+          `<span class="tag-chip">${escHtml(t.topic_id || '')}</span>`
+        ).join('');
+      } else {
+        topicsEl.innerHTML = '<span class="muted">탐색한 주제 없음</span>';
+      }
+    }
+
+    async function updateGapStatus(status) {
+      if (!viewingGapId) return;
+      try {
+        await apiFetch(`/api/knowledge/v2/gaps/${viewingGapId}/status`, {
+          method: 'PATCH',
+          body: JSON.stringify({ status }),
+        });
+        showToast('갭 상태를 업데이트했습니다.');
+        await fetchGaps();
+      } catch (error) {
+        alert(error.message || '상태 변경에 실패했습니다.');
+      }
+    }
+
+    function openCreateModalWithPrefill(suggestion) {
+      openCreateModal();
+      if (suggestion) {
+        document.getElementById('topicTitleInput').value = suggestion;
+      }
     }
 
     document.addEventListener('click', async (event) => {
@@ -1103,9 +1703,37 @@ KNOWLEDGE_HTML = """<!DOCTYPE html>
         switchTab(tab);
         return;
       }
+      const conflictStatus = target.getAttribute('data-conflict-status');
+      if (conflictStatus !== null) {
+        currentConflictStatus = conflictStatus;
+        document.querySelectorAll('[data-conflict-status]').forEach(el => {
+          el.classList.toggle('active', el.getAttribute('data-conflict-status') === conflictStatus);
+        });
+        await fetchConflicts();
+        return;
+      }
+      const gapStatus = target.getAttribute('data-gap-status');
+      if (gapStatus !== null) {
+        currentGapStatus = gapStatus;
+        document.querySelectorAll('[data-gap-status]').forEach(el => {
+          el.classList.toggle('active', el.getAttribute('data-gap-status') === gapStatus);
+        });
+        await fetchGaps();
+        return;
+      }
+      const gapOpenId = target.getAttribute('data-gap-open') || target.closest('[data-gap-open]')?.getAttribute('data-gap-open');
+      if (gapOpenId) {
+        openGapDetail(gapOpenId);
+        return;
+      }
       const openId = target.getAttribute('data-topic-open') || target.closest('[data-topic-open]')?.getAttribute('data-topic-open');
       if (openId) {
         await openDetailModal(openId);
+        return;
+      }
+      const conflictOpenId = target.getAttribute('data-conflict-open') || target.closest('[data-conflict-open]')?.getAttribute('data-conflict-open');
+      if (conflictOpenId) {
+        openConflictDetail(conflictOpenId);
         return;
       }
       const editId = target.getAttribute('data-topic-edit');
@@ -1138,10 +1766,14 @@ KNOWLEDGE_HTML = """<!DOCTYPE html>
       if (event.key === 'Escape') {
         closeModal(formModal);
         closeModal(detailModal);
+        document.getElementById('conflictDetailPanel').classList.add('hidden');
       }
     });
 
     document.getElementById('createTopicBtn').addEventListener('click', openCreateModal);
+    document.getElementById('uploadIngestBtn').addEventListener('click', () => {
+      document.getElementById('ingestFileInput').click();
+    });
     document.getElementById('saveTopicBtn').addEventListener('click', saveTopic);
     document.getElementById('editTopicBtn').addEventListener('click', async () => {
       if (viewingTopicId) {
@@ -1154,6 +1786,26 @@ KNOWLEDGE_HTML = """<!DOCTYPE html>
         await deleteTopic(viewingTopicId);
       }
     });
+    document.getElementById('rejectConflictBtn').addEventListener('click', () => resolveConflict('reject'));
+    document.getElementById('manualConflictBtn').addEventListener('click', () => resolveConflict('manual_edit'));
+    document.getElementById('mergeConflictBtn').addEventListener('click', () => resolveConflict('merge'));
+    document.getElementById('gapWontfixBtn').addEventListener('click', () => updateGapStatus('wontfix'));
+    document.getElementById('gapInProgressBtn').addEventListener('click', () => updateGapStatus('in_progress'));
+    document.getElementById('gapCreateTopicBtn').addEventListener('click', () => {
+      const gap = gaps.find(item => item.id === viewingGapId);
+      openCreateModalWithPrefill(gap && gap.ai_suggestion ? gap.ai_suggestion : '');
+    });
+    document.getElementById('ingestFileInput').addEventListener('change', async (event) => {
+      const file = event.target.files && event.target.files[0];
+      if (!file) return;
+      try {
+        await uploadIngestFile(file);
+      } catch (error) {
+        alert(error.message || '업로드에 실패했습니다.');
+      } finally {
+        event.target.value = '';
+      }
+    });
 
     searchInput.addEventListener('input', renderTopics);
     domainFilter.addEventListener('change', renderTopics);
@@ -1163,7 +1815,7 @@ KNOWLEDGE_HTML = """<!DOCTYPE html>
 
     document.addEventListener('DOMContentLoaded', async () => {
       updateDescriptionCount();
-      await fetchTopics();
+      await Promise.all([fetchTopics(), fetchConflicts()]);
     });
   </script>
 </body>

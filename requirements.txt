@@ -29,3 +29,5 @@ langgraph-checkpoint-mongodb
 google-cloud-bigquery
 apscheduler
 faiss-cpu
+python-multipart
+chardet

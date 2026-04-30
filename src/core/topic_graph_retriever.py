@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from src.core.mongo_client import boa_knowledge_collection
 from src.core.rag_engine import search_knowledge
 from src.core.llm_config import LLM_LIGHT
+from src.core.session_logger import session_event, EventType, build_llm_meta
 
 MAX_DEPTH  = int(os.getenv("RAG_MAX_DEPTH",  "3"))
 MAX_TOPICS = int(os.getenv("RAG_MAX_TOPICS", "7"))
@@ -26,8 +27,10 @@ class RetrieveResult:
     has_context: bool
     gap_flag: bool
     visited_topic_ids: list[str] = field(default_factory=list)
+    visited_docs: list[dict] = field(default_factory=list)
     total_hops: int = 0
     missing_aspects: list[str] = field(default_factory=list)
+    context_domains: list[str] = field(default_factory=list)
 
 
 class TopicGraphRetriever:
@@ -63,7 +66,7 @@ class TopicGraphRetriever:
 
     # ── 스니펫 추출 ────────────────────────────────────────────────────────────
 
-    async def _extract_snippet(self, query: str, topic: dict) -> str | None:
+    async def _extract_snippet(self, query: str, topic: dict, session_id: str | None = None) -> str | None:
         prompt = f"""주제: {topic.get("title", "")}
 본문:
 ---
@@ -76,16 +79,24 @@ class TopicGraphRetriever:
 발췌 시 원문 그대로 인용하되 필요한 문장만 포함하라."""
 
         try:
-            response = await LLM_LIGHT.ainvoke(prompt)
-            text = _extract_text(response.content).strip()
-            return None if text == "없음" else text
+            if session_id:
+                async with session_event(session_id, EventType.LLM_EXTRACT, f"문서 발췌: {topic.get('title', '')}") as ev:
+                    response = await LLM_LIGHT.ainvoke(prompt)
+                    text = _extract_text(response.content).strip()
+                    ev.content = text[:200]
+                    ev.llm = build_llm_meta(LLM_LIGHT.model, getattr(response, "usage_metadata", {}))
+                    return None if text == "없음" else text
+            else:
+                response = await LLM_LIGHT.ainvoke(prompt)
+                text = _extract_text(response.content).strip()
+                return None if text == "없음" else text
         except Exception as exc:
             logger.error("[TopicGraphRetriever] _extract_snippet 실패 %s: %s", topic.get("_id"), exc)
             return None
 
     # ── 충분성 판단 ────────────────────────────────────────────────────────────
 
-    async def _judge_sufficiency(self, query: str, snippets: list[dict]) -> dict:
+    async def _judge_sufficiency(self, query: str, snippets: list[dict], session_id: str | None = None) -> dict:
         snippets_text = "\n\n".join(
             f"[{s['title']}]\n{s['snippet']}" for s in snippets
         ) or "(없음)"
@@ -102,11 +113,21 @@ JSON으로만 답하라:
 {{"verdict": "sufficient" | "continue" | "exhausted", "missing_aspects": ["..."]}}"""
 
         try:
-            response = await LLM_LIGHT.ainvoke(prompt)
-            text = _extract_text(response.content).strip()
-            match = re.search(r'\{.*\}', text, re.DOTALL)
-            if match:
-                return json.loads(match.group())
+            if session_id:
+                async with session_event(session_id, EventType.LLM_GENERIC, "답변 충분성 판단") as ev:
+                    response = await LLM_LIGHT.ainvoke(prompt)
+                    text = _extract_text(response.content).strip()
+                    ev.content = text[:200]
+                    ev.llm = build_llm_meta(LLM_LIGHT.model, getattr(response, "usage_metadata", {}))
+                    match = re.search(r'\{.*\}', text, re.DOTALL)
+                    if match:
+                        return json.loads(match.group())
+            else:
+                response = await LLM_LIGHT.ainvoke(prompt)
+                text = _extract_text(response.content).strip()
+                match = re.search(r'\{.*\}', text, re.DOTALL)
+                if match:
+                    return json.loads(match.group())
         except Exception as exc:
             logger.error("[TopicGraphRetriever] _judge_sufficiency 실패: %s", exc)
 
@@ -119,6 +140,7 @@ JSON으로만 답하라:
         topic: dict,
         missing_aspects: list[str],
         visited: set[str],
+        session_id: str | None = None
     ) -> list[tuple[str, float]]:
         rel_ids = [
             rid for rid in (topic.get("related_topic_ids") or [])
@@ -157,12 +179,23 @@ JSON으로만 답하라: [{{"topic_id": "...", "priority": 0.0~1.0}}, ...]
 {candidates_json}"""
 
         try:
-            response = await LLM_LIGHT.ainvoke(prompt)
-            text = _extract_text(response.content).strip()
-            match = re.search(r'\[.*\]', text, re.DOTALL)
-            if match:
-                parsed = json.loads(match.group())
-                return [(item["topic_id"], float(item.get("priority", 0.5))) for item in parsed]
+            if session_id:
+                async with session_event(session_id, EventType.LLM_GENERIC, f"연관 문서 탐색: {topic.get('title', '')}") as ev:
+                    response = await LLM_LIGHT.ainvoke(prompt)
+                    text = _extract_text(response.content).strip()
+                    ev.content = text[:200]
+                    ev.llm = build_llm_meta(LLM_LIGHT.model, getattr(response, "usage_metadata", {}))
+                    match = re.search(r'\[.*\]', text, re.DOTALL)
+                    if match:
+                        parsed = json.loads(match.group())
+                        return [(item["topic_id"], float(item.get("priority", 0.5))) for item in parsed]
+            else:
+                response = await LLM_LIGHT.ainvoke(prompt)
+                text = _extract_text(response.content).strip()
+                match = re.search(r'\[.*\]', text, re.DOTALL)
+                if match:
+                    parsed = json.loads(match.group())
+                    return [(item["topic_id"], float(item.get("priority", 0.5))) for item in parsed]
         except Exception as exc:
             logger.error("[TopicGraphRetriever] _select_next_hops 실패: %s", exc)
 
@@ -188,6 +221,7 @@ JSON으로만 답하라: [{{"topic_id": "...", "priority": 0.0~1.0}}, ...]
             return RetrieveResult(context_xml="", has_context=False, gap_flag=True)
 
         visited: set[str] = set()
+        visited_docs: list[dict] = []
         collected_snippets: list[dict] = []
         depth = 0
         missing_aspects: list[str] = []
@@ -196,7 +230,7 @@ JSON으로만 답하라: [{{"topic_id": "...", "priority": 0.0~1.0}}, ...]
         while candidate_queue and depth < MAX_DEPTH and len(visited) < MAX_TOPICS:
             # 우선순위 높은 것 꺼냄
             candidate_queue.sort(key=lambda x: x[1], reverse=True)
-            topic_id, _ = candidate_queue.pop(0)
+            topic_id, score = candidate_queue.pop(0)
 
             if topic_id in visited:
                 continue
@@ -207,10 +241,12 @@ JSON으로만 답하라: [{{"topic_id": "...", "priority": 0.0~1.0}}, ...]
             topic = await self._load_topic(topic_id)
             if not topic:
                 continue
+                
+            visited_docs.append({"topic_id": topic_id, "title": topic.get("title", "제목 없음"), "score": score})
 
             # 스니펫 추출
             try:
-                snippet = await self._extract_snippet(query, topic)
+                snippet = await self._extract_snippet(query, topic, session_id=session_id)
             except Exception as exc:
                 logger.error("[TopicGraphRetriever] snippet 추출 예외 %s: %s", topic_id, exc)
                 snippet = None
@@ -225,7 +261,7 @@ JSON으로만 답하라: [{{"topic_id": "...", "priority": 0.0~1.0}}, ...]
 
             # 충분성 판단
             try:
-                verdict_result = await self._judge_sufficiency(query, collected_snippets)
+                verdict_result = await self._judge_sufficiency(query, collected_snippets, session_id=session_id)
             except Exception as exc:
                 logger.error("[TopicGraphRetriever] sufficiency 판단 예외: %s", exc)
                 verdict_result = {"verdict": "continue", "missing_aspects": []}
@@ -239,7 +275,7 @@ JSON으로만 답하라: [{{"topic_id": "...", "priority": 0.0~1.0}}, ...]
             # 다음 hop 선정
             if verdict == "continue":
                 try:
-                    next_hops = await self._select_next_hops(topic, missing_aspects, visited)
+                    next_hops = await self._select_next_hops(topic, missing_aspects, visited, session_id=session_id)
                     candidate_queue.extend(next_hops)
                 except Exception as exc:
                     logger.error("[TopicGraphRetriever] next_hops 선정 예외: %s", exc)
@@ -256,8 +292,10 @@ JSON으로만 답하라: [{{"topic_id": "...", "priority": 0.0~1.0}}, ...]
             has_context=bool(collected_snippets),
             gap_flag=gap_flag,
             visited_topic_ids=list(visited),
+            visited_docs=visited_docs,
             total_hops=depth,
             missing_aspects=missing_aspects,
+            context_domains=context_domains,
         )
 
 

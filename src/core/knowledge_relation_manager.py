@@ -14,8 +14,9 @@ logger = logging.getLogger(__name__)
 
 # ── 내부 헬퍼 ─────────────────────────────────────────────────────────────────
 
+# 조건에 맞는 문서 찾기
 async def _assert_topic_exists(topic_id: str) -> None:
-    doc = await boa_knowledge_collection.find_one({"_id": topic_id}, {"_id": 1})
+    doc = await boa_knowledge_collection.find_one({"_id": topic_id}, {"_id": 1}) # 존재 여부만 확인하기 위해 _id 필드만 조회
     if doc is None:
         raise ValueError(f"topic_id '{topic_id}' 가 존재하지 않습니다.")
 
@@ -34,8 +35,9 @@ async def add_relation(topic_id_a: str, topic_id_b: str, actor: str) -> None:
     - 존재하지 않는 topic_id면 ValueError.
     """
     if topic_id_a == topic_id_b:
-        raise ValueError("self-reference not allowed")
+        raise ValueError("자기 자신과 연결할 수 없습니다.")
 
+    # 존재 여부 확인 (둘 다 존재해야 연결 시도)
     await _assert_topic_exists(topic_id_a)
     await _assert_topic_exists(topic_id_b)
 
@@ -43,10 +45,10 @@ async def add_relation(topic_id_a: str, topic_id_b: str, actor: str) -> None:
 
     # A → B
     res_a = await boa_knowledge_collection.update_one(
-        {"_id": topic_id_a, "related_topic_ids": {"$ne": topic_id_b}},
+        {"_id": topic_id_a, "related_topic_ids": {"$ne": topic_id_b}}, # 조건. 이미 연결되어 있으면 no-op
         {
-            "$addToSet": {"related_topic_ids": topic_id_b},
-            "$set": {"updated_at": now, "updated_by": actor},
+            "$addToSet": {"related_topic_ids": topic_id_b}, # 연결 추가
+            "$set": {"updated_at": now, "updated_by": actor}, # 메타데이터 업데이트
         },
     )
 
@@ -61,10 +63,10 @@ async def add_relation(topic_id_a: str, topic_id_b: str, actor: str) -> None:
         )
     except Exception as exc:
         # B→A 실패 시 A→B 롤백 시도
-        if res_a.modified_count:
+        if res_a.modified_count: # A→B 가 실제로 추가된 경우에만 롤백 시도. modified_count=0 이면 이미 연결되어 있었던 것이므로 롤백 불필요
             try:
                 await boa_knowledge_collection.update_one(
-                    {"_id": topic_id_a},
+                    {"_id": topic_id_a}, # 롤백은 조건 없이 무조건 제거 시도. 이미 존재하지 않는 경우에도 $pull은 문제없이 동작하므로 조건 불필요
                     {"$pull": {"related_topic_ids": topic_id_b}},
                 )
             except Exception as rollback_exc:
@@ -79,7 +81,7 @@ async def remove_relation(topic_id_a: str, topic_id_b: str, actor: str) -> None:
     now = _now()
 
     res_a = await boa_knowledge_collection.update_one(
-        {"_id": topic_id_a},
+        {"_id": topic_id_a}, # 조건 없이 무조건 제거 시도. 이미 존재하지 않는 경우에도 $pull은 문제없이 동작하므로 조건 불필요
         {
             "$pull": {"related_topic_ids": topic_id_b},
             "$set": {"updated_at": now, "updated_by": actor},
@@ -96,10 +98,10 @@ async def remove_relation(topic_id_a: str, topic_id_b: str, actor: str) -> None:
         )
     except Exception as exc:
         # B→A 제거 실패 시 A→B 롤백 시도
-        if res_a.modified_count:
+        if res_a.modified_count: # A→B 가 실제로 제거된 경우에만 롤백 시도. modified_count=0 이면 이미 연결되어 있지 않았던 것이므로 롤백 불필요
             try:
                 await boa_knowledge_collection.update_one(
-                    {"_id": topic_id_a},
+                    {"_id": topic_id_a}, # 롤백은 조건 없이 무조건 추가 시도. 이미 존재하는 경우에도 $addToSet은 문제없이 동작하므로 조건 불필요
                     {"$addToSet": {"related_topic_ids": topic_id_b}},
                 )
             except Exception as rollback_exc:
@@ -118,12 +120,15 @@ async def set_relations(topic_id: str, related_topic_ids: list[str], actor: str)
     if doc is None:
         raise ValueError(f"topic_id '{topic_id}' 가 존재하지 않습니다.")
 
+    # 현재와 원하는 목록의 차집합 계산
     current = set(doc.get("related_topic_ids") or [])
     desired = set(related_topic_ids)
 
+    # 차집합을 이용해 추가할 항목과 제거할 항목 계산
     to_add    = desired - current
     to_remove = current - desired
 
+    # 추가
     for rel_id in to_add:
         try:
             await add_relation(topic_id, rel_id, actor)
@@ -131,6 +136,7 @@ async def set_relations(topic_id: str, related_topic_ids: list[str], actor: str)
             logger.error("set_relations add 실패 %s→%s: %s", topic_id, rel_id, exc)
             raise
 
+    # 제거
     for rel_id in to_remove:
         try:
             await remove_relation(topic_id, rel_id, actor)
