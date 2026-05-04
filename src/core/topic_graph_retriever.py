@@ -13,6 +13,7 @@ from src.core.mongo_client import boa_knowledge_collection
 from src.core.rag_engine import search_knowledge
 from src.core.llm_config import LLM_LIGHT
 from src.core.session_logger import session_event, EventType, build_llm_meta
+from src.core.domain_primer import DOMAIN_PRIMER
 
 MAX_DEPTH  = int(os.getenv("RAG_MAX_DEPTH",  "3"))
 MAX_TOPICS = int(os.getenv("RAG_MAX_TOPICS", "7"))
@@ -67,16 +68,23 @@ class TopicGraphRetriever:
     # ── 스니펫 추출 ────────────────────────────────────────────────────────────
 
     async def _extract_snippet(self, query: str, topic: dict, session_id: str | None = None) -> str | None:
-        prompt = f"""주제: {topic.get("title", "")}
-본문:
+        prompt = f"""[도메인 핵심 지식]
+{DOMAIN_PRIMER}
+
+검토할 문서 제목: {topic.get("title", "")}
+문서 본문:
 ---
 {topic.get("content", "")}
 ---
-질문: {query}
+사용자 질문: {query}
 
-위 본문에서 질문에 답하는 데 필요한 부분만 발췌하라.
-관련 내용이 전혀 없으면 "없음"만 반환하라.
-발췌 시 원문 그대로 인용하되 필요한 문장만 포함하라."""
+위 문서 본문에서 질문에 답하는 데 필요한 '핵심 정보'를 발췌하라.
+[발췌 핵심 원칙]
+대원칙: 사용자의 질문에 확실하고 풍성한 답변을 하는 데 필요한 정보는 모두 발췌하라. 질문과 직접적으로 관련된 내용뿐만 아니라, 답변의 정확성/안전성/완전성을 위해 함께 고려해야 할 '주의사항', '제약 조건', '예외 사항', '부작용' 등도 모두 포함하라.
+1. 단순한 답변(가능/불가능, 예/아니오)만 추출하지 말고, 관련된 세부 조건도 모두 포함하라.
+2. 특히, 해당 답변과 연관된 '주의사항', '제약 조건', '예외 사항', '과금/기간 등의 부작용' 내용이 본문에 있다면 질문자가 직접 묻지 않았더라도 반드시 함께 발췌하라.
+3. 관련 내용이 전혀 없으면 오직 "없음"이라고만 반환하라.
+4. 내용을 임의로 지어내지 말고 원문의 문장을 충실히 활용하라."""
 
         try:
             if session_id:
@@ -228,7 +236,14 @@ JSON으로만 답하라: [{{"topic_id": "...", "priority": 0.0~1.0}}, ...]
         cursor = boa_knowledge_collection.find({"_id": {"$in": candidate_ids}}, {"title": 1})
         title_map = {doc["_id"]: doc.get("title", "제목없음") for doc in await cursor.to_list(length=None)}
         
-        printed_candidates = [(title_map.get(q[0], q[0]), round(q[1], 4)) for q in candidate_queue]
+        # FAISS에는 있지만 MongoDB에는 없는 문서(삭제처리된 문서 등 고스트 ID) 필터링
+        candidate_queue = [q for q in candidate_queue if q[0] in title_map]
+        
+        if not candidate_queue:
+            print("[RAG Debug] 1. 매칭되는 유효한 문서가 존재하지 않아 지식 갭(Gap) 처리")
+            return RetrieveResult(context_xml="", has_context=False, gap_flag=True)
+
+        printed_candidates = [(title_map[q[0]], round(q[1], 4)) for q in candidate_queue]
         print(f"[RAG Debug] 1. 초기 벡터 검색된 후보 문서 & 점수: {printed_candidates}")
 
         visited: set[str] = set()

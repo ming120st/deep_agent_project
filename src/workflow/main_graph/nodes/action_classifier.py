@@ -20,7 +20,7 @@ from src.core.google_chat import send_message
 
 # ── 출력 스키마 (경량화 - parameters 제거) ────────────────────────────────────
 class ActionResult(BaseModel):
-    action: Literal["new_agent", "continue_task", "rag", "light_response", "help_request"]
+    action: Literal["new_agent", "continue_task", "rag", "context_response", "help_request", "ambiguous"]
     agent_name: Optional[str] = None  # new_agent일 때만 사용
     new_task: Optional[bool] = False
 
@@ -42,19 +42,24 @@ CLASSIFY_PROMPT = """
    - 파라미터 제공, AI 질문에 답변, 취소 의사 표현 등 모두 포함.
    - current_agent가 있을 때만 해당.
 
-3. rag: 사내 규정, 매뉴얼, 일반 지식 등에 대한 질문.
+3. rag: 컨텍스트에 답이 없고 사용자가 외부 지식 검색이 필요한 질문을 할 때.
+   - ex) 사내 규정, 매뉴얼, 일반 지식 등에 대한 질문.
 
-4. light_response: 단순 인사, 감정 표현, 위 분류에 해당하지 않는 가벼운 대화.
+4. context_response: 컨텍스트에 답이 있거나 외부 지식 검색 없이도 현재 대화 맥락만으로 답변 가능한 경우.
+   - ex) 단순 인사, 감정 표현 등 가벼운 대화.
+   - AI의 업무 수행 결과나 분석 결과가 컨텍스트에 있고, 추가 정보 없이 답변 가능한 경우도 포함.
 
 5. help_request: 사용자가 에이전트 사용방법을 요청하는 경우.
    - "너 뭐 할 수 있어?", "도움말 보여줘", "사용법 알려줘" 등 전체 기능 문의 → agent_name은 null
    - "이심 재발급 사용방법", "회선변경 어떻게 해?" 등 특정 에이전트 문의 → agent_name에 해당 에이전트 키 입력
 
+6. ambiguous: 사용자의 의도가 명확하지 않거나 위 다른 분류에 속하지 않는 경우. 
+
 [new_task 판단 기준]
 - action이 new_agent일 때: new_task는 항상 True
 - 동일 에이전트 진행 중이지만 새로운 파라미터로 다른 작업 요청: True
 - 진행 중인 업무 이어가기: False
-- rag, light_response, help_request: False
+- rag, context_response, help_request, ambiguous: False
 """
 
 action_classify_prompt = ChatPromptTemplate.from_template(
