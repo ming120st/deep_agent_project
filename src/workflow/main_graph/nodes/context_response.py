@@ -5,35 +5,35 @@ from src.core.llm_config import LLM_LIGHT
 from src.workflow.graph_infra.state import GraphState
 from src.core.session_logger import session_event, update_turn_meta, EventType, build_llm_meta
 
-LIGHT_RESPONSE_SYSTEM_PROMPT = """당신은 와이드모바일 회사 내 다양한 업무를 지원하고 사용자들의 궁금증을 해결해주는 친절하고 유능한 업무 지원 AI 어시스턴트(Business Operations Agent)입니다.
+CONTEXT_RESPONSE_SYSTEM_PROMPT = """당신은 와이드모바일 회사 내 다양한 업무를 지원하고 사용자들의 궁금증을 해결해주는 친절하고 유능한 업무 지원 AI 어시스턴트(Business Operations Agent)입니다.
 - 사람들은 당신을 "시락이" 라고 부릅니다.
 - 사용자에게 친근하고 전문적인 태도로 답변하세요.
 - 단순히 인사를 나누거나 일상적인 대화, 가벼운 질문 등에 자연스럽게 응답하세요.
-- 업무 지시가 아닌 가벼운 대화(light_response)로 분류된 상황이므로 상황에 맞는 친절한 안내 또는 상담을 제공하면 됩니다.
+- 현재 대화 맥락만으로도 답할 수 있는 질문이나, 업무 지시가 아닌 가벼운 대화(context_response)로 분류된 상황이므로 상황에 맞는 친절한 안내 또는 상담을 제공하면 됩니다.
 - 가끔 사람들의 말동무가 되어주기도 하며, 사용자의 감정 표현에 공감하는 답변을 제공할 수도 있습니다.
 - 업무 관련 질문이 아닌 경우에도 사용자가 편안하게 대화할 수 있도록 지원하세요.
 """
 
-light_response_prompt = ChatPromptTemplate.from_messages([
-    ("system", LIGHT_RESPONSE_SYSTEM_PROMPT),
+context_response_prompt = ChatPromptTemplate.from_messages([
+    ("system", CONTEXT_RESPONSE_SYSTEM_PROMPT),
     MessagesPlaceholder(variable_name="messages")
 ])
 
-light_response_chain = light_response_prompt | LLM_LIGHT # | StrOutputParser()는 usage_metadata 기록을 위해 체인에서 일단 제외하고 노드 내부에서 직접 파싱하도록 변경
+context_response_chain = context_response_prompt | LLM_LIGHT # | StrOutputParser()는 usage_metadata 기록을 위해 체인에서 일단 제외하고 노드 내부에서 직접 파싱하도록 변경
 
-async def execute_light_response(state: GraphState):
-    """ActionResult가 light_response일 때 호출되어 가벼운 대화 응답을 생성합니다."""
-    await update_turn_meta(state.session_id, intent="light_response")
+async def execute_context_response(state: GraphState):
+    """ActionResult가 context_response일 때 호출되어 현재 맥락 기반의 응답을 생성합니다."""
+    await update_turn_meta(state.session_id, intent="context_response")
 
     start_time = time.time()
-    print(f"[Node] Start: execute_light_response")
+    print(f"[Node] Start: execute_context_response")
     
     # 상태 객체의 messages를 LLM에 전달 가능한 형식으로 변환
     messages = [(m["role"], m["content"]) for m in state.messages]
     
     # LLM을 호출하여 응답 생성
-    async with session_event(state.session_id, EventType.LLM_RESPONSE, "라이트 응답 생성") as ev:
-        llm_response = await light_response_chain.ainvoke({"messages": messages})
+    async with session_event(state.session_id, EventType.LLM_RESPONSE, "컨텍스트 응답 생성") as ev:
+        llm_response = await context_response_chain.ainvoke({"messages": messages})
         
         # Gemini가 content를 list로 반환하는 경우 처리
         raw = llm_response.content
@@ -53,6 +53,6 @@ async def execute_light_response(state: GraphState):
     new_messages.append({"role": "assistant", "content": response_content})
     
     end_time = time.time()
-    print(f"[Node] End: execute_light_response | Duration: {end_time - start_time:.2f}s")
+    print(f"[Node] End: execute_context_response | Duration: {end_time - start_time:.2f}s")
     
     return {"messages": new_messages}

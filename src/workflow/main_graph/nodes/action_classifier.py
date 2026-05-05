@@ -19,7 +19,10 @@ from src.agent.registry import get_enabled_agent_descriptions
 from src.core.google_chat import send_message
 
 # ── 출력 스키마 (경량화 - parameters 제거) ────────────────────────────────────
+from pydantic import Field
+
 class ActionResult(BaseModel):
+    reason: str = Field(description="해당 action으로 분류한 구체적인 이유")
     action: Literal["new_agent", "continue_task", "rag", "context_response", "help_request", "ambiguous"]
     agent_name: Optional[str] = None  # new_agent일 때만 사용
     new_task: Optional[bool] = False
@@ -31,6 +34,7 @@ format_instructions = action_parser.get_format_instructions()
 CLASSIFY_PROMPT = """
 당신은 사용자의 발화를 분석하여 다음 행동을 결정하는 라우팅 AI입니다.
 파라미터 추출은 하지 않습니다. 오직 어떤 행동을 취해야 할지만 분류하세요.
+행동을 결정하기 전에, 반드시 'reason' 필드에 해당 action으로 분류한 구체적인 이유를 먼저 작성하세요. 특히 ambiguous로 분류할 경우, 사용자의 어떤 의도가 불분명한지 상세히 적어주세요.
 
 [행동(action) 분류 기준]
 1. new_agent: 사용자가 새로운 업무(에이전트)를 시작하려고 할 때.

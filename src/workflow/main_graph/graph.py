@@ -14,9 +14,9 @@ Google Chat 메시지 수신부터 응답 전송까지의 전체 대화 흐름�
     │
     ▼ [route_by_action] — actionResult에 따라 라우팅
   ┌──────────┬───────────────┼──────────────┬──────────────┐
-  │new_agent │ continue_task │     rag      │light_response│
+  │new_agent │ continue_task │     rag      │context_response│
        ▼           ▼                ▼              ▼       │
-     execute_   update_        execute_rag  execute_light_ │
+     execute_   update_        execute_rag  execute_context_ │
      <agent>  parameters                       response    │
   │          │               │              │              │
   │                ▼         │              │              │              
@@ -149,8 +149,51 @@ KB 컨텍스트에 근거가 없는 부분은 "해당 내용은 현재 지식베
     return state
 
 def handle_unclear(state: GraphState):
+    # actionResult가 예상 범위를 벗어났을 때 사용자에게 재입력을 요청하는 응답을 추가
     state.add_ai_message("죄송합니다. 말씀하신 내용을 정확히 이해하지 못했습니다. 다시 한 번 말씀해 주시겠어요?")
     return state
+
+async def handle_ambiguous(state: GraphState):
+    """
+    사용자 의도가 애매모호할 때, 라우터가 남긴 reason을 바탕으로
+    사용자에게 명확한 의도 확인을 요청하는 응답을 LLM을 통해 생성합니다.
+    """
+    session_id = state.session_id
+    action_data = getattr(state, "action", {})
+    reason = action_data.get("reason", "사용자 요청의 의도가 불분명합니다.")
+    
+    from src.core.llm_config import LLM_LIGHT
+    from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
+
+    system_prompt = f"""당신은 와이드모바일의 친절한 업무 지원 AI 시락이입니다.
+현재 사용자의 요청이 명확하지 않거나 모호한 경계의 작업이 있어 진행할 수 없는 상황입니다.
+의도 분류 AI가 판단한 '의도가 모호한 이유'는 다음과 같습니다:
+[{reason}]
+
+이를 바탕으로 사용자에게 어떤 점을 더 구체적으로 말해달라고 요청할지 친절하고 자연스러운 응답(1~2문장)을 작성하세요.
+기계적인 말투를 피하고, 사용자가 필요한 것이 이것인지 저것인지 등 구체적으로 되묻는 형식을 취하면 좋습니다.
+해결책을 지레짐작해서 답변하지 말고, 명확한 의도를 파악하는 데에만 집중하세요."""
+
+    lc_messages = [SystemMessage(content=system_prompt)]
+    # 최근 3~4개의 대화 내역만 컨텍스트로 전달
+    for m in state.messages[-4:]:
+        if m["role"] == "user":
+            lc_messages.append(HumanMessage(content=m["content"]))
+        elif m["role"] == "assistant":
+            lc_messages.append(AIMessage(content=m["content"]))
+
+    try:
+        async with session_event(session_id, EventType.LLM_RESPONSE, "모호성 확인 응답 생성") as ev:
+            response = await LLM_LIGHT.ainvoke(lc_messages)
+            answer = _extract_text(response.content)
+            ev.content = answer[:200]
+            ev.llm = build_llm_meta("gemini-2.5-flash", getattr(response, "usage_metadata", {}))
+    except Exception as e:
+        logger.error(f"[handle_ambiguous] LLM 호출 실패: {e}")
+        answer = "말씀하신 의도가 명확하지 않아 어떤 작업을 도와드려야 할지 잘 모르겠습니다. 다시 한 번 구체적으로 말씀해 주시겠어요?"
+
+    state.add_ai_message(answer)
+    return {"messages": state.messages}
 
 def handle_error(state: GraphState):
     state.add_ai_message("시스템 처리 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.")
@@ -238,12 +281,14 @@ def route_by_action(state: GraphState):
 
     if action_type == "rag":
         return "execute_rag"
-    elif action_type == "light_response":
-        return "execute_light_response"
+    elif action_type == "context_response":
+        return "execute_context_response"
     elif action_type == "help_request":
         return "execute_help_request"
     elif action_type in ("new_agent", "continue_task"):
         return "extract_parameters"
+    elif action_type == "ambiguous":
+        return "handle_ambiguous"
 
     return "handle_unclear"
 
@@ -260,7 +305,7 @@ def route_after_update_parameters(state: GraphState):
 def build_main_graph():
     # 순환참조 방지 위해 그래프 빌더 내부에서 임포트
     from src.workflow.main_graph.nodes.parameter_extractor import extract_parameters
-    from src.workflow.main_graph.nodes.light_response import execute_light_response
+    from src.workflow.main_graph.nodes.context_response import execute_context_response
     from src.agent.registry import AGENT_REGISTRY
     from src.workflow.main_graph.nodes.help_request import execute_help_request
 
@@ -271,9 +316,10 @@ def build_main_graph():
     workflow.add_node("classify_agent_action", classify_agent_action)
     workflow.add_node("extract_parameters", extract_parameters)
     workflow.add_node("execute_rag", execute_rag)
-    workflow.add_node("execute_light_response", execute_light_response)
+    workflow.add_node("execute_context_response", execute_context_response)
     workflow.add_node("update_parameters", update_parameters)
     workflow.add_node("handle_unclear", handle_unclear)
+    workflow.add_node("handle_ambiguous", handle_ambiguous)
     workflow.add_node("handle_error", handle_error)
     workflow.add_node("send_response", send_response)
     workflow.add_node("execute_help_request", execute_help_request)
@@ -292,8 +338,9 @@ def build_main_graph():
         {
             "extract_parameters": "extract_parameters",  # ← new_agent, continue_task 둘 다
             "execute_rag": "execute_rag",
-            "execute_light_response": "execute_light_response",
+            "execute_context_response": "execute_context_response",
             "execute_help_request":    "execute_help_request",
+            "handle_ambiguous": "handle_ambiguous",
             "handle_unclear": "handle_unclear",
         },
     )
@@ -307,7 +354,7 @@ def build_main_graph():
     workflow.add_conditional_edges("update_parameters", route_after_update_parameters, agent_routing)
     # 위 3줄은 그 위의 add_conditional_edges와 사실 같은 방식으로 라우팅 하고 있는건데, 에이전트 레지스트리 기반으로 자동 라우팅하기 위해 표현이 달라진 것뿐임.
 
-    for node_name in ["execute_rag", "execute_light_response", "handle_unclear", "handle_error"]:
+    for node_name in ["execute_rag", "execute_context_response", "handle_unclear", "handle_ambiguous", "handle_error"]:
         workflow.add_edge(node_name, "send_response")
 
     workflow.add_edge("execute_help_request", END) # 도움말 노드는 send_response를 거치지 않고 바로 END로 연결 (카드 전송 후 대화 종료)
