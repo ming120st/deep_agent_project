@@ -6,7 +6,7 @@ import os
 from dotenv import load_dotenv
 
 load_dotenv()
-MONGODB_URI = os.getenv("MONGODB_URI")
+MONGODB_URI = os.getenv("DOCUMENTDB_CONNECTION_STRING")
 MONGODB_DB_NAME = os.getenv("MONGODB_DB_NAME", "boa_db")  # 기본값 boa_db
 
 # 기존 Motor 클라이언트 (task, sop, memory 등 비동기 작업용)
