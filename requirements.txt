@@ -30,4 +30,5 @@ google-cloud-bigquery
 apscheduler
 faiss-cpu
 python-multipart
-chardetopenpyxl
+chardet
+openpyxl
