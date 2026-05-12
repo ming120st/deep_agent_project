@@ -19,6 +19,7 @@ from src.workflow.device_job.schemas import DeviceJobCallback
 from src.core.device_job_manager import get_thread_id_by_job, complete_device_job
 from src.workflow.main_graph.graph import main_graph
 from src.orchestrator import _get_lock
+from fastapi import Body
 
 router = APIRouter()
 
@@ -31,7 +32,10 @@ def _verify_key(key: str) -> None:
 
 
 @router.post("/device-callback")
-async def device_callback(payload, x_device_job_key=Header(...)):
+async def device_callback(
+    payload: DeviceJobCallback = Body(...),
+    x_device_job_key: str = Header(...)
+    ):
     _verify_key(x_device_job_key)
 
     thread_id = await get_thread_id_by_job(payload.job_id)
