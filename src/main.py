@@ -337,7 +337,7 @@ async def receive_message(request: Request, background_tasks: BackgroundTasks):
             lines.append(f"• `{s['schedule_id'][-8:]}` | {label} {time_str}\n  _{s['query'][:40]}_")
         return {"text": "\n".join(lines)}
 
-    background_tasks.add_task(orchestrate_chat_event, state, config, is_new_session)
+    asyncio.create_task(orchestrate_chat_event(state, config, is_new_session))
     return {}
 
 

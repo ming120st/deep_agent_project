@@ -18,6 +18,7 @@ from langgraph.types import Command
 from src.workflow.device_job.schemas import DeviceJobCallback
 from src.core.device_job_manager import get_thread_id_by_job, complete_device_job
 from src.workflow.main_graph.graph import main_graph
+from src.orchestrator import _get_lock
 
 router = APIRouter()
 
@@ -30,30 +31,25 @@ def _verify_key(key: str) -> None:
 
 
 @router.post("/device-callback")
-async def device_callback(
-    payload: DeviceJobCallback,
-    x_device_job_key: str = Header(...),
-):
-    """로컬 PC 작업 완료 콜백. 대기 중인 그래프를 재개합니다."""
+async def device_callback(payload, x_device_job_key=Header(...)):
     _verify_key(x_device_job_key)
 
     thread_id = await get_thread_id_by_job(payload.job_id)
     if not thread_id:
-        raise HTTPException(status_code=404, detail=f"job_id not found or expired: {payload.job_id}")
+        raise HTTPException(status_code=404, detail=f"job_id not found: {payload.job_id}")
 
-    config = {"configurable": {"thread_id": thread_id}}
-
-    # job 먼저 완료 처리 → 중복 콜백 재시도가 들어와도 get_thread_id_by_job에서 차단됨
     await complete_device_job(
         payload.job_id,
         status="done" if payload.status == "success" else "error"
     )
 
-    # 그래프 재개 — interrupt()가 멈춘 지점부터 재시작
-    await main_graph.ainvoke(
-        Command(resume=payload.model_dump()),
-        config=config,
-    )
+    config = {"configurable": {"thread_id": thread_id}}
+    lock = _get_lock(thread_id)  # thread_id == user_id 이므로 동일 lock
 
-    print(f"[DeviceCallback] 그래프 재개 완료: job={payload.job_id}, thread={thread_id}")
+    async with lock:
+        await main_graph.ainvoke(
+            Command(resume=payload.model_dump()),
+            config=config,
+        )
+
     return {"status": "resumed"}

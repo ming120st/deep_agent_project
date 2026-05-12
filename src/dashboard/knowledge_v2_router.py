@@ -382,30 +382,66 @@ async def ingest_upload(request: Request, file: UploadFile = File(...)):
     user = _require_user(request)
 
     filename = file.filename or ""
-    if not filename.lower().endswith((".txt", ".md")):
+    if not filename.lower().endswith((".txt", ".md", ".xlsx")):
         raise HTTPException(
             status_code=400,
-            detail="지원하지 않는 파일 형식입니다. .txt, .md만 지원합니다.",
+            detail="지원하지 않는 파일 형식입니다. .txt, .md, .xlsx만 지원합니다.",
         )
 
     raw_bytes = await file.read()
     
-    import chardet
-    detected = chardet.detect(raw_bytes)
-    encoding = detected.get("encoding") or "utf-8"
-    text = raw_bytes.decode(encoding, errors="replace").strip()
-    
-    if not text:
-        raise HTTPException(status_code=400, detail="업로드한 파일이 비어 있습니다.")
+    if filename.lower().endswith(".xlsx"):
+        import io
+        import openpyxl
+        import logging
+        logger = logging.getLogger(__name__)
 
-    asyncio.create_task(
-        run_ingest_pipeline(
-            content=text,
-            source_type="document_upload",
-            source_ref=filename,
-            actor=user["email"],
+        async def process_excel_background(file_bytes: bytes, fname: str, actor: str):
+            try:
+                wb = openpyxl.load_workbook(filename=io.BytesIO(file_bytes), data_only=True)
+                ws = wb.active
+                # A2셀부터 마지막 줄까지 순차적으로 처리
+                for row_idx in range(2, ws.max_row + 1):
+                    cell_val = ws.cell(row=row_idx, column=1).value
+                    if not cell_val:
+                        continue
+                    
+                    text = str(cell_val).strip()
+                    if not text:
+                        continue
+                        
+                    try:
+                        await run_ingest_pipeline(
+                            content=text,
+                            source_type="document_upload",
+                            source_ref=f"{fname} (Row {row_idx})",
+                            actor=actor,
+                        )
+                    except Exception as e:
+                        logger.error(f"[Excel Ingest] Row {row_idx} failed: {e}")
+            except Exception as e:
+                logger.error(f"[Excel Ingest] Failed to load workbook: {e}")
+
+        asyncio.create_task(process_excel_background(raw_bytes, filename, user["email"]))
+        
+    else:
+        import chardet
+        detected = chardet.detect(raw_bytes)
+        encoding = detected.get("encoding") or "utf-8"
+        text = raw_bytes.decode(encoding, errors="replace").strip()
+        
+        if not text:
+            raise HTTPException(status_code=400, detail="업로드한 파일이 비어 있습니다.")
+
+        asyncio.create_task(
+            run_ingest_pipeline(
+                content=text,
+                source_type="document_upload",
+                source_ref=filename,
+                actor=user["email"],
+            )
         )
-    )
+
     return {
         "message": "인입 파이프라인이 시작되었습니다.",
         "filename": filename,

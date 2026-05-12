@@ -66,37 +66,66 @@ def _dedupe_keep_order(values: list[str]) -> list[str]:
 
 
 async def _scope_topics(content: str) -> list[dict]:
-    prompt = f"""다음 [입력 내용]을 분석하여 몇 개의 '독립된 주제(Topic)'로 분할할지 판단하라.
+    prompt = f"""다음 [입력 내용]을 분석하여 지식베이스에 등록할 '범용성 있는 공통 지식'을 추출한다.
 
-[분할 및 병합 원칙]
-1. 독립된 주제의 정의: 각각 완전히 다른 상황이나 맥락에서 참고되는 지식의 단위.
-2. 병합 원칙 (중요): 특정 정책 및 기능에 수반되는 '예외 상황', '주의사항', '제약 조건' 등은 절대 별도의 주제로 쪼개지 말고, 메인 주제(하나의 문맥) 안에 포함시켜라.
-   - 잘못된 예: 'eSIM 등록 방법' / 'eSIM 등록 시 사용기간 주의사항' (X) -> 쪼개면 안 됨
-   - 올바른 예: '다중 eSIM 등록 방법 및 주의사항' (O) -> 하나로 병합
-3. 적절한 포괄성: 너무 세부적인 조건으로 분할하지 마라.
-   - 잘못된 예: '와이파이도시락 택배수령 시 취소 정책' (X)
-   - 올바른 예: '와이파이도시락 취소 정책' (O) -> 세부 조건은 본문에 포함
+    ---
 
-[도메인 핵심 지식]
-{DOMAIN_PRIMER}
+    [1단계: 추출 가능 여부 판단 — 기본값은 추출 안 함]
 
-[입력 내용]
----
-{content}
----
+    아래 조건을 **모두** 충족할 때만 추출을 진행한다. 하나라도 충족하지 못하면 즉시 `[]`를 반환하라.
 
-도출된 각 주제별로 분할된 텍스트(scoped_content)와 임시 제목(tentative_title)을 작성하여 JSON 배열 형식으로만 응답하라.
-응답 포맷:
-[{{
-    "scoped_content": "...",
-    "tentative_title": "..."
-}}]"""
+    ✅ 추출 가능 조건 (모두 충족 필요)
+    - 조건 A: 내용이 특정 개인/주문/케이스에 귀속되지 않고, 동일 상황에서 누구에게나 동일하게 적용될 수 있는 내용이다.
+    - 조건 B: 규정, 정책, 처리 절차, 기준 중 하나에 해당하며, 담당자가 반복 참고할 실무 가치가 있다.
+    - 조건 C: [도메인 기본 정보]에 이미 명시된 상식 수준의 내용이 아니다.
+
+    🚫 즉시 `[]` 반환 케이스 (해당 시 바로 종료)
+    - 입력이 상담 내역이고, 안내/조치 내용이 해당 케이스에 대한 처리 결과일 뿐 정책 문서를 인용하거나 일반 기준을 명시하지 않은 경우
+    - 특정 상품의 일회성 처리(환불 접수 완료, 재발급 처리 등)만 기술된 경우
+    - "~안내함", "~처리함", "~완료" 형태의 사실 기록만 있는 경우
+    - 내용에서 규정·정책이 존재한다고 **명시적으로** 확인되지 않는데, 그것을 추론·일반화해야만 지식이 도출되는 경우
+
+    ---
+
+    [2단계: 주제 분할 원칙 — 추출 가능한 경우에만 진행]
+
+    1. **분리 기준**: 서로 다른 서비스(와이파이/유심/이심/보험 등), 문의 유형, 개념이면 각각 독립 주제로 분리한다.
+    2. **병합 원칙**: 동일 개념·정책 내의 예외, 주의사항, 제약 조건은 메인 주제에 포함한다.
+    - 잘못된 예: 'eSIM 등록 방법' / 'eSIM 등록 시 사용기간 주의사항' → 분리 금지
+    - 올바른 예: 'eSIM 등록 방법 및 주의사항' → 하나로 병합
+    3. **포괄성**: 의미 없이 세분화하지 않는다.
+    - 잘못된 예: '와이파이도시락 택배수령 시 취소 단일 건 정책'
+    - 올바른 예: '와이파이도시락 취소 정책'
+    4. **scoped_content 작성**: 원문에서 해당 주제와 직접 관련된 내용만 추려서 작성하고, 본문에 없는 내용을 추가하거나 일반화하지 않는다.
+
+    ---
+
+    [도메인 기본 정보]
+    {DOMAIN_PRIMER}
+
+    [입력 내용]
+    ---
+    {content}
+    ---
+
+    도출된 각 주제별로 분할된 텍스트(scoped_content)와 임시 제목(tentative_title)을 작성하여 JSON 배열 형식으로만 응답하라.
+    추출할 지식이 없으면 반드시 `[]`만 반환하라.
+
+    응답 포맷:
+    [{{
+        "scoped_content": "...",
+        "tentative_title": "..."
+    }}]"""
 
     try:
         response = await LLM_LIGHT.ainvoke(prompt)
         print(f"[디버그] _scope_topics LLM 원본 응답:\n{response.content}\n")
         parsed = _parse_first_json_block(_extract_text(response.content))
-        if isinstance(parsed, list) and parsed:
+        if isinstance(parsed, list):
+            if not parsed:
+                logger.info("[TopicIngest] _scope_topics: 분석 결과 추출할 지식이 없으므로 처리 스킵")
+                return []
+            
             normalized = []
             for item in parsed:
                 if not isinstance(item, dict):
@@ -338,6 +367,7 @@ async def _create_new_topic(scoped_content: str, tentative_title: str, actor: st
 [출력 필드 작성 가이드]
 - title: 명사구 형태의 구체적인 제목 (예: 다중 eSIM 등록 및 주의사항)
 - description: 80~200자 분량. 이 지식을 '무엇을 다루고, 언제 참고해야 하는지' 명확히 요약. 주의사항이 포함된 경우 그 사실도 간략히 언급.
+- content: 군더더기 서술어와 불필요한 설명을 뺀 "압축된 지식" 형태의 마크다운. 긴 고객 응대 스크립트나 FAQ 원문 형태가 아닌, 에이전트나 직원이 핵심만 참고할 수 있도록 1~4문장 내외의 요약 또는 핵심 항목에 대한 불릿리스트(bullet points) 위주로 작성할 것. 
 - tags: 검색에 용이한 관련 키워드 3~6개 추출
 - domain: "internal" (문서 내용 근거가 필수인 사내/업무 지식) 또는 "general" (일반 지식 활용이 가능한 경우)
 - related_topic_ids: 아래 [기존 주제 후보] 중 현재 주제와 관련 있거나 보완이 될 수 있는 주제의 topic_id를 0~3개 선택하여 배열로 작성 (전혀 없으면 빈 배열)
@@ -357,6 +387,7 @@ async def _create_new_topic(scoped_content: str, tentative_title: str, actor: st
 {{
     "title": "...",
     "description": "...",
+    "content": "...",
     "tags": ["...", "..."],
     "domain": "internal",
     "related_topic_ids": ["...", "..."]
@@ -384,7 +415,7 @@ async def _create_new_topic(scoped_content: str, tentative_title: str, actor: st
         "_id": topic_id,
         "title": str(payload.get("title", tentative_title or "자동 생성 주제")).strip() or "자동 생성 주제",
         "description": str(payload.get("description", "")).strip()[:400],
-        "content": scoped_content,
+        "content": str(payload.get("content", "")).strip() or scoped_content,
         "tags": _dedupe_keep_order([str(tag).strip() for tag in payload.get("tags", []) if str(tag).strip()])[:6],
         "domain": payload.get("domain") if payload.get("domain") in {"internal", "general"} else None,
         "related_topic_ids": [],
