@@ -17,7 +17,6 @@ _MONGO_OPTS = dict(
     connectTimeoutMS=20_000,
     socketTimeoutMS=30_000,
     serverSelectionTimeoutMS=10_000,
-    minPoolSize=1,                 # warm connection 최소 1개 유지
 )
 
 # 기존 Motor 클라이언트 (task, sop, memory 등 비동기 작업용)
