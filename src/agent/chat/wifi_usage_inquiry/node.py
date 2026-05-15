@@ -54,7 +54,7 @@ async def fetch_usage(state: GraphState) -> GraphState:
             )
             ev.content = f"{len(usage_data)}건 조회"
             
-        # await set_waiting(state, result="사용량 조회 성공")
+        await set_waiting(state, result="사용량 조회 성공")
         state.response.setdefault(AGENT_NAME, {})["usage_data"] = usage_data
 
     except Exception as e:

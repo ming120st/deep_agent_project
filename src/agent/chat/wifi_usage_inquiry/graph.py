@@ -28,6 +28,7 @@ def route_wifi_usage_inquiry(state: GraphState) -> Literal[
     all_parameters = getattr(state, "collected_parameters", {}) or {}
     parameters = all_parameters.get("wifi_usage_inquiry", {})
     response = getattr(state, "response", {}) or {}
+    agent_response = response.get("wifi_usage_inquiry", {})
     
     # 0. 에러 발생 시 즉시 종료 (이미 에러 메시지 보냄)
     if state.error_message:
@@ -45,7 +46,7 @@ def route_wifi_usage_inquiry(state: GraphState) -> Literal[
         return "request_date_range"
 
     # 4. 사용량 조회
-    if "usage_data" not in response:
+    if "usage_data" not in agent_response:
         return "fetch_usage"
 
     # 5. 이메일 발송 여부 확인
