@@ -21,6 +21,7 @@
     event.action.actionMethodName → 버튼 클릭 시 function 이름
     event.common.formInputs       → 카드 폼 입력값
 """
+
 import os
 import json
 import time

@@ -94,7 +94,7 @@ def route_{agent_name}(state: GraphState) -> Literal[
     "end",
 ]:
     params   = state.collected_parameters.get(AGENT_NAME, {})
-    response = state.response
+    response = state.response.get(AGENT_NAME, {})
 
     # 에러 발생 시 즉시 종료
     if state.error_message:
@@ -215,12 +215,12 @@ async def do_something(state: GraphState) -> GraphState:
 
     try:
         result = await some_api_call(params.get("param_a"))
-        state.response.update({
+        state.response.setdefault(AGENT_NAME, {}).update({
             "result_data": result,
             "success": True,
         })
     except Exception as e:
-        state.response.update({
+        state.response.setdefault(AGENT_NAME, {}).update({
             "success": False,
             "reason": str(e),
         })
@@ -235,7 +235,7 @@ async def do_something(state: GraphState) -> GraphState:
 
 ```python
 async def handle_result(state: GraphState) -> GraphState:
-    result = state.response
+    result = state.response.get(AGENT_NAME, {})
 
     if not result.get("success"):
         reason = result.get("reason", "UNKNOWN")
@@ -272,7 +272,7 @@ async def cancel_inquiry(state: GraphState) -> GraphState:
 ```python
 def route_{agent_name}(state: GraphState):
     params   = state.collected_parameters.get(AGENT_NAME, {})
-    response = state.response
+    response = state.response.get(AGENT_NAME, {})
 
     # 1. 에러/종료 조건 먼저
     if state.error_message:
@@ -438,9 +438,9 @@ async def request_device_job(state: GraphState) -> GraphState:
 
     if callback.status == "error":
         # state.response에 담아서 handle_result가 처리
-        state.response.update({"success": False, "reason": callback.error_message or "UNKNOWN"})
+        state.response.setdefault(AGENT_NAME, {}).update({"success": False, "reason": callback.error_message or "UNKNOWN"})
     else:
-        state.response.update(callback.result)
+        state.response.setdefault(AGENT_NAME, {}).update(callback.result)
 
     state.current_agent = None
     return state
@@ -453,7 +453,7 @@ reason 키값은 **device_agent의 반환값과 정확히 일치**해야 한다.
 
 ```python
 async def handle_result(state: GraphState) -> GraphState:
-    result = state.response
+    result = state.response.get(AGENT_NAME, {})
 
     if not result.get("success"):
         reason = result.get("reason", "UNKNOWN")
@@ -744,7 +744,7 @@ async def request_device_job(state):
         state.add_ai_message("⚠️ 오류 발생")   # 메시지 추가
         return state                             # return
 
-    # handle_result가 실행되어 state.response = {} → reason = "UNKNOWN"
+    # handle_result가 실행되어 state.response[AGENT_NAME] = {} → reason = "UNKNOWN"
 ```
 
 ```python
@@ -752,7 +752,7 @@ async def request_device_job(state):
 async def request_device_job(state):
     ...
     if callback.status == "error":
-        state.response.update({"success": False, "reason": callback.error_message})
+        state.response.setdefault(AGENT_NAME, {}).update({"success": False, "reason": callback.error_message})
         # return 하지 않고 handle_result가 메시지 처리
     return state
 ```

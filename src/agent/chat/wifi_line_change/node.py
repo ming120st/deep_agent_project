@@ -20,6 +20,8 @@ from src.core.session_logger import add_event, session_event, EventType
 
 AGENT_NAME = "wifi_line_change"
 
+AGENT_NAME = "wifi_line_change"
+
 DEVICE_JOB_URL    = os.getenv("DEVICE_JOB_URL", "")
 DEVICE_JOB_SECRET = os.getenv("DEVICE_JOB_SECRET", "")
 
@@ -154,16 +156,16 @@ async def wait_for_device_job(state: GraphState) -> GraphState:
 
     if callback.status == "error":
         reason = callback.error_message or "UNKNOWN"
-        state.response.update({"success": False, "reason": reason})
+        state.response.setdefault(AGENT_NAME, {}).update({"success": False, "reason": reason})
     else:
-        state.response.update(callback.result)
+        state.response.setdefault(AGENT_NAME, {}).update(callback.result)
         
     return state
 
 
 async def handle_result(state: GraphState) -> GraphState:
     """회선변경 결과 메시지 생성."""
-    result = state.response
+    result = state.response.get(AGENT_NAME, {})
 
     if not result.get("success"):
         reason = result.get("reason", "UNKNOWN")

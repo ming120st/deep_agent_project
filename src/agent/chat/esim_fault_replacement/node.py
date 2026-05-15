@@ -882,7 +882,7 @@ async def send_esim(state: GraphState) -> GraphState:
     print(f"[{AGENT_NAME}][3.6] 발송 결과: success={success}, OutOrderId={final_out_order_id!r}, reason={fail_reason!r}")
 
     # ── 종합 리포트 ───────────────────────────────────────────────────────────
-    state.response["send_results"] = results  # 결과를 GraphState에 저장하여 다음노드 상담등록에서 활용
+    state.response.setdefault(AGENT_NAME, {})["send_results"] = results  # 결과를 GraphState에 저장하여 다음노드 상담등록에서 활용
     success_list = [r for r in results if r["success"]]
     fail_list    = [r for r in results if not r["success"]]
     product_name = payload.get("ProductName", "")
@@ -960,7 +960,7 @@ async def register_consultation(state: GraphState) -> GraphState:
             context={
                 "user_name": state.chat_context.get("user_name"),
                 "user_id":   state.chat_context.get("user_id", ""),
-                "send_results": state.response.get("send_results", []),
+                "send_results": state.response.get(AGENT_NAME, {}).get("send_results", []),
                 },
         )
         job_id = req.job_id

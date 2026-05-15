@@ -84,7 +84,7 @@ async def request_device_job(state: GraphState) -> GraphState:
         return state
 
     # 결과를 state.response에 저장
-    state.response.update(callback.result)
+    state.response.setdefault(AGENT_NAME, {}).update(callback.result)
 
     # updated_fields가 있으면 collected_parameters에 머지
     if callback.updated_fields:
@@ -98,7 +98,7 @@ async def request_device_job(state: GraphState) -> GraphState:
 # ── 결과 처리 노드 ─────────────────────────────────────────────────────────────
 
 async def handle_device_result(state: GraphState) -> GraphState:
-    result = state.response.get("your_result_key", "")
+    result = state.response.get(AGENT_NAME, {}).get("your_result_key", "")
     state.add_ai_message(f"✅ 작업이 완료되었습니다.\n\n{result}")
     await set_completed(state, result="DeviceJob 완료")
     state.current_agent = None
