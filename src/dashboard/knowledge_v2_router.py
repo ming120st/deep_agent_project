@@ -242,6 +242,7 @@ async def _replace_topic_content(topic_id: str, manual_content: str, actor: str)
 @api_router.get("/topics")
 async def list_topics(
     request: Request,
+    q: Optional[str] = None,
     tag: Optional[str] = None,
     domain: Optional[str] = None,
     status: Optional[str] = None,
@@ -249,7 +250,7 @@ async def list_topics(
     skip: int = 0,
     limit: int = 50,
 ):
-    """v2 주제 리스트 (schema_version: 2 필터 + 선택 필터)."""
+    """v2 주제 리스트 (schema_version: 2 필터 + 선택 필터). RAG 벡터 엔진으로 의미적 검색을 지원."""
     _require_user(request)
 
     query: dict = {"schema_version": 2}
@@ -262,9 +263,31 @@ async def list_topics(
     if owner:
         query["owner_member_id"] = owner
 
+    if q:
+        from src.core.rag_engine import search_knowledge
+        search_res = await search_knowledge(q, top_k=limit)
+        topic_ids = [r["topic_id"] for r in search_res.get("results", []) if r.get("topic_id")]
+        
+        if not topic_ids:
+            return []
+            
+        query["_id"] = {"$in": topic_ids}
+
     projection = {"content": 0}
-    cursor = boa_knowledge_collection.find(query, projection).skip(skip).limit(limit)
+    cursor = boa_knowledge_collection.find(query, projection)
+    
+    if not q:
+        # q가 없을 때만 db 수준의 limit 적용. q가 있으면 검색된 top_k 수만큼 전부 로드 후 정렬.
+        cursor = cursor.skip(skip).limit(limit)
+        
     docs = await cursor.to_list(length=None)
+    
+    if q:
+        # FAISS가 반환한 score 순위 그대로 정렬
+        doc_map = {str(d["_id"]): d for d in docs}
+        sorted_docs = [doc_map[tid] for tid in topic_ids if tid in doc_map]
+        docs = sorted_docs
+
     return [_serialize(d) for d in docs]
 
 
@@ -696,6 +719,15 @@ KNOWLEDGE_HTML = """<!DOCTYPE html>
     .search-bar { width: 300px; }
     .filter-select { min-width: 140px; }
     .search-bar:focus, .filter-select:focus, .input:focus, .textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.08); }
+    
+    .search-container { display: flex; justify-content: center; width: 100%; margin: 32px 0 24px 0; }
+    .main-search {
+      width: 100%; max-width: 800px; height: 56px; border-radius: 28px; padding: 0 24px;
+      font-size: 15px; border: 1px solid var(--border); box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+      transition: box-shadow 0.2s, border-color 0.2s;
+    }
+    .main-search:focus { box-shadow: 0 8px 24px rgba(79, 70, 229, 0.12); outline: none; }
+    .main-search::placeholder { color: var(--muted); }
     .btn-primary, .btn-secondary, .btn-danger, .icon-btn {
       border-radius: 8px; cursor: pointer; transition: all .15s; border: 1px solid transparent;
     }
@@ -842,8 +874,7 @@ KNOWLEDGE_HTML = """<!DOCTYPE html>
 
     <section class="panel active" id="panel-topics">
       <div class="toolbar">
-        <div class="toolbar-left">
-          <input class="search-bar" id="searchInput" type="text" placeholder="토픽 제목 또는 설명 검색">
+        <div class="toolbar-left" style="flex: 1;">
           <select class="filter-select" id="domainFilter">
             <option value="">전체 도메인</option>
             <option value="internal">internal</option>
@@ -855,8 +886,9 @@ KNOWLEDGE_HTML = """<!DOCTYPE html>
             <option value="active">active</option>
             <option value="archived">archived</option>
           </select>
+          <input class="search-bar" id="searchInput" type="text" placeholder="찾으려는 문서는 어떤 내용인가요? 키워드가 일치하지 않아도 의미 기반으로 유사한 토픽을 찾아드립니다." style="flex: 1; min-width: 400px; max-width: 100%;">
         </div>
-        <div class="toolbar-left">
+        <div class="toolbar-right" style="display:flex; gap:10px;">
           <input type="file" id="ingestFileInput" class="hidden" accept=".txt,.md">
           <button class="btn-secondary" id="uploadIngestBtn">파일로 인입</button>
           <button class="btn-primary" id="createTopicBtn">+ 새 토픽</button>
@@ -1221,16 +1253,8 @@ KNOWLEDGE_HTML = """<!DOCTYPE html>
     }
 
     function getFilteredTopics() {
-      const query = searchInput.value.trim().toLowerCase();
-      const domain = domainFilter.value;
-      const status = statusFilter.value;
-      return topics.filter(topic => {
-        if (domain && (topic.domain || '') !== domain) return false;
-        if (status && (topic.status || '') !== status) return false;
-        if (!query) return true;
-        const haystack = `${topic.title || ''} ${topic.description || ''}`.toLowerCase();
-        return haystack.includes(query);
-      });
+      // Backend handles Q, domain, and status filtering via RAG engine.
+      return topics;
     }
 
     function renderTopics() {
@@ -1303,9 +1327,18 @@ KNOWLEDGE_HTML = """<!DOCTYPE html>
     }
 
     async function fetchTopics() {
+      const q = searchInput.value.trim();
+      const domain = domainFilter.value;
+      const status = statusFilter.value;
+      
+      const params = new URLSearchParams();
+      if (q) params.append('q', q);
+      if (domain) params.append('domain', domain);
+      if (status) params.append('status', status);
+
       setLoadingState('토픽을 불러오는 중입니다...');
       try {
-        const data = await apiFetch('/api/knowledge/v2/topics');
+        const data = await apiFetch(`/api/knowledge/v2/topics?${params.toString()}`);
         topics = Array.isArray(data) ? data : [];
         renderTopics();
       } catch (error) {
@@ -1884,9 +1917,15 @@ KNOWLEDGE_HTML = """<!DOCTYPE html>
       }
     });
 
-    searchInput.addEventListener('input', renderTopics);
-    domainFilter.addEventListener('change', renderTopics);
-    statusFilter.addEventListener('change', renderTopics);
+    let searchTimeout;
+    searchInput.addEventListener('input', () => {
+      clearTimeout(searchTimeout);
+      searchTimeout = setTimeout(() => {
+        fetchTopics();
+      }, 400); 
+    });
+    domainFilter.addEventListener('change', fetchTopics);
+    statusFilter.addEventListener('change', fetchTopics);
     descriptionInput.addEventListener('input', updateDescriptionCount);
     document.getElementById('relatedTopicSearch').addEventListener('input', renderRelatedSuggestions);
 
