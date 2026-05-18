@@ -98,21 +98,9 @@ async def execute_rag(state: GraphState):
         except Exception as e:
             logger.error("[RAG] gap 기록 실패: %s", e)
 
-    # ── 3. 하이브리드 정책 적용 시스템 프롬프트 결정 ──────────────
-    # kb_architecture.md §6: visited topics 중 domain: internal이 있으면 엄격 모드
-    has_internal = result is not None and "internal" in result.context_domains
-
+    # ── 3. 시스템 프롬프트 결정 ──────────────
     if result and result.has_context:
-        if has_internal:
-            system_prompt = """당신은 와이드모바일의 내부 업무 지원 AI(BOA)입니다.
-다음 질문은 회사 내부 정책/절차에 관한 것입니다.
-반드시 제공된 <knowledge_base_context> 내의 정보에만 근거하여 답하십시오.
-KB 컨텍스트에 근거가 없는 부분은 "해당 내용은 현재 지식베이스에 등록되어 있지 않습니다"로 답하고,
-일반적 추론이나 유사 사례로 보완하지 마십시오.
-
-{context}"""
-        else:
-            system_prompt = """당신은 와이드모바일의 내부 업무 지원 AI(BOA)입니다.
+        system_prompt = """당신은 와이드모바일의 내부 업무 지원 AI(BOA)입니다.
 아래 지식베이스 내용을 참고하여 질문에 답변하세요.
 문서에 없는 내용은 일반 지식을 활용해 보완할 수 있습니다.
 

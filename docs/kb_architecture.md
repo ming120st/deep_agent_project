@@ -70,7 +70,7 @@
 
 - `related_topic_ids`는 단방향 저장이지만 **쓰기 시 양방향 유지**. A→B 추가 시 B의 `related_topic_ids`에도 A 추가. 일관성 유지를 위해 mongo 트랜잭션 또는 `knowledge_relation_manager.py`에 쓰기 진입점 단일화.
 - `description`은 80~200자 권장. 검색 성능 직결.
-- `domain` 필드는 §6 하이브리드 지식 사용 정책의 핵심 플래그.
+- ~~`domain` 필드는 §6 하이브리드 지식 사용 정책의 핵심 플래그.~~ (동작 로직 제거됨)
 - `owner_member_id`가 비어있으면 기본값으로 스페이스 관리자에게 알림 발송.
 
 ### 2.3 `boa_knowledge_conflicts` 스키마
@@ -231,9 +231,7 @@ class TraverseState(TypedDict):
 
 #### (4) `answer_generator`
 
-§6의 하이브리드 정책 적용:
-- 컨텍스트에 `domain: internal` 주제가 섞여 있으면 → 시스템 프롬프트에 "내부 정책 질문은 제공된 KB에만 근거. 모르면 모른다고 답변" 강화.
-- 전부 `general`이거나 KB 컨텍스트가 비어있으면 → 사전지식 허용.
+§6의 하이브리드 정책은 폐기되어 단일 프롬프트를 사용합니다.
 
 #### (5) `gap_recorder`
 
@@ -401,7 +399,9 @@ output: {title, description, tags, domain, related_topic_ids}
 
 ---
 
-## 6. 하이브리드 지식 사용 정책
+### (삭제됨) 6. 하이브리드 지식 사용 정책
+
+> 참고: 도메인 기반 정책 분기 로직은 제거되었습니다. DB 및 대시보드 상태 필드 용도 등으로만 유지.
 
 ### 6.1 분기 기준
 

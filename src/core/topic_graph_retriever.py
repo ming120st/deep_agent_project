@@ -31,7 +31,6 @@ class RetrieveResult:
     visited_docs: list[dict] = field(default_factory=list)
     total_hops: int = 0
     missing_aspects: list[str] = field(default_factory=list)
-    context_domains: list[str] = field(default_factory=list)
 
 
 class TopicGraphRetriever:
@@ -332,7 +331,6 @@ JSON으로만 답하라: [{{"topic_id": "...", "priority": 0.0~1.0}}, ...]
             print("[RAG Debug] 5. 관련 문서를 더 찾을 수 없습니다 (Exhausted).")
 
         context_xml = self._assemble_context(collected_snippets) if collected_snippets else ""
-        context_domains = list({s["domain"] for s in collected_snippets if s.get("domain")})
         
         print("\n[RAG Debug] 6. === RAG 탐색 최종 결과 ===")
         print(f"    - 총 탐색 문서 개수: {depth} 개")
@@ -352,7 +350,6 @@ JSON으로만 답하라: [{{"topic_id": "...", "priority": 0.0~1.0}}, ...]
             visited_docs=visited_docs,
             total_hops=depth,
             missing_aspects=missing_aspects,
-            context_domains=context_domains,
         )
 
 
