@@ -40,13 +40,14 @@ from src.workflow.main_graph.nodes.response_sender import send_response
 from src.agent.registry import AGENT_REGISTRY
 from src.core.task_manager import create_task, TaskStatus
 from src.core.mongo_client import checkpointer
-from src.core.mongo_client import boa_agents_collection
+from src.core.mongo_client import get_collection
 
 from src.core.session_logger import add_event, session_event, update_turn_meta, EventType, build_llm_meta
 
 import logging
 logger = logging.getLogger(__name__)
 
+# 워크플로우(서브에이전트) 추가 시, 해당 워크플로우의 그래프를 import하고, AGENT_REGISTRY에 에이전트 정보 등록해야함
 
 def _extract_text(content) -> str:
     if isinstance(content, str):
@@ -54,7 +55,6 @@ def _extract_text(content) -> str:
     if isinstance(content, list):
         return "".join(b.get("text", "") if isinstance(b, dict) else str(b) for b in content)
     return str(content)
-
 
 async def execute_rag(state: GraphState):
     """
@@ -200,6 +200,23 @@ async def update_parameters(state: GraphState):
     if agent_name:
         current_agent = agent_name
         updates["current_agent"] = current_agent
+
+    domain_id = action_data.get("domain_id") or state.domain_id
+    if not domain_id and current_agent:
+        agent_doc = await get_collection("agent_registry").find_one({"agent_id": current_agent})
+        if agent_doc:
+            domain_id = agent_doc.get("domain_id")
+
+    if domain_id:
+        updates["domain_id"] = domain_id
+        updates["team_input"] = {
+            "domain_id": domain_id,
+            "agent_id": current_agent,
+            "task": current_agent,
+            "user_message": state.get_last_user_message() or "",
+            "boa_intent": action_data.get("action"),
+            "boa_extracted": action_data.get("parameters") or {},
+        }
     
     if current_agent and isinstance(action_data, dict):        
         if current_agent not in collected_parameters:
@@ -216,7 +233,10 @@ async def update_parameters(state: GraphState):
         updates["collected_parameters"] = collected_parameters
 
     if action_data.get("action") == "new_agent":
-        agent_doc = await boa_agents_collection.find_one({"agent_id": current_agent})
+        agent_query = {"agent_id": current_agent}
+        if domain_id:
+            agent_query["domain_id"] = domain_id
+        agent_doc = await get_collection("agent_registry").find_one(agent_query)
         if agent_doc and not agent_doc.get("enabled", True):
             msg = "죄송합니다. 현재 해당 에이전트는 사용이 중지되어 있습니다. AI팀에 문의해 주세요."
             state.add_ai_message(msg)  # state.messages 뮤테이션
@@ -280,21 +300,21 @@ def route_by_action(state: GraphState):
 
     return "handle_unclear"
 
-# llm이 의도 분류 후 반환하는 에이전트 이름이 AGENT_REGISTRY에 등록된 이름과 일치해야 extract_parameters → update_parameters → 세부 에이전트 노드로 라우팅됨
 def route_after_update_parameters(state: GraphState):
-    agent_name = state.current_agent
-    # 다음을 위해 반드시 세부 에이전트 이름과 노드 이름이 일치해야 함
-    if agent_name in AGENT_REGISTRY:
-        return agent_name
+    domain_id = state.domain_id
+    if domain_id:
+        return f"{domain_id}_domain"
     return "handle_error"
 
 # ── 그래프 빌더 ───────────────────────────────────────────────────────────────
 
 def build_main_graph():
+    import importlib
+    from pathlib import Path
+    
     # 순환참조 방지 위해 그래프 빌더 내부에서 임포트
     from src.workflow.main_graph.nodes.parameter_extractor import extract_parameters
     from src.workflow.main_graph.nodes.context_response import execute_context_response
-    from src.agent.registry import AGENT_REGISTRY
     from src.workflow.main_graph.nodes.help_request import execute_help_request
 
     # 그래프 인스턴스 생성
@@ -311,11 +331,6 @@ def build_main_graph():
     workflow.add_node("handle_error", handle_error)
     workflow.add_node("send_response", send_response)
     workflow.add_node("execute_help_request", execute_help_request)
-
-    # ── 에이전트 노드/엣지 자동 등록 ─────────────────────────────────────
-    for agent_name, agent_info in AGENT_REGISTRY.items():
-        workflow.add_node(agent_name, agent_info["graph"]) # 각 세부 에이전트의 이름으로 StateGraph를 노드에 등록
-        workflow.add_edge(agent_name, "send_response") # 세부 에이전트 실행 후 응답 노드로 연결
 
     # ── 엣지 ──────────────────────────────────────────────────────
     workflow.add_edge(START, "classify_agent_action")
@@ -336,11 +351,26 @@ def build_main_graph():
     # extract_parameters → update_parameters (항상)
     workflow.add_edge("extract_parameters", "update_parameters")
 
-    # update_parameters → 에이전트 (자동 라우팅)
-    agent_routing = {name: name for name in AGENT_REGISTRY} # AGENT_REGISTRY에 등록된 에이전트 이름을 노드 이름으로 라우팅
-    agent_routing["handle_error"] = "handle_error"
-    workflow.add_conditional_edges("update_parameters", route_after_update_parameters, agent_routing)
-    # 위 3줄은 그 위의 add_conditional_edges와 사실 같은 방식으로 라우팅 하고 있는건데, 에이전트 레지스트리 기반으로 자동 라우팅하기 위해 표현이 달라진 것뿐임.
+    # ── 도메인별 서브그래프 동적 로드 & 등록 ────────────────────────
+    agent_dir = Path(__file__).parent.parent.parent / "agent"
+    domain_routing = {"handle_error": "handle_error"}
+
+    for path in agent_dir.iterdir():
+        if path.is_dir() and (path / "graph.py").is_file():
+            domain_name = path.name
+            node_name = f"{domain_name}_domain"
+            try:
+                module = importlib.import_module(f"src.agent.{domain_name}.graph")
+                domain_graph = getattr(module, f"{domain_name}_domain_graph")
+
+                workflow.add_node(node_name, domain_graph)
+                workflow.add_edge(node_name, "send_response")
+                domain_routing[node_name] = node_name
+                logger.info(f"[Graph Builder] 동적 도메인 노드 등록 완료: {node_name}")
+            except Exception as e:
+                logger.error(f"[Graph Builder] 도메인 동적 로드 실패 ({domain_name}): {e}")
+
+    workflow.add_conditional_edges("update_parameters", route_after_update_parameters, domain_routing)
 
     for node_name in ["execute_rag", "execute_context_response", "handle_unclear", "handle_ambiguous", "handle_error"]:
         workflow.add_edge(node_name, "send_response")
@@ -349,7 +379,6 @@ def build_main_graph():
     workflow.add_edge("send_response", END)
 
     return workflow.compile(checkpointer=checkpointer)
-
 
 # ── 싱글톤 그래프 인스턴스 ────────────────────────────────────────────────────
 main_graph = build_main_graph()

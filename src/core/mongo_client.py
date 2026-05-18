@@ -34,6 +34,12 @@ boa_knowledge_collection = db["boa_knowledge"]
 boa_knowledge_versions_collection = db["boa_knowledge_versions"]
 boa_device_jobs_collection = db["boa_device_jobs"]
 task_traces_collection = db["task_traces"]
+domain_registry_collection = db["domain_registry"]
+agent_registry_collection = db["agent_registry"]
+
+
+def get_collection(name: str):
+    return db[name]
 
 # checkpointer용 동기 pymongo 클라이언트
 sync_client = MongoClient(MONGODB_URI, **_MONGO_OPTS)

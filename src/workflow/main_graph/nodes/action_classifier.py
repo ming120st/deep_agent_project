@@ -12,8 +12,7 @@ import json
 
 from src.workflow.graph_infra.state import GraphState
 from src.core.llm_config import LLM_LIGHT
-from src.agent.registry import AGENT_REGISTRY
-from src.agent.registry import get_enabled_agent_descriptions
+from src.core.router import build_routing_context
 
 # 대화이력 남기지 않고 중간과정 노티만 보낼 때 사용
 from src.core.google_chat import send_message
@@ -24,6 +23,7 @@ from pydantic import Field
 class ActionResult(BaseModel):
     reason: str = Field(description="해당 action으로 분류한 구체적인 이유")
     action: Literal["new_agent", "continue_task", "rag", "context_response", "help_request", "ambiguous"]
+    domain_id: Optional[str] = None
     agent_name: Optional[str] = None  # new_agent일 때만 사용
     new_task: Optional[bool] = False
 
@@ -38,7 +38,7 @@ CLASSIFY_PROMPT = """
 
 [행동(action) 분류 기준]
 1. new_agent: 사용자가 새로운 업무(에이전트)를 시작하려고 할 때.
-   - 에이전트 종류는 agent_list를 참고하여 분류하세요.
+   - 도메인과 에이전트 종류는 routing_context를 참고하여 분류하세요.
    - agent_name에 해당 에이전트 이름을 넣으세요.
    - 항상 new_task: true로 설정하세요.
 
@@ -64,6 +64,11 @@ CLASSIFY_PROMPT = """
 - 동일 에이전트 진행 중이지만 새로운 파라미터로 다른 작업 요청: True
 - 진행 중인 업무 이어가기: False
 - rag, context_response, help_request, ambiguous: False
+
+[domain_id / agent_name]
+- new_agent로 분류할 때는 routing_context에 있는 domain_id와 agent_id를 함께 반환하세요.
+- continue_task로 분류할 때는 current_agent를 기준으로 같은 domain_id와 agent_name을 유지하세요.
+- 특정 도메인 에이전트가 필요 없는 action에서는 domain_id와 agent_name을 null로 반환하세요.
 """
 
 action_classify_prompt = ChatPromptTemplate.from_template(
@@ -86,9 +91,9 @@ action_classify_prompt = ChatPromptTemplate.from_template(
     {current_agent}
     </current_agent>
 
-    <agent_list>
-    {agent_list}
-    </agent_list>
+    <routing_context>
+    {routing_context}
+    </routing_context>
     """
 )
 
@@ -115,8 +120,7 @@ async def classify_agent_action(state: GraphState):
     current_agent = state.current_agent or "None"
 
     # MongoDB에서 enabled=True인 chat 에이전트의 이름과 설명을 가져와서 프롬프트에 포함 (action_classifier 프롬프트용)
-    descriptions = await get_enabled_agent_descriptions()
-    agent_list = json.dumps(descriptions, indent=2, ensure_ascii=False)
+    routing_context = await build_routing_context()
 
     # 의도 분류 LLM 호출
     async with session_event(session_id, EventType.LLM_INTENT, "의도 분류") as ev:
@@ -126,11 +130,11 @@ async def classify_agent_action(state: GraphState):
             "messages": messages,
             "user_query": user_query,
             "current_agent": current_agent,
-            "agent_list": agent_list,
+            "routing_context": routing_context,
         })
         result = action_parser.invoke(llm_response)
         
-        ev.content = result.action
+        ev.content = f"{result.action}:{result.domain_id}:{result.agent_name}"
         ev.llm = build_llm_meta("gemini-2.0-flash", getattr(llm_response, "usage_metadata", {}))
 
     end_time = time.time()

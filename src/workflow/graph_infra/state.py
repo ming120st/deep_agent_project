@@ -43,6 +43,15 @@ class GraphState(BaseModel):
     action: Dict[str, Any] = Field(default_factory=dict)
     # action_classifier의 결과 (action, agent_name, parameters 등)
 
+    domain_id: Optional[str] = None
+    # 라우팅된 도메인 ID (예: "wifi", "esim")
+
+    team_input: Optional[dict] = None
+    # 도메인 에이전트에 전달할 입력
+
+    team_output: Optional[dict] = None
+    # 도메인 에이전트에서 반환한 결과
+
     # ── 에이전트 상태 ─────────────────────────────────────────────────────────
     current_agent: Optional[str] = None
     # 현재 활성화된 에이전트 이름 (멀티턴 대화 유지용)

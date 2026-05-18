@@ -25,7 +25,7 @@ from pydantic import BaseModel
 
 from src.core.mongo_client import boa_agents_collection, boa_admins_collection
 from src.agent.registry import ALL_REGISTRIES
-from src.agent.schedule.bq_analysis_schedule.schedule_manager import (
+from src.agent.analytics.subagents.schedule.bq_analysis_schedule.schedule_manager import (
     bq_schedules_collection,
     toggle_bq_schedule,
     delete_bq_schedule,

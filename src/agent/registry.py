@@ -14,17 +14,15 @@ src/agent/registry.py
 
 from typing import Dict, Any
 
-from src.agent.chat.wifi_usage_inquiry.graph import wifi_usage_inquiry_graph
-from src.agent.chat.esim_order_cancellation.graph import esim_order_cancellation_graph
-from src.agent.chat.bigquery_agent.agent import bigquery_agent_node
-from src.agent.chat.esim_resend.graph import esim_resend_graph
-from src.agent.chat.esim_resend.graph import esim_resend_graph
-from src.agent.chat.wifi_line_change.graph import wifi_line_change_graph
-from src.agent.chat.esim_fault_replacement.graph import esim_fault_replacement_graph
+from src.agent.wifi.subagents.chat.wifi_usage_inquiry.graph import wifi_usage_inquiry_graph
+from src.agent.esim.subagents.chat.esim_order_cancellation.graph import esim_order_cancellation_graph
+from src.agent.analytics.subagents.chat.bigquery_agent.agent import bigquery_agent_node
+from src.agent.esim.subagents.chat.esim_resend.graph import esim_resend_graph
+from src.agent.wifi.subagents.chat.wifi_line_change.graph import wifi_line_change_graph
+from src.agent.esim.subagents.chat.esim_fault_replacement.graph import esim_fault_replacement_graph
 # from src.agent.xxx.graph import xxx_graph  ← graph 쓰는 에이전트 추가할 때마다 import
 
 
-from src.agent.trigger.check_stale_docs import check_stale_docs
 from src.core.rag_engine import reload_rag_index_if_updated
 # from src.triggers.xxx import xxx  ← 트리거 추가할 때마다 import
 
@@ -250,17 +248,6 @@ SCHEDULE_REGISTRY: dict = {
 
 # ── 트리거 에이전트 ────────────────────────────────────────────────────────────
 TRIGGER_REGISTRY: dict = {
-    "stale_docs": {
-        "type":         "trigger",
-        "display_name": "지식베이스 검토 요청",
-        "description":  "검토 기한이 지난 지식베이스 문서를 매일 오전 9시에 확인하여 담당자에게 검토를 요청합니다.",
-        "visible":      False,
-        "usage_guide": usage_guide.stale_docs, # 도움말 카드 상세설명
-        "enabled":      True,
-        "interval":     {"hours": 24},
-        "func":         check_stale_docs,
-        "target":       "문서 담당자 DM",
-    },
     "rag_index_reload": {
         "type":         "trigger",
         "display_name": "RAG 인덱스 동기화",

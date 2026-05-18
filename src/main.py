@@ -52,7 +52,7 @@ from src.core.google_chat import send_message
 from src.agent.registry import SCHEDULE_REGISTRY, TRIGGER_REGISTRY
 from src.agent.sync_registry import sync_registry_to_mongo
 from src.dashboard.agents_router import router as agents_router
-from src.agent.schedule.bq_analysis_schedule.schedule_manager import (
+from src.agent.analytics.subagents.schedule.bq_analysis_schedule.schedule_manager import (
     register_bq_schedule,
     restore_bq_schedules,
     delete_bq_schedule,
@@ -60,7 +60,7 @@ from src.agent.schedule.bq_analysis_schedule.schedule_manager import (
     bq_schedules_collection,
     INTERVAL_LABELS,
 )
-from src.agent.schedule.bq_analysis_schedule.cards import (
+from src.agent.analytics.subagents.schedule.bq_analysis_schedule.cards import (
     build_bq_schedule_card,
     build_schedule_confirm_message,
 )
