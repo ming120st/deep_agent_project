@@ -3,7 +3,7 @@ src/agent/registry.py
 
 [설계 원칙]
   - 코드: 에이전트 메타데이터 + 실행 로직 참조만 정의
-  - MongoDB(boa_agents): enabled 상태 영구 저장
+  - MongoDB(boa_agent_registry): enabled 상태 영구 저장
   - 앱 시작 시 registry → MongoDB sync (enabled는 덮어쓰지 않음)
 
 [타입]
@@ -26,7 +26,7 @@ from src.agent.esim.subagents.chat.esim_fault_replacement.graph import esim_faul
 from src.core.rag_engine import reload_rag_index_if_updated
 # from src.triggers.xxx import xxx  ← 트리거 추가할 때마다 import
 
-from src.core.mongo_client import boa_agents_collection
+from src.core.mongo_client import boa_agent_registry_collection
 import src.agent.usage_guide as usage_guide  # 에이전트별 사용 가이드 텍스트 (src/agent/usage_guide.py에서 정의)
 
 # ── 대화형 에이전트 ────────────────────────────────────────────────────────────
@@ -278,8 +278,8 @@ def get_current_agent_spec(agent_name: str) -> Dict[str, Any]:
 
 # MongoDB에서 enabled=True인 chat 에이전트의 이름과 설명 반환하는 함수 (action_classifier 프롬프트용)
 async def get_enabled_agent_descriptions() -> dict:
-    enabled = await boa_agents_collection.find(
-        {"type": "chat", "enabled": True},
+    enabled = await boa_agent_registry_collection.find(
+        {"agent_type": "chat", "enabled": True},
         {"_id": 0, "agent_id": 1}
     ).to_list(None)
     enabled_names = {doc["agent_id"] for doc in enabled}

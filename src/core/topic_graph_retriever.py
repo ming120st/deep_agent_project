@@ -284,7 +284,7 @@ JSON으로만 답하라: [{{"topic_id": "...", "priority": 0.0~1.0}}, ...]
                     "topic_id": topic_id,
                     "title":    topic_title,
                     "snippet":  snippet,
-                    "domain":   topic.get("domain"),
+                    "domain_id":   topic.get("domain_id"),
                 })
             else:
                 print(f"[RAG Debug] 3. 추출된 필요 내용 없음 (관련 내용이 본문에 없습니다.)")

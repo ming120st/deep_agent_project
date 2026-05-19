@@ -158,7 +158,7 @@ async def get_related_topics(topic_id: str) -> list[dict]:
     if not rel_ids:
         return []
 
-    projection = {"_id": 1, "title": 1, "description": 1, "tags": 1, "domain": 1}
+    projection = {"_id": 1, "title": 1, "description": 1, "tags": 1, "domain_id": 1}
     cursor = boa_knowledge_collection.find({"_id": {"$in": rel_ids}}, projection)
     results = await cursor.to_list(length=None)
 

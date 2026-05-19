@@ -71,7 +71,7 @@
 |------|------|-----|--------|------|
 | `description` | string | ✓ | — | 주제 설명 (80~200자 권장). 검색의 핵심 자산. |
 | `related_topic_ids` | array\<string> | no | `[]` | 연관 주제 `_id` 리스트. 양방향 유지. |
-| `domain` | string | no | `None` | `"internal"` \| `"general"`. 하이브리드 지식 정책용. |
+| `domain_id` | string | no | `None` | 등록된 도메인 레지스트리 ID(`wifi`, `esim` 등). |
 | `author_type` | string | no | `"human"` | `"auto"` \| `"human"`. |
 | `schema_version` | int | — | `2` | v2 문서 식별용. 항상 `2`로 세팅. |
 
@@ -247,7 +247,7 @@ class TopicV2CreateRequest(BaseModel):
     description: str                              # 80~200자 권장, 필수
     content: str
     tags: list[str] = []
-    domain: Optional[str] = None                  # "internal" | "general" | None
+    domain_id: Optional[str] = None               # "wifi" | "esim" 등 
     related_topic_ids: list[str] = []
 
 class TopicV2PatchRequest(BaseModel):
@@ -255,7 +255,7 @@ class TopicV2PatchRequest(BaseModel):
     description: Optional[str] = None
     content: Optional[str] = None
     tags: Optional[list[str]] = None
-    domain: Optional[str] = None
+    domain_id: Optional[str] = None
     related_topic_ids: Optional[list[str]] = None
 
 class RelationAddRequest(BaseModel):

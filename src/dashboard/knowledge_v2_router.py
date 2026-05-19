@@ -5,7 +5,7 @@ KB v2 전용 라우터 — Topic-Graph RAG 기반 지식베이스 CRUD.
   boa_knowledge:
     - ("schema_version", 1)
     - ("tags", 1)
-    - ("domain", 1)
+    - ("domain_id", 1)
     - ("status", 1)
     - ("owner_member_id", 1)
 
@@ -71,7 +71,7 @@ async def ensure_kb_v2_indexes() -> None:
     # boa_knowledge
     await boa_knowledge_collection.create_index([("schema_version", ASCENDING)])
     await boa_knowledge_collection.create_index([("tags", ASCENDING)])
-    await boa_knowledge_collection.create_index([("domain", ASCENDING)])
+    await boa_knowledge_collection.create_index([("domain_id", ASCENDING)])
     await boa_knowledge_collection.create_index([("status", ASCENDING)])
     await boa_knowledge_collection.create_index([("owner_member_id", ASCENDING)])
 
@@ -117,7 +117,8 @@ class TopicV2CreateRequest(BaseModel):
     description: str
     content: str
     tags: list[str] = []
-    domain: Optional[str] = None
+    domain_id: Optional[str] = None
+    visibility: str = "internal"
     related_topic_ids: list[str] = []
 
 
@@ -126,7 +127,8 @@ class TopicV2PatchRequest(BaseModel):
     description: Optional[str] = None
     content: Optional[str] = None
     tags: Optional[list[str]] = None
-    domain: Optional[str] = None
+    domain_id: Optional[str] = None
+    visibility: Optional[str] = None
     status: Optional[str] = None
     related_topic_ids: Optional[list[str]] = None
 
@@ -172,7 +174,7 @@ async def _refresh_topic_index(topic_id: str) -> None:
         status=topic.get("status", ""),
         tags=topic.get("tags", []),
         description=topic.get("description", ""),
-        domain=topic.get("domain"),
+        domain_id=topic.get("domain_id"),
     )
 
 
@@ -244,7 +246,8 @@ async def list_topics(
     request: Request,
     q: Optional[str] = None,
     tag: Optional[str] = None,
-    domain: Optional[str] = None,
+    domain_id: Optional[str] = None,
+    visibility: Optional[str] = None,
     status: Optional[str] = None,
     owner: Optional[str] = None,
     skip: int = 0,
@@ -256,10 +259,16 @@ async def list_topics(
     query: dict = {"schema_version": 2}
     if tag:
         query["tags"] = tag
-    if domain:
-        query["domain"] = domain
+    if domain_id:
+        query["domain_id"] = domain_id
+    if visibility:
+        query["visibility"] = visibility
+    
     if status:
         query["status"] = status
+    else:
+        query["status"] = {"$ne": "deleted"}
+        
     if owner:
         query["owner_member_id"] = owner
 
@@ -327,7 +336,8 @@ async def create_topic(body: TopicV2CreateRequest, request: Request):
         "description": body.description,
         "content": body.content,
         "tags": body.tags,
-        "domain": body.domain,
+        "domain_id": body.domain_id,
+        "visibility": body.visibility,
         "related_topic_ids": [],
         "schema_version": 2,
         "author_type": "human",
@@ -339,6 +349,18 @@ async def create_topic(body: TopicV2CreateRequest, request: Request):
         "updated_by": user["email"],
     }
     await boa_knowledge_collection.insert_one(doc)
+
+    await boa_knowledge_versions_collection.insert_one(
+        {
+            "_id": uuid.uuid4().hex,
+            "topic_id": topic_id,
+            "action": "create",
+            "snapshot": doc,
+            "content": doc.get("content", ""),
+            "snapshot_at": now,
+            "snapshot_by": user["email"],
+        }
+    )
 
     # 양방향 관계 설정
     if body.related_topic_ids:
@@ -355,11 +377,12 @@ async def patch_topic(topic_id: str, body: TopicV2PatchRequest, request: Request
     """v2 필드 부분 업데이트."""
     user = _require_user(request)
 
-    existing = await boa_knowledge_collection.find_one({"_id": topic_id}, {"_id": 1})
+    existing = await boa_knowledge_collection.find_one({"_id": topic_id})
     if not existing:
         raise HTTPException(status_code=404, detail="주제를 찾을 수 없습니다.")
 
-    update_fields: dict = {"updated_at": _now(), "updated_by": user["email"]}
+    now = _now()
+    update_fields: dict = {"updated_at": now, "updated_by": user["email"]}
 
     if body.title is not None:
         update_fields["title"] = body.title
@@ -369,8 +392,10 @@ async def patch_topic(topic_id: str, body: TopicV2PatchRequest, request: Request
         update_fields["content"] = body.content
     if body.tags is not None:
         update_fields["tags"] = body.tags
-    if body.domain is not None:
-        update_fields["domain"] = body.domain
+    if body.domain_id is not None:
+        update_fields["domain_id"] = body.domain_id
+    if body.visibility is not None:
+        update_fields["visibility"] = body.visibility
     if body.status is not None:
         update_fields["status"] = body.status
 
@@ -379,6 +404,19 @@ async def patch_topic(topic_id: str, body: TopicV2PatchRequest, request: Request
         await set_relations(topic_id, body.related_topic_ids, actor=user["email"])
 
     if update_fields:
+        # 이력 스냅샷 남기기 (기존 상태 보존)
+        await boa_knowledge_versions_collection.insert_one(
+            {
+                "_id": uuid.uuid4().hex,
+                "topic_id": topic_id,
+                "action": "update",
+                "snapshot": existing,
+                "content": existing.get("content", ""), # 하위 호환성 유지
+                "snapshot_at": now,
+                "snapshot_by": user["email"],
+            }
+        )
+        
         await boa_knowledge_collection.update_one(
             {"_id": topic_id}, {"$set": update_fields}
         )
@@ -391,13 +429,93 @@ async def patch_topic(topic_id: str, body: TopicV2PatchRequest, request: Request
 
 @api_router.get("/topics/{topic_id}/related")
 async def get_related(topic_id: str, request: Request):
-    """연관 주제 경량 조회 ({id, title, description, tags, domain})."""
+    """연관 주제 경량 조회 ({id, title, description, tags, domain_id})."""
     _require_user(request)
 
     try:
         return await get_related_topics(topic_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
+
+
+@api_router.get("/topics/{topic_id}/history")
+async def get_topic_history(topic_id: str, request: Request):
+    """주제 변경 이력 조회."""
+    _require_user(request)
+
+    # 이력 문서 조회 (최신 순)
+    from pymongo import DESCENDING
+    cursor = boa_knowledge_versions_collection.find({"topic_id": topic_id}).sort("snapshot_at", DESCENDING)
+    versions = await cursor.to_list(length=100)
+    
+    # 직전 상태와의 비교를 위해 정렬: 생성(과거) -> 최근 -> 변경
+    # 버전을 과거순으로 정렬하면 N번째 이력에서 바뀐 부분을 (N-1번째 snapshot 대비) 계산하기 수월함
+    versions.reverse()
+
+    history = []
+    # prev_snapshot 은 직전 버전의 snapshot (업데이트 시 바뀐 내용 비교용)
+    prev_snapshot = None
+    
+    for v in versions:
+        action = v.get("action", "update") # 예전 포맷은 action이 없을 수 있음
+        snapshot = v.get("snapshot", {})
+        if not snapshot and v.get("content"):
+            snapshot = {"content": v.get("content")}
+            
+        diff = {}
+        if prev_snapshot:
+            # title, description, content, status, tags, domain_id, visibility 변경 비교
+            for field in ["title", "description", "content", "status", "domain_id", "visibility"]:
+                old_val = prev_snapshot.get(field, "")
+                new_val = snapshot.get(field, "")
+                if old_val != new_val:
+                    diff[field] = {"old": old_val, "new": new_val}
+            
+            old_tags = prev_snapshot.get("tags") or []
+            new_tags = snapshot.get("tags") or []
+            if sorted(old_tags) != sorted(new_tags):
+                diff["tags"] = {"old": old_tags, "new": new_tags}
+        else:
+            diff["all"] = "생성됨"
+            
+        history.append({
+            "id": v["_id"],
+            "action": action,
+            "snapshot_at": v["snapshot_at"].isoformat() if isinstance(v.get("snapshot_at"), datetime) else None,
+            "snapshot_by": v.get("snapshot_by"),
+            "diff": diff,
+            "snapshot": snapshot,
+        })
+        prev_snapshot = snapshot
+
+    # 마지막으로 현재 라이브 객체와의 diff 추가 (버전 컬렉션은 patch 직전 상태를 저장하므로, 현재 DB 데이터가 마지막 변경분임)
+    current = await boa_knowledge_collection.find_one({"_id": topic_id})
+    if current and prev_snapshot:
+        diff = {}
+        for field in ["title", "description", "content", "status", "domain_id", "visibility"]:
+            old_val = prev_snapshot.get(field, "")
+            new_val = current.get(field, "")
+            if old_val != new_val:
+                diff[field] = {"old": old_val, "new": new_val}
+        
+        old_tags = prev_snapshot.get("tags") or []
+        new_tags = current.get("tags") or []
+        if sorted(old_tags) != sorted(new_tags):
+            diff["tags"] = {"old": old_tags, "new": new_tags}
+            
+        if diff:
+            history.append({
+                "id": "current",
+                "action": "latest",
+                "snapshot_at": (current.get("updated_at") or current.get("created_at") or datetime.now()).isoformat(),
+                "snapshot_by": current.get("updated_by", current.get("created_by")),
+                "diff": diff,
+                "snapshot": current
+            })
+
+    # 다시 최신순으로 정렬해서 반환
+    history.reverse()
+    return history
 
 
 @api_router.post("/ingest/upload", status_code=202)
@@ -506,21 +624,35 @@ async def remove_relation_endpoint(
 
 @api_router.delete("/topics/{topic_id}", status_code=200)
 async def delete_topic(topic_id: str, request: Request):
-    """Delete a topic after removing all bidirectional relations."""
+    """Soft-delete a topic by setting status to 'deleted' and archiving history."""
     user = _require_user(request)
     actor = user["email"]
 
-    doc = await boa_knowledge_collection.find_one(
-        {"_id": topic_id},
-        {"related_topic_ids": 1},
-    )
+    doc = await boa_knowledge_collection.find_one({"_id": topic_id})
     if not doc:
         raise HTTPException(status_code=404, detail="Topic not found")
 
-    for rel_id in (doc.get("related_topic_ids") or []):
-        await remove_relation(topic_id, rel_id, actor)
+    now = _now()
+    
+    # 이력 기록
+    await boa_knowledge_versions_collection.insert_one(
+        {
+            "_id": uuid.uuid4().hex,
+            "topic_id": topic_id,
+            "action": "delete",
+            "snapshot": doc,
+            "content": doc.get("content", ""),
+            "snapshot_at": now,
+            "snapshot_by": actor,
+        }
+    )
 
-    await boa_knowledge_collection.delete_one({"_id": topic_id})
+    await boa_knowledge_collection.update_one(
+        {"_id": topic_id},
+        {"$set": {"status": "deleted", "updated_at": now, "updated_by": actor}}
+    )
+
+    await _refresh_topic_index(topic_id)
     return {"ok": True}
 
 
@@ -619,6 +751,20 @@ async def consistency_check(request: Request):
     return await check_bidirectional_consistency()
 
 
+@api_router.get("/ingest-logs")
+async def list_ingest_logs(request: Request, limit: int = 100):
+    """지식 인입(Ingest) 로그 조회."""
+    _require_user(request)
+    
+    from src.core.mongo_client import boa_knowledge_ingest_log_collection
+    cursor = boa_knowledge_ingest_log_collection.find({}).sort("created_at", -1).limit(limit)
+    logs = await cursor.to_list(length=None)
+    for log in logs:
+        log["id"] = str(log.pop("_id"))
+        if isinstance(log.get("created_at"), datetime):
+            log["created_at"] = log["created_at"].isoformat()
+    return logs
+
 @api_router.get("/gaps")
 async def list_gaps(
     request: Request,
@@ -682,7 +828,7 @@ KNOWLEDGE_HTML = """<!DOCTYPE html>
       --bg: #f5f6fa; --surface: #ffffff; --border: #e2e7f0;
       --text: #1e2436; --muted: #7b8499; --accent: #4f46e5;
       --green: #22c55e; --red: #ef4444; --yellow: #f59e0b; --blue: #3b82f6;
-      --internal: #7c3aed; --general: #0891b2;
+          <!-- Domain_id 필터 / 뱃지 처리 부분 -->
     }
     body { font-family: 'IBM Plex Sans KR', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; font-size: 15px; }
     button, input, select, textarea { font: inherit; }
@@ -755,12 +901,19 @@ KNOWLEDGE_HTML = """<!DOCTYPE html>
     .actions { display: flex; align-items: center; gap: 6px; }
 
     .badge { display: inline-flex; align-items: center; padding: 4px 10px; border-radius: 999px; font-size: 11px; font-weight: 500; font-family: 'IBM Plex Mono', monospace; white-space: nowrap; }
-    .badge-domain-internal { background: rgba(124, 58, 237, 0.12); color: var(--internal); }
-    .badge-domain-general { background: rgba(8, 145, 178, 0.12); color: var(--general); }
+    .badge-domain-wifi { background: rgba(37, 99, 235, 0.12); color: #2563eb; }
+    .badge-domain-esim { background: rgba(14, 165, 233, 0.12); color: #0ea5e9; }
+    .badge-domain-usim { background: rgba(139, 92, 246, 0.12); color: #8b5cf6; }
+    .badge-domain-hr { background: rgba(234, 88, 12, 0.12); color: #ea580c; }
+    .badge-domain-analytics { background: rgba(16, 185, 129, 0.12); color: #10b981; }
+    .badge-domain-commerce { background: rgba(244, 63, 94, 0.12); color: #f43f5e; }
+    .badge-domain-finance { background: rgba(217, 70, 239, 0.12); color: #d946ef; }
+    .badge-domain-other { background: rgba(148, 163, 184, 0.12); color: #64748b; }
     .badge-domain-empty { background: rgba(148, 163, 184, 0.12); color: #64748b; }
     .badge-status-active { background: rgba(34, 197, 94, 0.12); color: #15803d; }
     .badge-status-draft { background: rgba(245, 158, 11, 0.14); color: #b45309; }
     .badge-status-archived { background: rgba(148, 163, 184, 0.16); color: #64748b; }
+    .badge-status-deleted { background: rgba(239, 68, 68, 0.12); color: #b91c1c; }
 
     .tag-list { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
     .tag-chip, .related-chip {
@@ -870,6 +1023,7 @@ KNOWLEDGE_HTML = """<!DOCTYPE html>
       <button class="tab active" data-tab="topics">Topics</button>
       <button class="tab" data-tab="conflicts">Conflicts</button>
       <button class="tab" data-tab="gaps">Gaps</button>
+      <button class="tab" data-tab="ingestLogs">Ingest Logs</button>
     </div>
 
     <section class="panel active" id="panel-topics">
@@ -877,14 +1031,20 @@ KNOWLEDGE_HTML = """<!DOCTYPE html>
         <div class="toolbar-left" style="flex: 1;">
           <select class="filter-select" id="domainFilter">
             <option value="">전체 도메인</option>
-            <option value="internal">internal</option>
-            <option value="general">general</option>
+            <option value="wifi">wifi</option>
+            <option value="esim">esim</option>
+            <option value="usim">usim</option>
+            <option value="analytics">analytics</option>
+            <option value="hr">hr</option>
+            <option value="finance">finance</option>
+            <option value="commerce">commerce</option>
           </select>
           <select class="filter-select" id="statusFilter">
             <option value="">전체 상태</option>
             <option value="draft">draft</option>
             <option value="active">active</option>
             <option value="archived">archived</option>
+            <option value="deleted">deleted</option>
           </select>
           <input class="search-bar" id="searchInput" type="text" placeholder="찾으려는 문서는 어떤 내용인가요? 키워드가 일치하지 않아도 의미 기반으로 유사한 토픽을 찾아드립니다." style="flex: 1; min-width: 400px; max-width: 100%;">
         </div>
@@ -903,6 +1063,7 @@ KNOWLEDGE_HTML = """<!DOCTYPE html>
             <tr>
               <th>Title</th>
               <th>Domain</th>
+              <th>Visibility</th>
               <th>Status</th>
               <th>Tags</th>
               <th>Updated</th>
@@ -1041,6 +1202,26 @@ KNOWLEDGE_HTML = """<!DOCTYPE html>
         </div>
       </div>
     </section>
+
+    <section class="panel" id="panel-ingestLogs">
+      <div class="toolbar-left" style="margin-bottom:18px;">
+        <button class="btn-secondary" onclick="fetchIngestLogs()">새로고침</button>
+      </div>
+
+      <div id="ingestLogsState" class="loading-state hidden">업로드 기록을 불러오는 중입니다...</div>
+      <div class="table-wrap hidden" id="ingestLogsTableWrap">
+        <table>
+          <thead>
+            <tr>
+              <th>인입 소스 / 일시 / 작업자</th>
+              <th>최종 상태</th>
+              <th>생성/업데이트 요약</th>
+            </tr>
+          </thead>
+          <tbody id="ingestLogsTbody"></tbody>
+        </table>
+      </div>
+    </section>
   </div>
   <div class="toast" id="toast"></div>
 
@@ -1072,13 +1253,25 @@ KNOWLEDGE_HTML = """<!DOCTYPE html>
           <input class="input" id="topicTagsInput" type="text" placeholder="예: esim, cancel, cs-operation" style="width:100%;">
           <div class="hint">쉼표로 구분해 입력합니다.</div>
         </div>
-        <div class="form-grid" style="grid-template-columns: 1fr 1fr;">
+        <div class="form-grid" style="grid-template-columns: 1fr 1fr 1fr;">
           <div class="field">
-            <label for="topicDomainInput">도메인</label>
+            <label for="topicDomainInput">담당 도메인 (domain_id)</label>
             <select class="filter-select" id="topicDomainInput" style="width:100%;">
-              <option value="">선택 안 함</option>
-              <option value="internal">internal</option>
-              <option value="general">general</option>
+              <option value="">전체/공통</option>
+              <option value="wifi">wifi</option>
+              <option value="esim">esim</option>
+              <option value="usim">usim</option>
+              <option value="analytics">analytics</option>
+              <option value="hr">hr</option>
+              <option value="finance">finance</option>
+              <option value="commerce">commerce</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="topicVisibilityInput">공개 범위 (visibility)</label>
+            <select class="filter-select" id="topicVisibilityInput" style="width:100%;">
+              <option value="internal">내부용 (internal)</option>
+              <option value="public">공개용 (public)</option>
             </select>
           </div>
           <div class="field" id="topicStatusField" style="display:none;">
@@ -1087,6 +1280,7 @@ KNOWLEDGE_HTML = """<!DOCTYPE html>
               <option value="draft">draft</option>
               <option value="active">active</option>
               <option value="archived">archived</option>
+              <option value="deleted">deleted</option>
             </select>
           </div>
         </div>
@@ -1114,6 +1308,7 @@ KNOWLEDGE_HTML = """<!DOCTYPE html>
           <div class="modal-subtitle" id="detailSubtitle">상세 정보를 불러오는 중입니다.</div>
         </div>
         <div class="detail-actions">
+          <button class="btn-secondary" id="historyTopicBtn">변경이력</button>
           <button class="btn-secondary" id="editTopicBtn">편집</button>
           <button class="btn-danger" id="deleteTopicBtn">삭제</button>
           <button class="modal-close" data-close="detailModal">&times;</button>
@@ -1124,6 +1319,7 @@ KNOWLEDGE_HTML = """<!DOCTYPE html>
         <div id="detailContent" class="hidden">
           <div class="detail-meta">
             <span id="detailDomainBadge"></span>
+            <span id="detailVisibilityBadge"></span>
             <span id="detailStatusBadge"></span>
             <span id="detailTags" class="tag-list"></span>
           </div>
@@ -1144,10 +1340,47 @@ KNOWLEDGE_HTML = """<!DOCTYPE html>
     </div>
   </div>
 
+  <div class="modal-backdrop" id="historyModal">
+    <div class="modal">
+      <div class="modal-header">
+        <div>
+          <div class="modal-title">변경 이력</div>
+          <div class="modal-subtitle">이 토픽의 변경 내역입니다. (클릭하여 상세 부분 확인)</div>
+        </div>
+        <button class="modal-close" data-close="historyModal">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div id="historyLoading" class="muted">이력을 불러오는 중입니다...</div>
+        <div id="historyContent" class="hidden">
+          <div class="table-wrap">
+            <table style="min-width: unset;">
+              <thead>
+                <tr>
+                  <th style="width:140px;">일시</th>
+                  <th style="width:160px;">수정자</th>
+                  <th>변경 사항</th>
+                </tr>
+              </thead>
+              <tbody id="historyTbody"></tbody>
+            </table>
+          </div>
+          <div id="historyDiffPanel" class="subpanel hidden" style="margin-top:20px; padding:16px;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+              <h3 style="margin-bottom:0;">상세 변경 내역</h3>
+              <button class="icon-btn" onclick="document.getElementById('historyDiffPanel').classList.add('hidden')">&times;</button>
+            </div>
+            <div id="historyDiffContent"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <script>
     let topics = [];
     let conflicts = [];
     let gaps = [];
+    let ingestLogs = [];
     let currentTab = 'topics';
     let editingTopicId = null;
     let viewingTopicId = null;
@@ -1166,12 +1399,18 @@ KNOWLEDGE_HTML = """<!DOCTYPE html>
     const gapsState = document.getElementById('gapsState');
     const gapsTableWrap = document.getElementById('gapsTableWrap');
     const gapsTbody = document.getElementById('gapsTbody');
+    const ingestLogsState = document.getElementById('ingestLogsState');
+    const ingestLogsTableWrap = document.getElementById('ingestLogsTableWrap');
+    const ingestLogsTbody = document.getElementById('ingestLogsTbody');
     const searchInput = document.getElementById('searchInput');
     const domainFilter = document.getElementById('domainFilter');
     const statusFilter = document.getElementById('statusFilter');
     const formModal = document.getElementById('formModal');
     const detailModal = document.getElementById('detailModal');
+    const historyModal = document.getElementById('historyModal');
     const descriptionInput = document.getElementById('topicDescriptionInput');
+
+    let historyData = [];
 
     function escHtml(value) {
       return String(value || '')
@@ -1194,14 +1433,19 @@ KNOWLEDGE_HTML = """<!DOCTYPE html>
 
     function badgeHtml(kind, value) {
       const safe = escHtml(value || '-');
-      if (kind === 'domain') {
-        if (value === 'internal') return '<span class="badge badge-domain-internal">internal</span>';
-        if (value === 'general') return '<span class="badge badge-domain-general">general</span>';
-        return '<span class="badge badge-domain-empty">-</span>';
+      if (kind === 'domain_id') {
+        if (!value) return '<span class="badge badge-domain-empty">-</span>';
+        const lower = value.toLowerCase();
+        return `<span class="badge badge-domain-${lower}" style="background:#f1f5f9; color:#475569; border:1px solid #cbd5e1;">${safe}</span>`;
+      }
+      if (kind === 'visibility') {
+        if (value === 'public') return '<span class="badge" style="background: rgba(16, 185, 129, 0.12); color: #059669;">공개용</span>';
+        if (value === 'internal') return '<span class="badge" style="background: rgba(139, 92, 246, 0.12); color: #7c3aed;">내부용</span>';
+        return `<span class="badge" style="background:#f1f5f9; color:#475569;">${safe}</span>`;
       }
       if (kind === 'conflict_type') {
         if (value === 'conflict') return '<span class="badge badge-status-archived" style="background: rgba(239, 68, 68, 0.12); color: #b91c1c;">conflict</span>';
-        return `<span class="badge badge-domain-general">${safe}</span>`;
+        return `<span class="badge" style="background:#f1f5f9; color:#475569; border:1px solid #cbd5e1;">${safe}</span>`;
       }
       if (kind === 'conflict_status') {
         if (value === 'merged') return '<span class="badge badge-status-active">merged</span>';
@@ -1210,6 +1454,7 @@ KNOWLEDGE_HTML = """<!DOCTYPE html>
       }
       if (value === 'active') return '<span class="badge badge-status-active">active</span>';
       if (value === 'draft') return '<span class="badge badge-status-draft">draft</span>';
+      if (value === 'deleted') return '<span class="badge badge-status-deleted">deleted</span>';
       return `<span class="badge badge-status-archived">${safe}</span>`;
     }
 
@@ -1282,10 +1527,12 @@ KNOWLEDGE_HTML = """<!DOCTYPE html>
             <td>
               <button class="topic-title-btn" data-topic-open="${escHtml(topic.id)}">
                 <div class="topic-title">${escHtml(topic.title || '(제목 없음)')}</div>
+                <div class="td-mono" style="font-size:10px; color:#94a3b8; margin-top:2px;">ID: ${escHtml(topic.id)}</div>
                 <div class="topic-desc">${escHtml(topic.description || '')}</div>
               </button>
             </td>
-            <td>${badgeHtml('domain', topic.domain)}</td>
+            <td>${badgeHtml('domain_id', topic.domain_id)}</td>
+            <td>${badgeHtml('visibility', topic.visibility)}</td>
             <td>${badgeHtml('status', topic.status)}</td>
             <td><div class="tag-list">${visibleTags || '<span class="muted">-</span>'}${moreTag}</div></td>
             <td class="td-mono">${formatDate(topic.updated_at)}</td>
@@ -1328,12 +1575,12 @@ KNOWLEDGE_HTML = """<!DOCTYPE html>
 
     async function fetchTopics() {
       const q = searchInput.value.trim();
-      const domain = domainFilter.value;
+      const domain_id = domainFilter.value;
       const status = statusFilter.value;
       
       const params = new URLSearchParams();
       if (q) params.append('q', q);
-      if (domain) params.append('domain', domain);
+      if (domain_id) params.append('domain_id', domain_id);
       if (status) params.append('status', status);
 
       setLoadingState('토픽을 불러오는 중입니다...');
@@ -1516,6 +1763,7 @@ KNOWLEDGE_HTML = """<!DOCTYPE html>
       document.getElementById('topicContentInput').value = '';
       document.getElementById('topicTagsInput').value = '';
       document.getElementById('topicDomainInput').value = '';
+      document.getElementById('topicVisibilityInput').value = 'internal';
       document.getElementById('relatedTopicSearch').value = '';
       document.getElementById('relatedSuggestions').classList.remove('open');
       clearFieldErrors();
@@ -1583,7 +1831,8 @@ KNOWLEDGE_HTML = """<!DOCTYPE html>
       document.getElementById('topicDescriptionInput').value = topic.description || '';
       document.getElementById('topicContentInput').value = topic.content || '';
       document.getElementById('topicTagsInput').value = Array.isArray(topic.tags) ? topic.tags.join(', ') : '';
-      document.getElementById('topicDomainInput').value = topic.domain || '';
+      document.getElementById('topicDomainInput').value = topic.domain_id || '';
+      document.getElementById('topicVisibilityInput').value = topic.visibility || 'internal';
       document.getElementById('topicStatusField').style.display = 'block';
       document.getElementById('topicStatusInput').value = topic.status || 'draft';
       selectedRelatedTopicIds = Array.isArray(topic.related_topic_ids) ? [...topic.related_topic_ids] : [];
@@ -1611,7 +1860,8 @@ KNOWLEDGE_HTML = """<!DOCTYPE html>
         description: document.getElementById('topicDescriptionInput').value.trim(),
         content: document.getElementById('topicContentInput').value.trim(),
         tags: normalizeTags(document.getElementById('topicTagsInput').value),
-        domain: document.getElementById('topicDomainInput').value || null,
+        domain_id: document.getElementById('topicDomainInput').value || null,
+        visibility: document.getElementById('topicVisibilityInput').value,
         related_topic_ids: selectedRelatedTopicIds,
       };
 
@@ -1664,8 +1914,9 @@ KNOWLEDGE_HTML = """<!DOCTYPE html>
         else topics.push(topic);
 
         document.getElementById('detailTitle').textContent = topic.title || '제목 없음';
-        document.getElementById('detailSubtitle').textContent = `마지막 수정 ${formatDate(topic.updated_at)}`;
-        document.getElementById('detailDomainBadge').innerHTML = badgeHtml('domain', topic.domain);
+        document.getElementById('detailSubtitle').innerHTML = `ID: <span class="td-mono">${escHtml(topic.id)}</span>`;
+        document.getElementById('detailDomainBadge').innerHTML = badgeHtml('domain_id', topic.domain_id);
+        document.getElementById('detailVisibilityBadge').innerHTML = badgeHtml('visibility', topic.visibility);
         document.getElementById('detailStatusBadge').innerHTML = badgeHtml('status', topic.status);
         document.getElementById('detailDescription').textContent = topic.description || '-';
         document.getElementById('detailBody').textContent = topic.content || '-';
@@ -1681,6 +1932,80 @@ KNOWLEDGE_HTML = """<!DOCTYPE html>
       } catch (error) {
         document.getElementById('detailLoading').textContent = error.message || '상세 정보를 불러오지 못했습니다.';
       }
+    }
+
+    async function openHistoryModal() {
+      if (!viewingTopicId) return;
+      document.getElementById('historyLoading').classList.remove('hidden');
+      document.getElementById('historyContent').classList.add('hidden');
+      document.getElementById('historyDiffPanel').classList.add('hidden');
+      openModal(historyModal);
+
+      try {
+        historyData = await apiFetch(`/api/knowledge/v2/topics/${viewingTopicId}/history`);
+        const tbody = document.getElementById('historyTbody');
+        
+        if (!historyData.length) {
+          tbody.innerHTML = '<tr><td colspan="3" class="muted" style="text-align:center;">변경 이력이 없습니다.</td></tr>';
+        } else {
+          tbody.innerHTML = historyData.map((h, i) => {
+            let summary = '';
+            if (h.diff && h.diff.all === '생성됨') {
+              summary = '<span class="badge" style="background:#22c55e22; color:#15803d;">생성됨</span>';
+            } else if (h.diff && Object.keys(h.diff).length > 0) {
+              const keys = Object.keys(h.diff).join(', ');
+              summary = `<span class="muted" style="font-size:12px;">변경: ${escHtml(keys)}</span>`;
+            } else {
+              summary = '<span class="muted" style="font-size:12px;">(데이터 변동 없음)</span>';
+            }
+
+            let modifier = h.snapshot_by ? h.snapshot_by.split('@')[0] : 'System/Agent';
+            return `
+              <tr style="cursor:pointer;" onclick="renderHistoryDiff(${i})">
+                <td class="td-mono">${formatDate(h.snapshot_at)} ${new Date(h.snapshot_at).toLocaleTimeString('ko-KR', {hour:'2-digit', minute:'2-digit', hour12:false})}</td>
+                <td><span class="badge" style="background:#f1f5f9; color:#475569; font-weight:normal;">${escHtml(modifier)}</span></td>
+                <td>${summary}</td>
+              </tr>
+            `;
+          }).join('');
+        }
+        document.getElementById('historyLoading').classList.add('hidden');
+        document.getElementById('historyContent').classList.remove('hidden');
+      } catch (error) {
+        document.getElementById('historyLoading').textContent = error.message || '이력을 불러오지 못했습니다.';
+      }
+    }
+
+    function renderHistoryDiff(index) {
+      const h = historyData[index];
+      const panel = document.getElementById('historyDiffPanel');
+      const content = document.getElementById('historyDiffContent');
+      panel.classList.remove('hidden');
+
+      if (!h || !h.diff) {
+        content.innerHTML = '<div class="muted">비교할 변경 사항이 없습니다.</div>';
+        return;
+      }
+      if (h.diff.all === '생성됨') {
+        content.innerHTML = '<div class="muted">토픽이 처음 생성된 시점입니다.</div>';
+        return;
+      }
+
+      const diffs = Object.keys(h.diff).map(key => {
+        const d = h.diff[key];
+        const oldVal = Array.isArray(d.old) ? d.old.join(', ') : (d.old || '(없음)');
+        const newVal = Array.isArray(d.new) ? d.new.join(', ') : (d.new || '(없음)');
+        return `
+          <div style="margin-bottom:16px;">
+            <div style="font-weight:600; font-size:13px; color:var(--accent); margin-bottom:6px; text-transform:uppercase;">[${escHtml(key)}]</div>
+            <div class="compare-grid" style="column-gap:12px;">
+              <div class="compare-box" style="border-color:#fca5a5; background:#fef2f2;">${escHtml(oldVal)}</div>
+              <div class="compare-box" style="border-color:#86efac; background:#f0fdf4;">${escHtml(newVal)}</div>
+            </div>
+          </div>
+        `;
+      }).join('');
+      content.innerHTML = diffs;
     }
 
     async function deleteTopic(topicId) {
@@ -1710,6 +2035,8 @@ KNOWLEDGE_HTML = """<!DOCTYPE html>
         fetchConflicts();
       } else if (tab === 'gaps') {
         fetchGaps();
+      } else if (tab === 'ingestLogs') {
+        fetchIngestLogs();
       }
     }
 
@@ -1755,6 +2082,74 @@ KNOWLEDGE_HTML = """<!DOCTYPE html>
       `).join('');
     }
 
+    async function fetchIngestLogs() {
+      ingestLogsState.className = 'loading-state';
+      ingestLogsState.textContent = '업로드 기록을 불러오는 중입니다...';
+      ingestLogsState.classList.remove('hidden');
+      ingestLogsTableWrap.classList.add('hidden');
+      try {
+        const data = await apiFetch(`/api/knowledge/v2/ingest-logs`);
+        ingestLogs = Array.isArray(data) ? data : [];
+        renderIngestLogs();
+      } catch (error) {
+        ingestLogsState.className = 'error-state';
+        ingestLogsState.innerHTML = `<h3>불러오지 못했습니다</h3><p>${escHtml(error.message || '오류가 발생했습니다.')}</p>`;
+      }
+    }
+
+    function renderIngestLogs() {
+      if (!ingestLogs.length) {
+        ingestLogsState.className = 'empty-state';
+        ingestLogsState.innerHTML = '<h3>인입 로그가 없습니다.</h3><p>문서를 업로드하면 처리 결과가 여기에 표시됩니다.</p>';
+        ingestLogsState.classList.remove('hidden');
+        ingestLogsTableWrap.classList.add('hidden');
+        return;
+      }
+      ingestLogsState.classList.add('hidden');
+      ingestLogsTableWrap.classList.remove('hidden');
+      ingestLogsTbody.innerHTML = ingestLogs.map(log => {
+        let statusBadge = '';
+        const decision = log.decision || log.status || 'unknown';
+        if (decision === 'success' || decision === 'created_new_topic' || decision === 'updated_existing_topic' || decision === 'updated_existing') {
+          statusBadge = '<span class="badge badge-status-active">성공/반영</span>';
+        } else if (decision === 'conflict' || decision === 'flagged_conflict') {
+          statusBadge = '<span class="badge badge-status-archived" style="background:#fef2f2; color:#b91c1c;">충돌 감지</span>';
+        } else if (decision === 'duplicate' || decision === 'duplicate_skipped') {
+          statusBadge = '<span class="badge badge-status-draft">중복 스킵</span>';
+        } else if (decision === 'failed') {
+          statusBadge = '<span class="badge badge-status-deleted">failed</span>';
+        } else {
+          statusBadge = `<span class="badge badge-status-archived">${escHtml(decision)}</span>`;
+        }
+
+        const filename = log.source_ref || log.filename || 'Unknown';
+        const actor = log.actor || 'System';
+        
+        let processDetailsHtml = '';
+        if (log.process_details && Array.isArray(log.process_details) && log.process_details.length > 0) {
+          processDetailsHtml = '<ul style="margin:0; padding-left:16px;">' + 
+            log.process_details.map(item => `<li><strong>${escHtml(item.action)}</strong>: ${escHtml(item.tentative_title)} <br/><span class="td-mono" style="font-size:11px;">topic_id: ${escHtml(item.topic_id)}</span></li>`).join('') +
+          '</ul>';
+        } else {
+          const message = log.decision_reason || log.reason || log.conflict_type || (log.raw_content ? log.raw_content.slice(0, 80) + '...' : '');
+          processDetailsHtml = `<div style="max-width:300px; font-size:13px; color:var(--text);">${escHtml(message)}</div>`;
+        }
+
+        return `
+        <tr>
+          <td>
+            <div style="font-weight:500; font-size:14px; margin-bottom:4px;">${escHtml(filename)}</div>
+            <div class="td-mono">${formatDate(log.created_at)} ${log.created_at ? new Date(log.created_at).toLocaleTimeString('ko-KR', {hour:'2-digit', minute:'2-digit', hour12:false}) : ''}</div>
+            <div style="font-size:12px; color:var(--muted); margin-top:2px;">등록: <strong>${escHtml(actor)}</strong></div>
+          </td>
+          <td>${statusBadge}</td>
+          <td>
+            ${processDetailsHtml}
+          </td>
+        </tr>
+      `}).join('');
+    }
+
     function openGapDetail(gapId) {
       const gap = gaps.find(item => item.id === gapId);
       if (!gap) return;
@@ -1763,7 +2158,7 @@ KNOWLEDGE_HTML = """<!DOCTYPE html>
       document.getElementById('gapDetailQuery').textContent = gap.query || '';
       document.getElementById('gapDetailSuggestion').textContent = gap.ai_suggestion || '(아직 생성 중입니다. 잠시 후 새로 고침하세요.)';
       document.getElementById('gapDetailVerdictBadge').innerHTML =
-        `<span class="badge badge-domain-general">${escHtml(gap.ai_verdict || '')}</span>`;
+        `<span class="badge" style="background:#f1f5f9; color:#475569; border:1px solid #cbd5e1;">${escHtml(gap.ai_verdict || '')}</span>`;
 
       const topicsEl = document.getElementById('gapDetailTopics');
       const searchedTopics = Array.isArray(gap.searched_topics) ? gap.searched_topics : [];
@@ -1876,6 +2271,7 @@ KNOWLEDGE_HTML = """<!DOCTYPE html>
       if (event.key === 'Escape') {
         closeModal(formModal);
         closeModal(detailModal);
+        closeModal(historyModal);
         document.getElementById('conflictDetailPanel').classList.add('hidden');
       }
     });
@@ -1890,6 +2286,9 @@ KNOWLEDGE_HTML = """<!DOCTYPE html>
         closeModal(detailModal);
         await openEditModal(viewingTopicId);
       }
+    });
+    document.getElementById('historyTopicBtn').addEventListener('click', () => {
+      openHistoryModal();
     });
     document.getElementById('deleteTopicBtn').addEventListener('click', async () => {
       if (viewingTopicId) {

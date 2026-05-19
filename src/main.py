@@ -122,8 +122,8 @@ async def lifespan(app: FastAPI):
     await restore_bq_schedules(scheduler) # 실적분석 빅쿼리 스케줄을 몽고DB에서 읽어서 여기 scheduler에 등록
 
     # 6. MongoDB enabled=False인 job은 시작 시 바로 pause
-    from src.core.mongo_client import boa_agents_collection
-    cursor = boa_agents_collection.find({"enabled": False, "type": {"$in": ["schedule", "trigger"]}})
+    from src.core.mongo_client import boa_agent_registry_collection
+    cursor = boa_agent_registry_collection.find({"enabled": False, "agent_type": {"$in": ["schedule", "trigger"]}})
     # 위의 cursor는 결과를 바로 반환하는 것이 아니라, find() 메서드가 반환하는 커서 객체. 실제 데이터를 얻으려면 아래처럼 to_list() 메서드를 사용해야 한다.
     disabled = await cursor.to_list(length=None)
     for agent in disabled:

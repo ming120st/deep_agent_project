@@ -201,7 +201,7 @@ class RAGEngine:
 
             cursor = boa_knowledge_collection.find(
                 {"schema_version": 2},
-                {"_id": 1, "title": 1, "description": 1, "tags": 1, "content": 1, "status": 1, "domain": 1}
+                {"_id": 1, "title": 1, "description": 1, "tags": 1, "content": 1, "status": 1, "domain_id": 1}
             )
             docs = await cursor.to_list(length=None)
 
@@ -243,7 +243,8 @@ class RAGEngine:
                     "description": d.get("description", ""),
                     "tags":        d.get("tags", []),
                     "status":      d.get("status", ""),
-                    "domain":      d.get("domain"),
+                    "domain_id":   d.get("domain_id"),
+                    "visibility":  d.get("visibility", "internal"),
                 }
                 for d in docs
             ]
@@ -257,7 +258,8 @@ class RAGEngine:
     async def upsert_doc(self, doc_id: str, title: str, content: str,
                           service: str = "", category: str = "",
                           status: str = "", tags: list = None,
-                          description: str = "", domain: str = None) -> None:
+                          description: str = "", domain_id: str = None,
+                          visibility: str = "internal") -> None:
         """
         문서 저장/수정 시 호출. 기존 항목 제거 후 재추가.
         FAISS는 단일 삭제가 안 돼서 IDMap2로 감싸는 방식 사용.
@@ -300,7 +302,8 @@ class RAGEngine:
                 "description": description,
                 "tags":        tags,
                 "status":      status,
-                "domain":      domain,
+                "domain_id":   domain_id,
+                "visibility":  visibility,
             })
 
             await asyncio.to_thread(self._save_index_to_blob_sync)
@@ -544,6 +547,7 @@ async def search_knowledge(
     service: Optional[str] = None,
     use_hyde: bool = False,   # P2: description 기반 직접 검색으로 변경. HyDE 효과 재검증 후 결정.
     use_rerank: bool = False, # P2: TopicGraphRetriever가 자체 선택 로직 수행.
+    visibility: Optional[str] = None, # "public" 등 필터링 용도
 ) -> dict:
     """
     FAISS 벡터 검색 → topic 후보 반환.
@@ -562,15 +566,19 @@ async def search_knowledge(
     if engine.index and engine.index.ntotal > 0:
         candidates = await engine.vector_search(
             query=query,
-            top_k=top_k,
+            top_k=top_k * 2 if visibility else top_k, # 필터링을 위해 넉넉히 가져옴
             service=service,
         )
-        pipeline_steps.append("vector")
-        logger.info(f"[RAG] 벡터 검색 후보: {len(candidates)}건")
+        if visibility:
+            candidates = [c for c in candidates if c.get("visibility") == visibility][:top_k]
+        
+        if candidates:
+            pipeline_steps.append("vector")
+            logger.info(f"[RAG] 벡터 검색 후보: {len(candidates)}건")
 
     # ── MongoDB 텍스트 검색 fallback ──────────────────────────────────────────
     if not candidates:
-        logger.info("[RAG] FAISS 결과 없음 → MongoDB 텍스트 검색 fallback")
+        logger.info("[RAG] FAISS 결과 혹은 필터 매칭 결과 없음 → MongoDB 텍스트 검색 fallback")
         mongo_query: dict = {
             "schema_version": 2,
             "$or": [
@@ -579,9 +587,12 @@ async def search_knowledge(
                 {"tags":        {"$elemMatch": {"$regex": query, "$options": "i"}}},
             ]
         }
+        if visibility:
+            mongo_query["visibility"] = visibility
+
         cursor = boa_knowledge_collection.find(
             mongo_query,
-            {"_id": 1, "title": 1, "description": 1, "tags": 1, "status": 1, "domain": 1}
+            {"_id": 1, "title": 1, "description": 1, "tags": 1, "status": 1, "domain_id": 1, "visibility": 1}
         ).limit(top_k)
         docs = await cursor.to_list(length=None)
         candidates = [
@@ -591,7 +602,8 @@ async def search_knowledge(
                 "description": d.get("description", ""),
                 "tags":        d.get("tags", []),
                 "status":      d.get("status", ""),
-                "domain":      d.get("domain"),
+                "domain_id":   d.get("domain_id"),
+                "visibility":  d.get("visibility", "internal"),
                 "score":       0.5,
             }
             for d in docs

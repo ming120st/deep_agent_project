@@ -266,7 +266,7 @@ async def _auto_merge(topic: dict, incoming_content: str, actor: str) -> None:
                 status=refreshed.get("status", ""),
                 tags=refreshed.get("tags", []),
                 description=refreshed.get("description", ""),
-                domain=refreshed.get("domain"),
+                domain_id=refreshed.get("domain_id"),
             )
     except Exception as exc:
         logger.warning("[TopicIngest] auto_merge index refresh skipped: %s", exc)
@@ -332,12 +332,13 @@ def _fallback_topic_payload(
     related_ids = _dedupe_keep_order(
         [candidate.get("topic_id") for candidate in candidates[:3] if candidate.get("topic_id")]
     )
-    domain = "internal" if re.search(r"esim|wifi|환불|취소|정책|사내|cs", scoped_content, re.I) else "general"
+    # TODO(migration): Update minimal fallback heuristic. domain is now domain_id mapped to actual agent/domain IDs.
+    domain_id = "wifi" if re.search(r"wifi|도시락", scoped_content, re.I) else "esim" if re.search(r"esim", scoped_content, re.I) else "usim" if re.search(r"usim", scoped_content, re.I) else "other"
     return {
         "title": base_title,
         "description": scoped_content.strip().replace("\n", " ")[:180] or base_title,
         "tags": tags[:6],
-        "domain": domain,
+        "domain_id": domain_id,
         "related_topic_ids": related_ids[:3],
     }
 
@@ -369,7 +370,8 @@ async def _create_new_topic(scoped_content: str, tentative_title: str, actor: st
 - description: 80~200자 분량. 이 지식을 '무엇을 다루고, 언제 참고해야 하는지' 명확히 요약. 주의사항이 포함된 경우 그 사실도 간략히 언급.
 - content: 군더더기 서술어와 불필요한 설명을 뺀 "압축된 지식" 형태의 마크다운. 긴 고객 응대 스크립트나 FAQ 원문 형태가 아닌, 에이전트나 직원이 핵심만 참고할 수 있도록 1~4문장 내외의 요약 또는 핵심 항목에 대한 불릿리스트(bullet points) 위주로 작성할 것. 
 - tags: 검색에 용이한 관련 키워드 3~6개 추출
-- domain: "internal" (문서 내용 근거가 필수인 사내/업무 지식) 또는 "general" (일반 지식 활용이 가능한 경우)
+- domain_id: 업무 도메인 식별자 (예: wifi, esim, usim, hr, analytics 등)
+- visibility: "internal" (내부 전용/대외비) 또는 "public" (CS 챗봇 등 외부 공개 가능)
 - related_topic_ids: 아래 [기존 주제 후보] 중 현재 주제와 관련 있거나 보완이 될 수 있는 주제의 topic_id를 0~3개 선택하여 배열로 작성 (전혀 없으면 빈 배열)
 
 [도메인 핵심 지식]
@@ -389,7 +391,8 @@ async def _create_new_topic(scoped_content: str, tentative_title: str, actor: st
     "description": "...",
     "content": "...",
     "tags": ["...", "..."],
-    "domain": "internal",
+    "domain_id": "wifi",
+    "visibility": "internal",
     "related_topic_ids": ["...", "..."]
 }}"""
 
@@ -417,7 +420,8 @@ async def _create_new_topic(scoped_content: str, tentative_title: str, actor: st
         "description": str(payload.get("description", "")).strip()[:400],
         "content": str(payload.get("content", "")).strip() or scoped_content,
         "tags": _dedupe_keep_order([str(tag).strip() for tag in payload.get("tags", []) if str(tag).strip()])[:6],
-        "domain": payload.get("domain") if payload.get("domain") in {"internal", "general"} else None,
+        "domain_id": payload.get("domain_id") or None,
+        "visibility": payload.get("visibility", "internal"), # 기본은 내부용으로 설정
         "related_topic_ids": [],
         "schema_version": 2,
         "author_type": "auto",
@@ -447,7 +451,7 @@ async def _create_new_topic(scoped_content: str, tentative_title: str, actor: st
             status=doc["status"],
             tags=doc["tags"],
             description=doc["description"],
-            domain=doc["domain"],
+            domain_id=doc["domain_id"],
         )
     except Exception as exc:
         logger.warning("[TopicIngest] index upsert skipped topic=%s error=%s", topic_id, exc)
@@ -493,6 +497,7 @@ async def run_ingest_pipeline(
 
     decisions: list[str] = []
     target_topic_ids: list[str] = []
+    process_details: list[dict] = []
 
     for item in scoped_items:
         scoped_content = str(item.get("scoped_content", "")).strip()
@@ -507,6 +512,11 @@ async def run_ingest_pipeline(
             topic_id = await _create_new_topic(scoped_content, tentative_title, actor)
             decisions.append("created_new_topic")
             target_topic_ids.append(topic_id)
+            process_details.append({
+                "tentative_title": tentative_title,
+                "action": "새 주제 생성",
+                "topic_id": topic_id
+            })
             continue
 
         topic = await boa_knowledge_collection.find_one({"_id": match["topic_id"]})
@@ -515,6 +525,11 @@ async def run_ingest_pipeline(
             topic_id = await _create_new_topic(scoped_content, tentative_title, actor)
             decisions.append("created_new_topic")
             target_topic_ids.append(topic_id)
+            process_details.append({
+                "tentative_title": tentative_title,
+                "action": "새 주제 생성",
+                "topic_id": topic_id
+            })
             continue
 
         print(f"topic: {topic.get('title')}, scoped_content: {scoped_content}")
@@ -530,6 +545,11 @@ async def run_ingest_pipeline(
             topic_id = await _create_new_topic(scoped_content, tentative_title, actor)
             decisions.append("created_new_topic")
             target_topic_ids.append(topic_id)
+            process_details.append({
+                "tentative_title": tentative_title,
+                "action": "새 주제 생성",
+                "topic_id": topic_id
+            })
             continue
 
         # 2. 동일 내용 → 중복 스킵 (FAISS confidence 무관, LLM 판정 우선)
@@ -537,6 +557,11 @@ async def run_ingest_pipeline(
             print(f"[디버그] LLM 판정: identical -> 중복 스킵 (match_conf={match_confidence:.3f}, llm_conf={compare_confidence:.3f})")
             decisions.append("duplicate_skipped")
             target_topic_ids.append(str(topic["_id"]))
+            process_details.append({
+                "tentative_title": tentative_title,
+                "action": "중복 스킵",
+                "topic_id": str(topic["_id"])
+            })
             continue
 
         # 3. 보완 내용 → 자동 병합 (LLM 판정이 충분히 확실한 경우)
@@ -545,6 +570,11 @@ async def run_ingest_pipeline(
             await _auto_merge(topic, scoped_content, actor)
             decisions.append("updated_existing")
             target_topic_ids.append(str(topic["_id"]))
+            process_details.append({
+                "tentative_title": tentative_title,
+                "action": "자동 병합",
+                "topic_id": str(topic["_id"])
+            })
             continue
 
         # 4. conflict이거나 supplement이지만 LLM 확신 낮음 → 충돌 등록
@@ -560,6 +590,11 @@ async def run_ingest_pipeline(
         )
         decisions.append("flagged_conflict")
         target_topic_ids.append(str(topic["_id"]))
+        process_details.append({
+            "tentative_title": tentative_title,
+            "action": "충돌(Conflict) 등록",
+            "topic_id": str(topic["_id"])
+        })
 
     decision = _summarize_decision(decisions or ["duplicate_skipped"])
     unique_targets = _dedupe_keep_order(target_topic_ids)
@@ -570,9 +605,11 @@ async def run_ingest_pipeline(
             "_id": ingest_log_id,
             "source_type": source_type,
             "source_ref": source_ref,
+            "actor": actor,
             "raw_content": content[:1000],
             "decision": decision,
             "target_topic_id": unique_targets[0] if unique_targets else None,
+            "process_details": process_details,
             "llm_cost_usd": 0.0,
             "created_at": _now(),
         }
