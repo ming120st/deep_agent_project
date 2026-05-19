@@ -2,7 +2,7 @@ from src.core.mongo_client import get_collection
 
 
 async def get_agent_registry(domain_id: str = "commerce") -> list[dict]:
-    collection = get_collection("agent_registry")
+    collection = get_collection("boa_agent_registry")
     return await collection.find(
         {"domain_id": domain_id, "enabled": True},
         {"_id": 0},

@@ -31,8 +31,8 @@ async def build_routing_context(force_refresh: bool = False) -> str:
         return cached_value
 
     # 도메인 컬렉션 조회
-    domain_collection = get_collection("domain_registry")
-    agent_collection = get_collection("agent_registry")
+    domain_collection = get_collection("boa_domain_registry")
+    agent_collection = get_collection("boa_agent_registry")
 
     # MongoDB에서 활성화된 도메인 리스트를 domain_id 기준으로 정렬하여 조회하고,
     domains = await domain_collection.find(

@@ -104,7 +104,7 @@ def _parameter_list(parameters: dict | None) -> list[dict]:
 
 
 async def upsert_domain_registry() -> None:
-    collection = get_collection("domain_registry")
+    collection = get_collection("boa_domain_registry")
     now = datetime.utcnow()
     for domain in DOMAINS:
         await collection.update_one(
@@ -120,7 +120,7 @@ async def upsert_domain_registry() -> None:
 
 
 async def upsert_agent_registry() -> None:
-    collection = get_collection("agent_registry")
+    collection = get_collection("boa_agent_registry")
     now = datetime.utcnow()
     for agent_id, domain_id in AGENT_DOMAIN_MAP.items():
         meta = AGENT_REGISTRY[agent_id]
@@ -160,7 +160,7 @@ async def upsert_agent_registry() -> None:
 async def main() -> None:
     await upsert_domain_registry()
     await upsert_agent_registry()
-    print("domain_registry and agent_registry initialization complete.")
+    print("boa_domain_registry and boa_agent_registry initialization complete.")
 
 
 if __name__ == "__main__":

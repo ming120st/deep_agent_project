@@ -203,7 +203,7 @@ async def update_parameters(state: GraphState):
 
     domain_id = action_data.get("domain_id") or state.domain_id
     if not domain_id and current_agent:
-        agent_doc = await get_collection("agent_registry").find_one({"agent_id": current_agent})
+        agent_doc = await get_collection("boa_agent_registry").find_one({"agent_id": current_agent})
         if agent_doc:
             domain_id = agent_doc.get("domain_id")
 
@@ -236,7 +236,7 @@ async def update_parameters(state: GraphState):
         agent_query = {"agent_id": current_agent}
         if domain_id:
             agent_query["domain_id"] = domain_id
-        agent_doc = await get_collection("agent_registry").find_one(agent_query)
+        agent_doc = await get_collection("boa_agent_registry").find_one(agent_query)
         if agent_doc and not agent_doc.get("enabled", True):
             msg = "죄송합니다. 현재 해당 에이전트는 사용이 중지되어 있습니다. AI팀에 문의해 주세요."
             state.add_ai_message(msg)  # state.messages 뮤테이션
