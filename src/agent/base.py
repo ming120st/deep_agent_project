@@ -2,6 +2,9 @@ from typing import Any, Literal, Optional
 
 from pydantic import BaseModel
 
+"""
+도메인 팀 서브그래프와 BOA 간의 인터페이스를 정의하는 모델 정의.
+"""
 
 class TeamInput(BaseModel):
     """Request payload passed from BOA to a domain team subgraph."""

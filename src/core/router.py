@@ -55,13 +55,11 @@ async def build_routing_context(force_refresh: bool = False) -> str:
         if not agent_descriptions:
             agent_descriptions = "- 등록된 활성 서브에이전트 없음"
 
-        keywords = ", ".join(domain.get("keywords") or [])
         context_lines.append(
             "\n".join(
                 [
                     f"도메인: {domain_id} ({domain.get('name', domain_id)})",
                     f"설명: {domain.get('description', '')}",
-                    f"키워드: {keywords}",
                     "처리 가능 업무:",
                     f"    {agent_descriptions}",
                 ]
