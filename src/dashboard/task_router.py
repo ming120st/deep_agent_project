@@ -59,19 +59,17 @@ async def api_me(request: Request):
     }
 
 @router.get("/api/tasks")
-async def api_get_tasks(request: Request, status: Optional[str] = None):
+async def api_get_tasks(request: Request, status: Optional[str] = None, skip: int = 0, limit: int = 50):
     user = get_current_user(request)
     if not user:
         raise HTTPException(status_code=401, detail="로그인 필요")
 
     if await is_admin(user["email"]):
-        tasks = await get_all_tasks(status=status)
+        data = await get_all_tasks(status=status, skip=skip, limit=limit)
     else:
-        tasks = await get_tasks_by_user(user["email"])
-        if status:
-            tasks = [t for t in tasks if t["status"] == status]
+        data = await get_tasks_by_user(user["email"], status=status, skip=skip, limit=limit)
 
-    return serialize_tasks(tasks)
+    return {"items": serialize_tasks(data["items"]), "total": data["total"], "skip": skip, "limit": limit}
 
 class StatusUpdateRequest(BaseModel):
     status: str
@@ -277,8 +275,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   </div>
 
   <div class="filter-bar">
-    <input type="text" id="search-input" placeholder="업무명, task_id 검색..." oninput="renderTable()">
-    <button class="btn-refresh" onclick="loadTasks()">↻ 새로고침</button>
+    <input type="text" id="search-input" placeholder="업무명, task_id 검색..." oninput="loadTasks(1)">
+    <button class="btn-refresh" onclick="loadTasks(currentTasksPage)">↻ 새로고침</button>
   </div>
 
   <div class="table-wrap">
@@ -321,9 +319,9 @@ let agentParamLabels = {};
 async function init() {
   await loadMe();
   await loadAgents();
-  await loadTasks();
+  await loadTasks(1);
   requestBrowserNotifPermission();
-  setInterval(loadTasks, 30000);
+  setInterval(() => loadTasks(currentTasksPage), 30000);
 }
 
 async function loadAgents() {
@@ -344,17 +342,52 @@ async function loadMe() {
 }
 
 // ── task 로드 ──
-async function loadTasks() {
+let currentTasksPage = 1;
+const tasksPerPage = 50;
+let totalTasks = 0;
+
+async function loadTasks(page = 1) {
+  currentTasksPage = page;
+  const skip = (page - 1) * tasksPerPage;
+  const status = currentFilter || '';
+  // Not passing search right now as backend doesn't support q, we just rely on the frontend filtering or backend status. 
+  // Let's pass status to backend
+  let queryUrl = `/api/tasks?skip=${skip}&limit=${tasksPerPage}`;
+  if (status) queryUrl += `&status=${status}`;
+  
   try {
-    const res = await fetch('/api/tasks');
-    allTasks = await res.json();
-    updateStats();
+    const res = await fetch(queryUrl);
+    const data = await res.json();
+    allTasks = data.items;
+    totalTasks = data.total;
+    updateStats(); // Note: This will only count items from the current page in the UI unless backend sends total counts per status, but we'll leave it as is for UI consistency.
     renderTable();
+    renderTasksPagination();
     checkWaitingAlerts();
     document.getElementById('last-updated').textContent = new Date().toLocaleTimeString('ko-KR');
   } catch(e) {
     document.getElementById('task-tbody').innerHTML = '<tr><td colspan="6" class="empty-state">데이터 로드 실패</td></tr>';
   }
+}
+
+function renderTasksPagination() {
+  const totalPages = Math.ceil(totalTasks / tasksPerPage);
+  const paginationHtml = `
+    <div style="display:flex; justify-content:center; padding:10px; gap:5px;">
+      <button class="btn-secondary" onclick="loadTasks(${Math.max(1, currentTasksPage - 1)})" ${currentTasksPage === 1 ? 'disabled' : ''}>이전</button>
+      <span style="padding: 6px;">${currentTasksPage} / ${totalPages > 0 ? totalPages : 1}</span>
+      <button class="btn-secondary" onclick="loadTasks(${Math.min(totalPages, currentTasksPage + 1)})" ${currentTasksPage === totalPages || totalPages === 0 ? 'disabled' : ''}>다음</button>
+    </div>
+  `;
+  // Append after table or inside table container
+  const tableWrap = document.querySelector('.table-wrap');
+  let pagDiv = document.getElementById('tasks-pagination-controls');
+  if(!pagDiv) {
+    pagDiv = document.createElement('div');
+    pagDiv.id = 'tasks-pagination-controls';
+    tableWrap.parentNode.insertBefore(pagDiv, tableWrap.nextSibling);
+  }
+  pagDiv.innerHTML = paginationHtml;
 }
 
 // ── 통계 ──
@@ -419,13 +452,15 @@ function filterByStatus(status, el) {
   currentFilter = status;
   document.querySelectorAll('.stat-card').forEach(c => c.classList.remove('active'));
   el.classList.add('active');
-  renderTable();
+  loadTasks(1);
 }
 
 // ── 테이블 렌더 ──
 function renderTable() {
   const search = document.getElementById('search-input').value.toLowerCase();
   let tasks = allTasks;
+  // Note: we fetch filtered by status from the backend, so we don't strictly need to filter status here,
+  // but keeping it as double safety if allTasks hasn't been fetched yet.
   if (currentFilter) tasks = tasks.filter(t => t.status === currentFilter);
   if (search) tasks = tasks.filter(t =>
     (t.agent_display_name||'').toLowerCase().includes(search) ||
@@ -535,7 +570,7 @@ async function saveStatus() {
       headers: {'Content-Type':'application/json'},
       body: JSON.stringify({status, admin_memo: memo || null})
     });
-    if (res.ok) { closeModal(); await loadTasks(); }
+    if (res.ok) { closeModal(); await loadTasks(currentTasksPage); }
   } catch(e) { alert('저장 실패: ' + e.message); }
 }
 
@@ -581,7 +616,17 @@ async def dashboard(request: Request):
     redirect = require_login(request)
     if redirect:
         return redirect
-    return HTMLResponse(content=DASHBOARD_HTML)
+    
+    user = get_current_user(request)
+    doc = await boa_admins_collection.find_one({"email": user["email"]})
+    is_admin = doc is not None
+
+    html_content = DASHBOARD_HTML
+    if not is_admin:
+        html_content = html_content.replace('<a href="/spaces" class="nav-link">스페이스</a>', '')
+        html_content = html_content.replace('<a href="/members" class="nav-link">구성원</a>', '')
+
+    return HTMLResponse(content=html_content)
 from src.core.session_logger import get_task_trace
 
 @router.get("/api/tasks/{task_id}/trace")

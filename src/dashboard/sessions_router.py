@@ -8,13 +8,13 @@ router = APIRouter(tags=["Sessions"])
 # ── API ───────────────────────────────────────────────────────────────────────
 
 @router.get("/api/sessions")
-async def api_get_sessions(request: Request):
+async def api_get_sessions(request: Request, skip: int = 0, limit: int = 50):
     user = get_current_user(request)
     if not user:
         raise HTTPException(status_code=401, detail="로그인 필요")
     if await is_admin(user["email"]):
-        return await get_all_sessions()
-    return await get_sessions_by_user(user["email"])
+        return await get_all_sessions(skip=skip, limit=limit)
+    return await get_sessions_by_user(user["email"], skip=skip, limit=limit)
 
 @router.get("/api/sessions/{session_id}")
 async def api_get_session(session_id: str, request: Request):
@@ -223,14 +223,43 @@ async function init() {
   document.getElementById('user-name').textContent = currentUser.name;
   document.getElementById('user-avatar').src = currentUser.picture || '';
   if (currentUser.is_admin) document.getElementById('admin-badge').style.display = 'inline-block';
-  await loadSessions();
+  await loadSessions(1);
 }
 
 // ── 세션 목록 로드 ────────────────────────────────────────────────────────────
-async function loadSessions() {
-  const res = await fetch('/api/sessions');
-  allSessions = await res.json();
+let currentPage = 1;
+const itemsPerPage = 50;
+let totalItems = 0;
+
+async function loadSessions(page = 1) {
+  currentPage = page;
+  const skip = (page - 1) * itemsPerPage;
+  const res = await fetch(`/api/sessions?skip=${skip}&limit=${itemsPerPage}`);
+  const data = await res.json();
+  allSessions = data.items;
+  totalItems = data.total;
   renderList();
+  renderPagination();
+}
+
+function renderPagination() {
+  const totalPages = Math.ceil(totalItems / itemsPerPage);
+  const paginationHtml = `
+    <div style="display:flex; justify-content:center; padding:10px; gap:5px;">
+      <button onclick="loadSessions(${Math.max(1, currentPage - 1)})" ${currentPage === 1 ? 'disabled' : ''}>이전</button>
+      <span>${currentPage} / ${totalPages > 0 ? totalPages : 1}</span>
+      <button onclick="loadSessions(${Math.min(totalPages, currentPage + 1)})" ${currentPage === totalPages || totalPages === 0 ? 'disabled' : ''}>다음</button>
+    </div>
+  `;
+  const container = document.getElementById('session-list-container') || document.getElementById('session-list').parentElement;
+  
+  let pagDiv = document.getElementById('pagination-controls');
+  if(!pagDiv) {
+    pagDiv = document.createElement('div');
+    pagDiv.id = 'pagination-controls';
+    container.appendChild(pagDiv);
+  }
+  pagDiv.innerHTML = paginationHtml;
 }
 
 function renderList() {
@@ -438,4 +467,16 @@ async def sessions_page(request: Request):
     redirect = require_login(request)
     if redirect:
         return redirect
-    return HTMLResponse(content=SESSIONS_HTML)
+
+    from src.dashboard.auth import get_current_user
+    user = get_current_user(request)
+    from src.core.mongo_client import boa_admins_collection
+    doc = await boa_admins_collection.find_one({"email": user["email"]})
+    is_admin = doc is not None
+
+    html_content = SESSIONS_HTML
+    if not is_admin:
+        html_content = html_content.replace('<a href="/spaces" class="nav-link">스페이스</a>', '')
+        html_content = html_content.replace('<a href="/members" class="nav-link">구성원</a>', '')
+
+    return HTMLResponse(content=html_content)

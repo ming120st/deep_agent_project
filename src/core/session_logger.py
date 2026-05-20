@@ -287,30 +287,32 @@ async def get_session(session_id: str) -> Optional[dict]:
     return doc
 
 
-async def get_sessions_by_user(user_id: str, limit: int = 50) -> list:
+async def get_sessions_by_user(user_id: str, skip: int = 0, limit: int = 50) -> dict:
     """유저별 세션 목록 (이벤트 제외, 요약만)."""
+    total = await session_logs_collection.count_documents({"user_id": user_id})
     cursor = session_logs_collection.find(
         {"user_id": user_id},
         {"turns.events": 0, "current_turn_idx": 0}
-    ).sort("started_at", -1).limit(limit)
+    ).sort("started_at", -1).skip(skip).limit(limit)
     docs = await cursor.to_list(length=None)
     for doc in docs:
         doc.pop("_id", None)
         _serialize_dates(doc)
-    return docs
+    return {"items": docs, "total": total, "skip": skip, "limit": limit}
 
 
-async def get_all_sessions(limit: int = 100) -> list:
+async def get_all_sessions(skip: int = 0, limit: int = 50) -> dict:
     """전체 세션 목록 (이벤트 제외, 요약만)."""
+    total = await session_logs_collection.count_documents({})
     cursor = session_logs_collection.find(
         {},
         {"turns.events": 0, "current_turn_idx": 0}
-    ).sort("started_at", -1).limit(limit)
+    ).sort("started_at", -1).skip(skip).limit(limit)
     docs = await cursor.to_list(length=None)
     for doc in docs:
         doc.pop("_id", None)
         _serialize_dates(doc)
-    return docs
+    return {"items": docs, "total": total, "skip": skip, "limit": limit}
 
 
 async def get_task_trace(task_id: str) -> list:

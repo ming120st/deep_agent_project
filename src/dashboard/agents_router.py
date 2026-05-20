@@ -23,8 +23,8 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel
 
-from src.core.mongo_client import boa_agents_collection, boa_admins_collection
-from src.agent.registry import ALL_REGISTRIES
+from src.core.mongo_client import boa_agent_registry_collection, boa_admins_collection
+
 from src.agent.analytics.subagents.schedule.bq_analysis_schedule.schedule_manager import (
     bq_schedules_collection,
     toggle_bq_schedule,
@@ -96,10 +96,12 @@ async def list_agents(request: Request):
     email    = user["email"]
     is_admin = await check_is_admin(email)
 
-    # 1. 레지스트리 에이전트 (boa_agents 컬렉션) — 공통, 모두에게 표시
-    cursor = boa_agents_collection.find({}, {"_id": 0})
+    # 1. 레지스트리 에이전트 (boa_agent_registry 컬렉션) — 공통, 모두에게 표시
+    cursor = boa_agent_registry_collection.find({}, {"_id": 0})
     registry_agents = await cursor.to_list(length=None)
     for a in registry_agents:
+        a["type"] = a.get("agent_type", "chat")
+        a["display_name"] = a.get("name", a.get("agent_id"))
         for key in ("created_at", "updated_at"):
             if a.get(key):
                 a[key] = a[key].isoformat()
@@ -138,15 +140,16 @@ async def toggle_agent(agent_id: str, body: ToggleRequest, request: Request):
     is_admin = await check_is_admin(email)
 
     # Case 1. 레지스트리 에이전트 (공통) — 관리자만 토글 가능
-    if agent_id in ALL_REGISTRIES:
+    # bq_schedules_collection 기반은 Case 2에서 처리하므로 여기서 ALL_REGISTRIES 대신에 agent_registry를 확인한다.
+    agent_doc = await boa_agent_registry_collection.find_one({"agent_id": agent_id})
+    if agent_doc and agent_doc.get("agent_type") in ("chat", "schedule", "trigger") and agent_id not in ("bq_analysis_schedule",) and not agent_id.startswith("bq_rpa_"):
         if not is_admin:
             raise HTTPException(status_code=403, detail="공통 에이전트는 관리자만 변경할 수 있습니다.")
-        await boa_agents_collection.update_one(
+        await boa_agent_registry_collection.update_one(
             {"agent_id": agent_id},
             {"$set": {"enabled": body.enabled, "updated_at": datetime.utcnow()}}
         )
-        meta = ALL_REGISTRIES[agent_id]
-        if meta["type"] in ("schedule", "trigger"):
+        if agent_doc.get("agent_type") in ("schedule", "trigger"):
             job = get_scheduler().get_job(agent_id)
             if job:
                 job.resume() if body.enabled else job.pause()
@@ -175,7 +178,8 @@ async def delete_agent(agent_id: str, request: Request):
     email    = user["email"]
     is_admin = await check_is_admin(email)
 
-    if agent_id in ALL_REGISTRIES:
+    agent_doc = await boa_agent_registry_collection.find_one({"agent_id": agent_id})
+    if agent_doc and agent_doc.get("agent_type") in ("chat", "schedule", "trigger") and agent_id not in ("bq_analysis_schedule",) and not agent_id.startswith("bq_rpa_"):
         raise HTTPException(status_code=403, detail="코드에 등록된 에이전트는 삭제할 수 없습니다.")
 
     doc = await bq_schedules_collection.find_one({"schedule_id": agent_id})
@@ -203,8 +207,16 @@ async def agents_page(request: Request):
     user = request.session.get("user")
     if not user:
         return RedirectResponse("/auth/login")
-    # 관리자/멤버 모두 접근 가능 — 데이터는 API에서 권한별 필터링
-    return HTMLResponse(AGENTS_HTML)
+    
+    doc = await boa_admins_collection.find_one({"email": user["email"]})
+    is_admin = doc is not None
+
+    html_content = AGENTS_HTML
+    if not is_admin:
+        html_content = html_content.replace('<a href="/spaces" class="nav-link">스페이스</a>', '')
+        html_content = html_content.replace('<a href="/members" class="nav-link">구성원</a>', '')
+
+    return HTMLResponse(html_content)
 
 
 AGENTS_HTML = """<!DOCTYPE html>

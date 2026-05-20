@@ -62,8 +62,15 @@ DOMAINS = [
         "owner_teams": ["commerce"],
         "enabled": False,
     },
+    {
+        "domain_id": "system",
+        "name": "시스템 유지보수",
+        "description": "시스템 인프라 및 RAG 지식베이스 동기화 등 백그라운드 작업을 처리합니다.",
+        "keywords": ["시스템", "인덱스", "동기화", "백그라운드"],
+        "owner_teams": ["ai-team"],
+        "enabled": True,
+    },
 ]
-
 
 # 새로운 워크플로우(서브에이전트)가 추가될 때마다 AGENT_REGISTRY에 메타데이터를 등록하고, AGENT_DOMAIN_MAP에 도메인 매핑을 추가해야 합니다.
 AGENT_DOMAIN_MAP = {
@@ -73,6 +80,7 @@ AGENT_DOMAIN_MAP = {
     "esim_order_cancellation": "esim",
     "esim_resend": "esim",
     "bigquery_agent": "analytics",
+    "rag_index_reload": "system",
 }
 
 
@@ -122,8 +130,9 @@ async def upsert_domain_registry() -> None:
 async def upsert_agent_registry() -> None:
     collection = get_collection("boa_agent_registry")
     now = datetime.utcnow()
+    from src.agent.registry import ALL_REGISTRIES
     for agent_id, domain_id in AGENT_DOMAIN_MAP.items():
-        meta = AGENT_REGISTRY[agent_id]
+        meta = ALL_REGISTRIES[agent_id]
         doc = {
             "domain_id": domain_id,
             "agent_id": agent_id,

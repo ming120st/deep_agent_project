@@ -283,11 +283,15 @@ async def list_topics(
         query["_id"] = {"$in": topic_ids}
 
     projection = {"content": 0}
+    
+    total = await boa_knowledge_collection.count_documents(query)
+    
     cursor = boa_knowledge_collection.find(query, projection)
     
     if not q:
         # q가 없을 때만 db 수준의 limit 적용. q가 있으면 검색된 top_k 수만큼 전부 로드 후 정렬.
         cursor = cursor.skip(skip).limit(limit)
+        cursor = cursor.sort("updated_at", -1)
         
     docs = await cursor.to_list(length=None)
     
@@ -297,7 +301,7 @@ async def list_topics(
         sorted_docs = [doc_map[tid] for tid in topic_ids if tid in doc_map]
         docs = sorted_docs
 
-    return [_serialize(d) for d in docs]
+    return {"items": [_serialize(d) for d in docs], "total": total, "skip": skip, "limit": limit}
 
 
 @api_router.get("/topics/{topic_id}")
@@ -812,7 +816,17 @@ async def knowledge_page(request: Request):
     user = get_current_user(request)
     if not user:
         return RedirectResponse("/auth/login")
-    return HTMLResponse(KNOWLEDGE_HTML)
+    
+    from src.core.mongo_client import boa_admins_collection
+    doc = await boa_admins_collection.find_one({"email": user["email"]})
+    is_admin = doc is not None
+
+    html_content = KNOWLEDGE_HTML
+    if not is_admin:
+        html_content = html_content.replace('<a href="/spaces" class="nav-link">스페이스</a>', '')
+        html_content = html_content.replace('<a href="/members" class="nav-link">구성원</a>', '')
+
+    return HTMLResponse(html_content)
 
 
 KNOWLEDGE_HTML = """<!DOCTYPE html>
@@ -1573,7 +1587,13 @@ KNOWLEDGE_HTML = """<!DOCTYPE html>
       return payload;
     }
 
-    async function fetchTopics() {
+    let currentTopicsPage = 1;
+    const topicsPerPage = 50;
+    let totalTopics = 0;
+
+    async function fetchTopics(page = 1) {
+      currentTopicsPage = page;
+      const skip = (page - 1) * topicsPerPage;
       const q = searchInput.value.trim();
       const domain_id = domainFilter.value;
       const status = statusFilter.value;
@@ -1582,15 +1602,44 @@ KNOWLEDGE_HTML = """<!DOCTYPE html>
       if (q) params.append('q', q);
       if (domain_id) params.append('domain_id', domain_id);
       if (status) params.append('status', status);
+      params.append('skip', skip);
+      params.append('limit', topicsPerPage);
 
       setLoadingState('토픽을 불러오는 중입니다...');
       try {
         const data = await apiFetch(`/api/knowledge/v2/topics?${params.toString()}`);
-        topics = Array.isArray(data) ? data : [];
+        if(data && Array.isArray(data.items)) {
+          topics = data.items;
+          totalTopics = data.total || 0;
+        } else {
+          topics = Array.isArray(data) ? data : [];
+          totalTopics = topics.length;
+        }
         renderTopics();
+        renderTopicsPagination();
       } catch (error) {
         setErrorState(error.message || '데이터를 불러오지 못했습니다.');
       }
+    }
+    
+    function renderTopicsPagination() {
+      const totalPages = Math.ceil(totalTopics / topicsPerPage);
+      const paginationHtml = `
+        <div style="display:flex; justify-content:center; padding:10px; gap:5px;">
+          <button class="btn-secondary" onclick="fetchTopics(${Math.max(1, currentTopicsPage - 1)})" ${currentTopicsPage === 1 ? 'disabled' : ''}>이전</button>
+          <span style="padding: 6px;">${currentTopicsPage} / ${totalPages > 0 ? totalPages : 1}</span>
+          <button class="btn-secondary" onclick="fetchTopics(${Math.min(totalPages, currentTopicsPage + 1)})" ${currentTopicsPage === totalPages || totalPages === 0 ? 'disabled' : ''}>다음</button>
+        </div>
+      `;
+      const container = topicsTableWrap; // Or whichever container wraps the table
+      
+      let pagDiv = document.getElementById('topics-pagination-controls');
+      if(!pagDiv) {
+        pagDiv = document.createElement('div');
+        pagDiv.id = 'topics-pagination-controls';
+        container.appendChild(pagDiv);
+      }
+      pagDiv.innerHTML = paginationHtml;
     }
 
     async function fetchConflicts() {
@@ -1707,7 +1756,7 @@ KNOWLEDGE_HTML = """<!DOCTYPE html>
           body: JSON.stringify(payload),
         });
         showToast('충돌 상태를 업데이트했습니다.');
-        await Promise.all([fetchConflicts(), fetchTopics()]);
+        await Promise.all([fetchConflicts(), fetchTopics(currentTopicsPage)]);
       } catch (error) {
         alert(error.message || '충돌 처리에 실패했습니다.');
       }
@@ -1887,7 +1936,7 @@ KNOWLEDGE_HTML = """<!DOCTYPE html>
           });
         }
         closeModal(formModal);
-        await fetchTopics();
+        await fetchTopics(currentTopicsPage);
       } catch (error) {
         alert(error.message || '저장에 실패했습니다.');
       } finally {
@@ -2017,7 +2066,7 @@ KNOWLEDGE_HTML = """<!DOCTYPE html>
       try {
         await apiFetch(`/api/knowledge/v2/topics/${topicId}`, { method: 'DELETE' });
         if (viewingTopicId === topicId) closeModal(detailModal);
-        await fetchTopics();
+        await fetchTopics(currentTopicsPage);
       } catch (error) {
         alert(error.message || '삭제에 실패했습니다.');
       }
@@ -2320,17 +2369,17 @@ KNOWLEDGE_HTML = """<!DOCTYPE html>
     searchInput.addEventListener('input', () => {
       clearTimeout(searchTimeout);
       searchTimeout = setTimeout(() => {
-        fetchTopics();
+        fetchTopics(1);
       }, 400); 
     });
-    domainFilter.addEventListener('change', fetchTopics);
-    statusFilter.addEventListener('change', fetchTopics);
+    domainFilter.addEventListener('change', () => fetchTopics(1));
+    statusFilter.addEventListener('change', () => fetchTopics(1));
     descriptionInput.addEventListener('input', updateDescriptionCount);
     document.getElementById('relatedTopicSearch').addEventListener('input', renderRelatedSuggestions);
 
     document.addEventListener('DOMContentLoaded', async () => {
       updateDescriptionCount();
-      await Promise.all([fetchTopics(), fetchConflicts()]);
+      await Promise.all([fetchTopics(1), fetchConflicts()]);
     });
   </script>
 </body>

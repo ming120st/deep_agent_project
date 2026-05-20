@@ -133,29 +133,34 @@ async def get_task(task_id: str) -> Optional[dict]:
     print(f"[MongoDB] End: get_task | Duration: {end_time - start_time:.2f}s")
     return doc
 
-async def get_tasks_by_user(user_id: str) -> list:
+async def get_tasks_by_user(user_id: str, status: Optional[str] = None, skip: int = 0, limit: int = 50) -> dict:
     start_time = time.time()
-    print(f"[MongoDB] Start: get_tasks_by_user (user: {user_id})")
-    cursor = boa_tasks_collection.find({"user_id": user_id}).sort("created_at", -1)
-    docs = await cursor.to_list(length=None)  # 모든 문서 가져오기
+    print(f"[MongoDB] Start: get_tasks_by_user (user: {user_id}, status: {status})")
+    query = {"user_id": user_id}
+    if status:
+        query["status"] = status
+    total = await boa_tasks_collection.count_documents(query)
+    cursor = boa_tasks_collection.find(query).sort("created_at", -1).skip(skip).limit(limit)
+    docs = await cursor.to_list(length=None)
     result = []
     for doc in docs:
         doc["task_id"] = str(doc.pop("_id"))
         result.append(doc)
     end_time = time.time()
     print(f"[MongoDB] End: get_tasks_by_user | Duration: {end_time - start_time:.2f}s")
-    return result
+    return {"items": result, "total": total, "skip": skip, "limit": limit}
 
-async def get_all_tasks(status: Optional[str] = None) -> list:
+async def get_all_tasks(status: Optional[str] = None, skip: int = 0, limit: int = 50) -> dict:
     start_time = time.time()
     print(f"[MongoDB] Start: get_all_tasks (status: {status})")
     query = {"status": status} if status else {}
-    cursor = boa_tasks_collection.find(query).sort("created_at", -1)
-    docs = await cursor.to_list(length=None)  # 모든 문서 가져오기
+    total = await boa_tasks_collection.count_documents(query)
+    cursor = boa_tasks_collection.find(query).sort("created_at", -1).skip(skip).limit(limit)
+    docs = await cursor.to_list(length=None)
     result = []
     for doc in docs:
         doc["task_id"] = str(doc.pop("_id"))
         result.append(doc)
     end_time = time.time()
     print(f"[MongoDB] End: get_all_tasks | Duration: {end_time - start_time:.2f}s")
-    return result
+    return {"items": result, "total": total, "skip": skip, "limit": limit}
