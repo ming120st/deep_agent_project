@@ -22,6 +22,7 @@ src/dashboard/reports_router.py
 """
 
 import asyncio
+import mimetypes
 from datetime import datetime
 
 from bson import ObjectId
@@ -46,11 +47,14 @@ def _serialize(doc: dict) -> dict:
 
 
 async def _can_view(doc: dict, email: str) -> bool:
+    # 업로더 본인은 공개범위 무관하게 항상 열람 가능
+    if doc.get("created_by") == email:
+        return True
     v = doc.get("visibility", "private")
     if v == "public":
         return True
     if v == "private":
-        return doc.get("created_by") == email
+        return False
     if v == "specific":
         return email in doc.get("allowed_emails", [])
     if v == "team":
@@ -79,9 +83,9 @@ REPORTS_HTML = """<!DOCTYPE html>
     --green:#22c55e; --yellow:#eab308; --red:#ef4444;
   }
   * { box-sizing:border-box; margin:0; padding:0; }
-  body { background:var(--bg); color:var(--text); font-family:'IBM Plex Sans KR',sans-serif; font-size:15px; min-height:100vh; }
+  body { background:var(--bg); color:var(--text); font-family:'IBM Plex Sans KR',sans-serif; font-size:15px; min-height:100vh; display:flex; flex-direction:column; }
 
-  header { background:var(--bg2); border-bottom:1px solid var(--border); padding:0 28px; height:56px; box-shadow:0 1px 3px rgba(0,0,0,.06); display:flex; align-items:center; justify-content:space-between; position:sticky; top:0; z-index:100; }
+  header { background:var(--bg2); border-bottom:1px solid var(--border); padding:0 28px; height:56px; box-shadow:0 1px 3px rgba(0,0,0,.06); display:flex; align-items:center; justify-content:space-between; position:sticky; top:0; z-index:100; flex-shrink:0; }
   .logo { font-family:'IBM Plex Mono',monospace; font-weight:600; font-size:16px; color:var(--text-bright); letter-spacing:.05em; }
   .logo span { color:var(--accent); }
   .header-nav { display:flex; align-items:center; gap:4px; }
@@ -95,46 +99,63 @@ REPORTS_HTML = """<!DOCTYPE html>
   .btn-logout { background:none; border:1px solid var(--border); border-radius:6px; padding:5px 12px; color:var(--text-dim); font-size:12px; cursor:pointer; transition:all .15s; }
   .btn-logout:hover { border-color:var(--red); color:var(--red); }
 
-  .container { padding:24px 28px; max-width:1400px; margin:0 auto; }
+  /* 2패널 레이아웃 */
+  .layout { display:flex; flex:1; overflow:hidden; height:calc(100vh - 56px); }
 
-  .page-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:24px; }
-  .page-title { font-size:18px; font-weight:600; color:var(--text-bright); }
-  .page-title span { font-family:'IBM Plex Mono',monospace; color:var(--text-dim); font-size:13px; font-weight:400; margin-left:10px; }
-
-  .toolbar { display:flex; align-items:center; gap:12px; margin-bottom:20px; }
-  .search-input { flex:1; background:var(--bg2); border:1px solid var(--border); border-radius:6px; padding:8px 14px; color:var(--text); font-family:'IBM Plex Sans KR',sans-serif; font-size:14px; outline:none; transition:border-color .15s; }
+  /* 왼쪽 패널 — 리포트 목록 */
+  .panel-left { width:340px; flex-shrink:0; border-right:1px solid var(--border); background:var(--bg2); display:flex; flex-direction:column; overflow:hidden; }
+  .panel-left-header { padding:16px 20px 12px; border-bottom:1px solid var(--border); }
+  .panel-left-title { display:flex; align-items:center; justify-content:space-between; margin-bottom:10px; }
+  .panel-left-title h2 { font-size:13px; font-weight:600; color:var(--text-bright); }
+  .panel-left-title span { font-family:'IBM Plex Mono',monospace; font-size:11px; color:var(--text-dim); }
+  .search-input { width:100%; background:var(--bg3); border:1px solid var(--border); border-radius:6px; padding:7px 12px; font-family:'IBM Plex Sans KR',sans-serif; font-size:13px; color:var(--text); outline:none; transition:border-color .15s; margin-bottom:8px; }
   .search-input:focus { border-color:var(--accent); }
   .search-input::placeholder { color:var(--text-dim); }
+  .btn-upload { width:100%; background:var(--accent); border:none; border-radius:6px; padding:8px 14px; color:#fff; font-family:'IBM Plex Sans KR',sans-serif; font-size:13px; font-weight:500; cursor:pointer; transition:opacity .15s; }
+  .btn-upload:hover { opacity:.85; }
+  .report-list { flex:1; overflow-y:auto; }
+  .report-item { padding:14px 20px; border-bottom:1px solid var(--border); cursor:pointer; transition:background .1s; }
+  .report-item:hover { background:var(--bg3); }
+  .report-item.active { background:var(--accent-dim); border-left:3px solid var(--accent); }
+  .report-item-top { display:flex; align-items:flex-start; justify-content:space-between; gap:8px; margin-bottom:4px; }
+  .report-item-title { font-size:13px; font-weight:500; color:var(--text-bright); line-height:1.4; flex:1; overflow:hidden; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; }
+  .report-item-badge { font-family:'IBM Plex Mono',monospace; font-size:10px; padding:2px 6px; border-radius:3px; flex-shrink:0; }
+  .badge-public  { background:rgba(34,197,94,.1);  color:#15803d; }
+  .badge-team    { background:rgba(37,99,235,.1);  color:#1d4ed8; }
+  .badge-specific{ background:rgba(124,58,237,.1); color:#7c3aed; }
+  .badge-private { background:rgba(107,114,128,.1);color:#6b7280; }
+  .report-item-desc { font-size:12px; color:var(--text-dim); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; margin-top:2px; }
+  .report-item-meta { display:flex; align-items:center; gap:4px; margin-top:5px; }
+  .report-item-author { font-size:11px; color:var(--text-dim); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:140px; }
+  .report-item-date { font-family:'IBM Plex Mono',monospace; font-size:11px; color:var(--text-dim); }
+  .empty-list { padding:48px 20px; text-align:center; color:var(--text-dim); font-family:'IBM Plex Mono',monospace; font-size:13px; }
 
+  /* 오른쪽 패널 — 리포트 뷰어 */
+  .panel-right { flex:1; display:flex; flex-direction:column; overflow:hidden; background:var(--bg); }
+  .panel-right-empty { display:flex; align-items:center; justify-content:center; height:100%; color:var(--text-dim); font-family:'IBM Plex Mono',monospace; font-size:13px; }
+
+  /* 뷰어 헤더 */
+  .viewer-header { background:var(--bg2); border-bottom:1px solid var(--border); padding:14px 24px; display:flex; align-items:center; gap:10px; flex-shrink:0; }
+  .viewer-title { font-size:14px; font-weight:600; color:var(--text-bright); flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .viewer-meta { font-family:'IBM Plex Mono',monospace; font-size:11px; color:var(--text-dim); white-space:nowrap; }
+  .btn-open-tab { background:var(--bg3); border:1px solid var(--border); border-radius:6px; padding:6px 14px; color:var(--text-dim); font-size:12px; cursor:pointer; transition:all .15s; white-space:nowrap; }
+  .btn-open-tab:hover { border-color:var(--accent); color:var(--accent); }
+  .btn-edit-report { background:none; border:1px solid var(--border); border-radius:6px; padding:6px 14px; color:var(--text-dim); font-size:12px; cursor:pointer; transition:all .15s; white-space:nowrap; }
+  .btn-edit-report:hover { border-color:var(--accent); color:var(--accent); }
+  .report-iframe { flex:1; border:none; width:100%; background:var(--bg2); }
+
+  /* 로딩 */
+  .loading-viewer { display:flex; align-items:center; justify-content:center; flex:1; color:var(--text-dim); font-family:'IBM Plex Mono',monospace; font-size:13px; }
+  .spinner { width:16px; height:16px; border:2px solid var(--border); border-top-color:var(--accent); border-radius:50%; animation:spin .7s linear infinite; margin-right:10px; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+
+  /* 공통 버튼 */
   .btn-primary { background:var(--accent); border:none; border-radius:6px; padding:9px 18px; color:#fff; font-family:'IBM Plex Sans KR',sans-serif; font-size:13px; font-weight:500; cursor:pointer; transition:opacity .15s; white-space:nowrap; }
   .btn-primary:hover { opacity:.85; }
   .btn-secondary { background:var(--bg3); border:1px solid var(--border); border-radius:6px; padding:8px 16px; color:var(--text); font-family:'IBM Plex Sans KR',sans-serif; font-size:13px; cursor:pointer; transition:all .15s; }
   .btn-secondary:hover { border-color:var(--accent); color:var(--accent); }
   .btn-danger { background:none; border:1px solid var(--border); border-radius:6px; padding:6px 12px; color:var(--text-dim); font-size:12px; cursor:pointer; transition:all .15s; }
   .btn-danger:hover { border-color:var(--red); color:var(--red); }
-
-  .cards-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(320px, 1fr)); gap:16px; }
-
-  .report-card { background:var(--bg2); border:1px solid var(--border); border-radius:10px; padding:20px; display:flex; flex-direction:column; gap:12px; transition:box-shadow .15s; }
-  .report-card:hover { box-shadow:0 2px 12px rgba(0,0,0,.08); }
-  .card-top { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; }
-  .card-title { font-size:14px; font-weight:600; color:var(--text-bright); line-height:1.4; }
-  .card-desc { font-size:13px; color:var(--text-dim); line-height:1.5; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
-  .card-meta { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
-  .badge { display:inline-flex; align-items:center; gap:4px; padding:3px 8px; border-radius:4px; font-family:'IBM Plex Mono',monospace; font-size:11px; font-weight:500; }
-  .badge-public  { background:rgba(34,197,94,.1);  color:#15803d; }
-  .badge-team    { background:rgba(37,99,235,.1);  color:#1d4ed8; }
-  .badge-specific{ background:rgba(124,58,237,.1); color:#7c3aed; }
-  .badge-private { background:rgba(107,114,128,.1);color:#6b7280; }
-  .meta-text { font-family:'IBM Plex Mono',monospace; font-size:11px; color:var(--text-dim); }
-  .card-actions { display:flex; align-items:center; gap:8px; margin-top:4px; }
-  .btn-open { background:var(--accent); border:none; border-radius:6px; padding:7px 16px; color:#fff; font-size:12px; font-weight:500; cursor:pointer; transition:opacity .15s; }
-  .btn-open:hover { opacity:.85; }
-  .btn-edit { background:var(--bg3); border:1px solid var(--border); border-radius:6px; padding:6px 12px; color:var(--text-dim); font-size:12px; cursor:pointer; transition:all .15s; }
-  .btn-edit:hover { border-color:var(--accent); color:var(--accent); }
-
-  .empty-state { padding:80px; text-align:center; color:var(--text-dim); font-family:'IBM Plex Mono',monospace; font-size:13px; }
-  .loading { padding:60px; text-align:center; color:var(--text-dim); font-family:'IBM Plex Mono',monospace; font-size:13px; }
 
   /* 모달 */
   .modal-overlay { display:none; position:fixed; inset:0; background:rgba(15,17,30,.55); z-index:200; backdrop-filter:blur(2px); align-items:center; justify-content:center; }
@@ -195,18 +216,26 @@ REPORTS_HTML = """<!DOCTYPE html>
   </div>
 </header>
 
-<div class="container">
-  <div class="page-header">
-    <div class="page-title">리포트 <span id="report-count"></span></div>
-    <button class="btn-primary" onclick="openUploadModal()">+ 리포트 등록</button>
+<div class="layout">
+  <!-- 왼쪽: 리포트 목록 -->
+  <div class="panel-left">
+    <div class="panel-left-header">
+      <div class="panel-left-title">
+        <h2>리포트 목록</h2>
+        <span id="report-count"></span>
+      </div>
+      <input type="text" class="search-input" id="search-input"
+             placeholder="제목 검색..." oninput="renderList()">
+      <button class="btn-upload" onclick="openUploadModal()">+ 리포트 등록</button>
+    </div>
+    <div class="report-list" id="report-list">
+      <div class="empty-list">로딩 중...</div>
+    </div>
   </div>
 
-  <div class="toolbar">
-    <input type="text" class="search-input" id="search-input" placeholder="리포트 제목 검색..." oninput="renderCards()">
-  </div>
-
-  <div id="cards-container" class="cards-grid">
-    <div class="loading">로딩 중...</div>
+  <!-- 오른쪽: 리포트 뷰어 -->
+  <div class="panel-right" id="panel-right">
+    <div class="panel-right-empty">← 리포트를 선택하세요</div>
   </div>
 </div>
 
@@ -224,7 +253,7 @@ REPORTS_HTML = """<!DOCTYPE html>
           <div class="file-zone-label">파일을 클릭하거나 <span>여기서 선택</span>하세요</div>
           <div class="file-chosen" id="file-chosen-name"></div>
         </div>
-        <input type="file" id="file-input" accept=".html" style="display:none" onchange="onFileChosen(this)">
+        <input type="file" id="file-input" accept=".html,.pdf,.png,.jpg,.jpeg,.svg,.webp" style="display:none" onchange="onFileChosen(this)">
       </div>
       <div class="form-group">
         <div class="form-label">제목</div>
@@ -311,6 +340,7 @@ let allMembers = [];
 let selectedUploadEmails = new Set();
 let selectedEditEmails = new Set();
 let currentUser = null;
+let currentReportId = null;
 
 const VISIBILITY_LABEL = {
   public: '전체 공개', team: '팀 공개', specific: '특정 인원', private: '나만 보기'
@@ -344,62 +374,89 @@ async function init() {
 async function loadReports() {
   try {
     allReports = await apiFetch('/api/reports');
-    document.getElementById('report-count').textContent = `(${allReports.length})`;
-    renderCards();
+    renderList();
   } catch(e) {
-    document.getElementById('cards-container').innerHTML = '<div class="empty-state">리포트를 불러오지 못했습니다.</div>';
+    document.getElementById('report-list').innerHTML = '<div class="empty-list">리포트를 불러오지 못했습니다.</div>';
   }
 }
 
-function renderCards() {
+function renderList() {
   const q = document.getElementById('search-input').value.trim().toLowerCase();
-  const filtered = allReports.filter(r =>
-    !q || r.title.toLowerCase().includes(q) || (r.description||'').toLowerCase().includes(q)
-  );
+  const filtered = q
+    ? allReports.filter(r => r.title.toLowerCase().includes(q) || (r.description||'').toLowerCase().includes(q))
+    : allReports;
+
+  document.getElementById('report-count').textContent = filtered.length;
 
   if (!filtered.length) {
-    document.getElementById('cards-container').innerHTML = '<div class="empty-state">리포트가 없습니다.</div>';
+    document.getElementById('report-list').innerHTML = '<div class="empty-list">리포트가 없습니다.</div>';
     return;
   }
 
-  const html = filtered.map(r => {
-    const isOwner = currentUser && r.created_by === currentUser.email;
+  document.getElementById('report-list').innerHTML = filtered.map(r => {
     const badgeCls = VISIBILITY_BADGE[r.visibility] || 'badge-private';
     const badgeLabel = VISIBILITY_LABEL[r.visibility] || r.visibility;
-    const date = r.created_at ? new Date(r.created_at).toLocaleDateString('ko-KR') : '';
+    const date = r.created_at ? new Date(r.created_at).toLocaleDateString('ko-KR', {month:'2-digit', day:'2-digit'}) : '';
+    const author = (r.created_by || '').split('@')[0];
     return `
-    <div class="report-card">
-      <div class="card-top">
-        <div class="card-title">${escHtml(r.title)}</div>
-        <span class="badge ${badgeCls}">${badgeLabel}</span>
+    <div class="report-item ${r.id === currentReportId ? 'active' : ''}"
+         onclick="selectReport('${r.id}')">
+      <div class="report-item-top">
+        <div class="report-item-title">${escHtml(r.title)}</div>
+        <span class="report-item-badge ${badgeCls}">${badgeLabel}</span>
       </div>
-      ${r.description ? `<div class="card-desc">${escHtml(r.description)}</div>` : ''}
-      <div class="card-meta">
-        <span class="meta-text">${escHtml(r.created_by || '')}</span>
-        <span class="meta-text">·</span>
-        <span class="meta-text">${date}</span>
-      </div>
-      <div class="card-actions">
-        <button class="btn-open" onclick="openReport('${r.id}')">열기 ↗</button>
-        ${isOwner ? `<button class="btn-edit" onclick="openEditModal(${JSON.stringify(r).replace(/"/g, '&quot;')})">수정</button>` : ''}
+      ${r.description ? `<div class="report-item-desc">${escHtml(r.description)}</div>` : ''}
+      <div class="report-item-meta">
+        <span class="report-item-author">${escHtml(author)}</span>
+        <span class="report-item-date">· ${date}</span>
       </div>
     </div>`;
   }).join('');
+}
 
-  document.getElementById('cards-container').innerHTML = html;
+async function selectReport(reportId) {
+  currentReportId = reportId;
+  renderList();
+
+  const right = document.getElementById('panel-right');
+  right.innerHTML = '<div class="loading-viewer"><div class="spinner"></div>로딩 중...</div>';
+
+  try {
+    const { url } = await apiFetch(`/api/reports/${reportId}/url`);
+    const report = allReports.find(r => r.id === reportId);
+    const isOwner = currentUser && report && report.created_by === currentUser.email;
+    const date = report?.created_at ? new Date(report.created_at).toLocaleDateString('ko-KR') : '';
+    const badgeCls = VISIBILITY_BADGE[report?.visibility] || 'badge-private';
+    const badgeLabel = VISIBILITY_LABEL[report?.visibility] || report?.visibility;
+
+    const ct = report?.content_type || 'text/html';
+    let viewerBody;
+    if (ct.startsWith('image/')) {
+      viewerBody = `<div style="flex:1;overflow:auto;display:flex;align-items:center;justify-content:center;padding:24px;background:var(--bg3)">
+        <img src="${url}" alt="${escHtml(report?.title||'')}" style="max-width:100%;max-height:100%;border-radius:6px;box-shadow:0 2px 16px rgba(0,0,0,.12)">
+      </div>`;
+    } else {
+      const iframeType = ct === 'application/pdf' ? ' type="application/pdf"' : '';
+      viewerBody = `<iframe class="report-iframe" src="${url}"${iframeType} title="${escHtml(report?.title||'')}"></iframe>`;
+    }
+
+    right.innerHTML = `
+      <div class="viewer-header">
+        <div class="viewer-title">${escHtml(report?.title || '')}</div>
+        <span class="report-item-badge ${badgeCls}" style="padding:3px 8px">${badgeLabel}</span>
+        <span class="viewer-meta">${escHtml((report?.created_by||'').split('@')[0])} · ${date}</span>
+        ${isOwner ? `<button class="btn-edit-report" onclick='openEditModal(${JSON.stringify(report).replace(/'/g,"\\'")})'>\u00a0수정</button>` : ''}
+        <button class="btn-open-tab" onclick="window.open('${url}','_blank')">새 탭 ↗</button>
+      </div>
+      ${viewerBody}
+    `;
+  } catch(e) {
+    right.innerHTML = `<div class="panel-right-empty" style="color:var(--red)">${escHtml(e.message)}</div>`;
+  }
 }
 
 function escHtml(s) {
-  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-}
-
-async function openReport(id) {
-  try {
-    const { url } = await apiFetch(`/api/reports/${id}/url`);
-    window.open(url, '_blank');
-  } catch(e) {
-    alert('열람 URL을 불러오지 못했습니다: ' + e.message);
-  }
+  return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
 // ── 업로드 모달 ──
@@ -478,6 +535,7 @@ async function submitEdit() {
     });
     closeModal('edit-modal');
     await loadReports();
+    if (currentReportId === id) selectReport(id);
   } catch(e) {
     alert('저장 실패: ' + e.message);
   }
@@ -489,6 +547,10 @@ async function deleteReport() {
   try {
     await apiFetch(`/api/reports/${id}`, { method: 'DELETE' });
     closeModal('edit-modal');
+    if (currentReportId === id) {
+      currentReportId = null;
+      document.getElementById('panel-right').innerHTML = '<div class="panel-right-empty">← 리포트를 선택하세요</div>';
+    }
     await loadReports();
   } catch(e) {
     alert('삭제 실패: ' + e.message);
@@ -600,8 +662,14 @@ async def create_report(
     ts = datetime.utcnow().strftime("%Y%m%d%H%M%S")
     blob_path = f"{ts}_{filename}"
 
+    detected_type, _ = mimetypes.guess_type(filename)
+    content_type = detected_type or file.content_type or "application/octet-stream"
+    # 텍스트 계열은 charset 명시 (한글 깨짐 방지)
+    if content_type.startswith("text/") and "charset" not in content_type:
+        content_type += "; charset=utf-8"
+
     from src.core.blob_report_client import upload_report
-    await asyncio.to_thread(upload_report, blob_path, content)
+    await asyncio.to_thread(upload_report, blob_path, content, content_type)
 
     teams = [t.strip() for t in owner_teams.split(",") if t.strip()]
     emails = [e.strip() for e in allowed_emails.split(",") if e.strip()]
@@ -613,6 +681,7 @@ async def create_report(
         "visibility": visibility,
         "owner_teams": teams,
         "allowed_emails": emails,
+        "content_type": content_type,
         "created_by": email,
         "created_at": datetime.utcnow(),
         "updated_at": datetime.utcnow(),
