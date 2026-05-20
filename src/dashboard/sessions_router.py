@@ -175,6 +175,7 @@ SESSIONS_HTML = """<!DOCTYPE html>
 <header>
   <div class="logo">BOA <span>//</span> 대화 로그</div>
   <nav class="header-nav">
+    <a href="/reports" class="nav-link">리포트</a>
     <a href="/dashboard" class="nav-link">업무 대시보드</a>
     <a href="/knowledge" class="nav-link">지식베이스</a>
     <a href="/agents" class="nav-link">에이전트</a>

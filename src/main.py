@@ -52,6 +52,7 @@ from src.core.google_chat import send_message
 from src.agent.registry import SCHEDULE_REGISTRY, TRIGGER_REGISTRY
 from src.agent.sync_registry import sync_registry_to_mongo
 from src.dashboard.agents_router import router as agents_router
+from src.dashboard.reports_router import router as reports_router
 from src.agent.analytics.subagents.schedule.bq_analysis_schedule.schedule_manager import (
     register_bq_schedule,
     restore_bq_schedules,
@@ -153,7 +154,7 @@ app.include_router(members_router)
 app.include_router(spaces_router)
 app.include_router(knowledge_v2_router)
 app.include_router(device_job_router)
-
+app.include_router(reports_router)
 
 
 # ── Google Chat Webhook ───────────────────────────────────────────────────────

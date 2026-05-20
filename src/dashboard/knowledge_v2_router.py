@@ -1015,6 +1015,7 @@ KNOWLEDGE_HTML = """<!DOCTYPE html>
   <nav class="top-nav">
     <div class="logo">BOA <span>//</span> 지식베이스</div>
     <div class="nav-links">
+      <a href="/reports" class="nav-link">리포트</a>
       <a href="/dashboard" class="nav-link">업무 대시보드</a>
       <a href="/knowledge" class="nav-link active">지식베이스</a>
       <a href="/agents" class="nav-link">에이전트</a>
