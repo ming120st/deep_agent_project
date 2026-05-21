@@ -29,7 +29,7 @@ import asyncio
 from contextlib import asynccontextmanager
 
 import uvicorn
-from fastapi import FastAPI, Request, BackgroundTasks
+from fastapi import FastAPI, Request, BackgroundTasks, Response, APIRouter
 from starlette.middleware.sessions import SessionMiddleware
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from dotenv import load_dotenv
@@ -340,7 +340,12 @@ async def receive_message(request: Request, background_tasks: BackgroundTasks):
         return {"text": "\n".join(lines)}
 
     asyncio.create_task(orchestrate_chat_event(state, config, is_new_session))
-    return {}
+    # 메시지 수신에 대한 즉각적인 응답
+    return Response(
+        content=json.dumps({}),
+        media_type="application/json",
+        status_code=200
+    )
 
 
 if __name__ == "__main__":
