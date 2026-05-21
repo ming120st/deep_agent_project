@@ -71,6 +71,25 @@ async def api_get_tasks(request: Request, status: Optional[str] = None, skip: in
 
     return {"items": serialize_tasks(data["items"]), "total": data["total"], "skip": skip, "limit": limit}
 
+
+@router.get("/api/tasks/stats")
+async def api_get_task_stats(request: Request):
+    """상태별 전체 건수 집계 (페이지와 무관)"""
+    user = get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="로그인 필요")
+
+    from src.core.mongo_client import boa_tasks_collection
+    statuses = ["처리중", "대기중", "완료", "취소", "오류"]
+    base_query = {} if await is_admin(user["email"]) else {"user_id": user["email"]}
+
+    counts = {}
+    for s in statuses:
+        counts[s] = await boa_tasks_collection.count_documents({**base_query, "status": s})
+    counts["전체"] = await boa_tasks_collection.count_documents(base_query)
+    return counts
+
+
 class StatusUpdateRequest(BaseModel):
     status: str
     admin_memo: Optional[str] = None
@@ -357,11 +376,15 @@ async function loadTasks(page = 1) {
   if (status) queryUrl += `&status=${status}`;
   
   try {
-    const res = await fetch(queryUrl);
+    const [res, statsRes] = await Promise.all([
+      fetch(queryUrl),
+      fetch('/api/tasks/stats')
+    ]);
     const data = await res.json();
+    const stats = statsRes.ok ? await statsRes.json() : null;
     allTasks = data.items;
     totalTasks = data.total;
-    updateStats(); // Note: This will only count items from the current page in the UI unless backend sends total counts per status, but we'll leave it as is for UI consistency.
+    updateStats(stats);
     renderTable();
     renderTasksPagination();
     checkWaitingAlerts();
@@ -392,13 +415,21 @@ function renderTasksPagination() {
 }
 
 // ── 통계 ──
-function updateStats() {
+function updateStats(counts) {
   const statuses = ['처리중','대기중','완료','취소','오류'];
-  document.getElementById('cnt-all').textContent = allTasks.length;
-  statuses.forEach(s => {
-    const el = document.getElementById('cnt-' + s);
-    if (el) el.textContent = allTasks.filter(t => t.status === s).length;
-  });
+  document.getElementById('cnt-all').textContent = totalTasks;
+  if (counts) {
+    statuses.forEach(s => {
+      const el = document.getElementById('cnt-' + s);
+      if (el) el.textContent = counts[s] ?? 0;
+    });
+  } else {
+    // stats 로드 전 fallback: 현재 페이지 기준
+    statuses.forEach(s => {
+      const el = document.getElementById('cnt-' + s);
+      if (el) el.textContent = allTasks.filter(t => t.status === s).length;
+    });
+  }
 }
 
 // ── 대기중 알림 ──

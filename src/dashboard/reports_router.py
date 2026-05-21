@@ -30,7 +30,7 @@ from fastapi import APIRouter, Request, UploadFile, File, Form, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse
 
 from src.dashboard.auth import require_login, get_current_user
-from src.core.mongo_client import boa_reports_collection, boa_members_collection
+from src.core.mongo_client import boa_reports_collection, boa_members_collection, boa_admins_collection
 
 router = APIRouter()
 
@@ -610,7 +610,17 @@ async def reports_page(request: Request):
     redirect = require_login(request)
     if redirect:
         return redirect
-    return HTMLResponse(content=REPORTS_HTML)
+
+    user = request.session.get("user")
+    doc = await boa_admins_collection.find_one({"email": user["email"]})
+    is_admin = doc is not None
+
+    html_content = REPORTS_HTML
+    if not is_admin:
+        html_content = html_content.replace('<a href="/spaces" class="nav-link">스페이스</a>', '')
+        html_content = html_content.replace('<a href="/members" class="nav-link">구성원</a>', '')
+
+    return HTMLResponse(content=html_content)
 
 
 # ── API ───────────────────────────────────────────────────────────────────────
