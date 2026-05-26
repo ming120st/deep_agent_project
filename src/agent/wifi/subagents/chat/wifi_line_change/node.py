@@ -20,8 +20,6 @@ from src.core.session_logger import add_event, session_event, EventType
 
 AGENT_NAME = "wifi_line_change"
 
-AGENT_NAME = "wifi_line_change"
-
 DEVICE_JOB_URL    = os.getenv("DEVICE_JOB_URL", "")
 DEVICE_JOB_SECRET = os.getenv("DEVICE_JOB_SECRET", "")
 

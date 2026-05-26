@@ -535,6 +535,19 @@ async def ingest_upload(request: Request, file: UploadFile = File(...)):
 
     raw_bytes = await file.read()
     
+    # ── Blob Storage에 지식베이스 원본 파일 저장 ──
+    from src.core.blob_knowledge_client import upload_knowledge_source
+    import time
+    import logging
+    _local_logger = logging.getLogger(__name__)
+
+    unique_filename = f"{int(time.time())}_{filename}"
+    try:
+        blob_path = await asyncio.to_thread(upload_knowledge_source, unique_filename, raw_bytes)
+        _local_logger.info(f"[Ingest Upload] 원본 파일 Blob 저장 완료: {blob_path}")
+    except Exception as e:
+        _local_logger.error(f"[Ingest Upload] 원본 파일 Blob 저장 실패 (무시하고 진행): {e}")
+        
     if filename.lower().endswith(".xlsx"):
         import io
         import openpyxl
