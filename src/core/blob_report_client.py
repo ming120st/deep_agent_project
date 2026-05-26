@@ -6,7 +6,7 @@ boa-reports 컨테이너 전용 Blob 클라이언트.
 
 환경변수:
     AZURE_STORAGE_CONNECTION_STRING  (rag_engine.py와 동일 변수 재사용)
-    REPORTS_CONTAINER_NAME           (기본값: boa-reports)
+    BOA_CONTAINER_NAME               (기본값: wm-boa)
 """
 
 import os
@@ -21,7 +21,7 @@ from azure.storage.blob import (
 )
 
 AZURE_STORAGE_CONNECTION_STRING = os.getenv("AZURE_STORAGE_CONNECTION_STRING", "")
-REPORTS_CONTAINER_NAME = os.getenv("REPORTS_CONTAINER_NAME", "boa-reports")
+BOA_CONTAINER_NAME = os.getenv("BOA_CONTAINER_NAME", "wm-boa")
 
 _blob_service: Optional[BlobServiceClient] = None
 
@@ -46,9 +46,18 @@ def _get_account_key() -> str:
     raise ValueError("AccountKey not found in AZURE_STORAGE_CONNECTION_STRING")
 
 
+def _format_blob_path(blob_path: str) -> str:
+    """blob_path가 'reports/'로 시작하지 않으면 자동으로 접두사를 붙여 가상 디렉터리를 형성합니다."""
+    clean_path = blob_path.lstrip('/')
+    if not clean_path.startswith("reports/"):
+        return f"reports/{clean_path}"
+    return clean_path
+
+
 def upload_report(blob_path: str, content: bytes, content_type: str = "text/html; charset=utf-8") -> str:
+    blob_path = _format_blob_path(blob_path)
     svc = _get_blob_service()
-    blob_client = svc.get_blob_client(container=REPORTS_CONTAINER_NAME, blob=blob_path)
+    blob_client = svc.get_blob_client(container=BOA_CONTAINER_NAME, blob=blob_path)
     blob_client.upload_blob(
         content,
         overwrite=True,
@@ -58,17 +67,19 @@ def upload_report(blob_path: str, content: bytes, content_type: str = "text/html
 
 
 def delete_report(blob_path: str) -> None:
+    blob_path = _format_blob_path(blob_path)
     svc = _get_blob_service()
-    blob_client = svc.get_blob_client(container=REPORTS_CONTAINER_NAME, blob=blob_path)
+    blob_client = svc.get_blob_client(container=BOA_CONTAINER_NAME, blob=blob_path)
     blob_client.delete_blob(delete_snapshots="include")
 
 
 def get_report_sas_url(blob_path: str, expires_hours: int = 2) -> str:
+    blob_path = _format_blob_path(blob_path)
     account_name = _get_account_name()
     account_key = _get_account_key()
     sas_token = generate_blob_sas(
         account_name=account_name,
-        container_name=REPORTS_CONTAINER_NAME,
+        container_name=BOA_CONTAINER_NAME,
         blob_name=blob_path,
         account_key=account_key,
         permission=BlobSasPermissions(read=True),
@@ -76,5 +87,5 @@ def get_report_sas_url(blob_path: str, expires_hours: int = 2) -> str:
     )
     return (
         f"https://{account_name}.blob.core.windows.net/"
-        f"{REPORTS_CONTAINER_NAME}/{blob_path}?{sas_token}"
+        f"{BOA_CONTAINER_NAME}/{blob_path}?{sas_token}"
     )

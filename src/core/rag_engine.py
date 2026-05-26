@@ -66,13 +66,13 @@ def _extract_text(content) -> str:
 
 # ── 환경변수 ──────────────────────────────────────────────────────────────────
 AZURE_STORAGE_CONNECTION_STRING = os.getenv("AZURE_STORAGE_CONNECTION_STRING", "")
-CONTAINER_NAME                  = os.getenv("CONTAINER_NAME", "boa-rag")
+BOA_CONTAINER_NAME              = os.getenv("BOA_CONTAINER_NAME", "wm-boa")
 GEMINI_API_KEY                  = os.getenv("GEMINI_API_KEY", "")
 GEMINI_EMBEDDING_MODEL          = "gemini-embedding-2-preview"  # 최신 멀티모달 임베딩 모델
 
-BLOB_INDEX_NAME    = "faiss/knowledge.index"   # FAISS 인덱스 파일
-BLOB_META_NAME     = "faiss/knowledge_meta.pkl"  # doc_id ↔ FAISS id 매핑
-BLOB_VERSION_NAME  = "faiss/version.txt"         # 버전 타임스탬프 (인스턴스 동기화용)
+BLOB_INDEX_NAME    = "embeddings/faiss/knowledge.index"   # FAISS 인덱스 파일
+BLOB_META_NAME     = "embeddings/faiss/knowledge_meta.pkl"  # doc_id ↔ FAISS id 매핑
+BLOB_VERSION_NAME  = "embeddings/faiss/version.txt"         # 버전 타임스탬프 (인스턴스 동기화용)
 
 EMBEDDING_DIM = 3072  # gemini-embedding-2-preview 차원
 
@@ -89,7 +89,7 @@ def _get_blob_service() -> BlobServiceClient:
     return _blob_service
 
 def _get_blob_client(blob_name: str):
-    return _get_blob_service().get_blob_client(container=CONTAINER_NAME, blob=blob_name)
+    return _get_blob_service().get_blob_client(container=BOA_CONTAINER_NAME, blob=blob_name)
 
 
 # ── RAGEngine ─────────────────────────────────────────────────────────────────
