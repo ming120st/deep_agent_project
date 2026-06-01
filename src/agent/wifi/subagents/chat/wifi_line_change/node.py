@@ -23,8 +23,50 @@ AGENT_NAME = "wifi_line_change"
 DEVICE_JOB_URL    = os.getenv("DEVICE_JOB_URL", "")
 DEVICE_JOB_SECRET = os.getenv("DEVICE_JOB_SECRET", "")
 
+INTER_AGENT_CALLBACK_URL    = os.getenv("INTER_AGENT_CALLBACK_URL", "")
+INTER_AGENT_CALLBACK_SECRET = os.getenv("INTER_AGENT_CALLBACK_SECRET", "")
+
 
 # ── 헬퍼 ─────────────────────────────────────────────────────────────────────
+
+async def send_inter_agent_callback(state: GraphState, success: bool, status: str, message: str, value: dict = None):
+    """CS챗봇 등 Inter-Agent 요청에 대한 콜백 전송"""
+    if not state.chat_context.get("is_cs_api"):
+        return
+        
+    job_id = state.chat_context.get("ia_job_id", "")
+    session_id = state.session_id
+    user_id = state.chat_context.get("user_id", "")
+    
+    if not INTER_AGENT_CALLBACK_URL:
+        print("[IA Callback] URL이 설정되지 않았습니다.")
+        return
+        
+    payload = {
+        "job_id": job_id,
+        "session_id": session_id,
+        "user_id": user_id,
+        "success": success,
+        "status": status,
+        "resultValue": {
+            "message": message,
+            "value": value or {}
+        }
+    }
+    
+    headers = {
+        "Content-Type": "application/json",
+        "X-Inter-Agent-Secret": INTER_AGENT_CALLBACK_SECRET
+    }
+    
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(INTER_AGENT_CALLBACK_URL, json=payload, headers=headers, timeout=10.0)
+            resp.raise_for_status()
+        print(f"[IA Callback] 콜백 전송 성공: {payload}")
+    except Exception as e:
+        print(f"[IA Callback Failed] 콜백 전송 실패: {e}")
+
 
 def _get_params(state: GraphState) -> dict:
     return state.collected_parameters.get(AGENT_NAME, {})
@@ -167,24 +209,34 @@ async def handle_result(state: GraphState) -> GraphState:
 
     if not result.get("success"):
         reason = result.get("reason", "UNKNOWN")
-        state.add_ai_message(_error_message(reason))
+        err_msg = _error_message(reason)
+        state.add_ai_message(err_msg)
         await add_event(state.session_id, EventType.CANCEL, f"회선변경 실패: {reason}", task_id=state.task_id)
         await set_cancelled(state, result=f"회선변경 실패: {reason}")
+
+        # 외부 API 요청 시 콜백 전송 (실패)
+        await send_inter_agent_callback(state, success=False, status="ERROR", message=err_msg)
     else:
         imsi      = result.get("changed_imsi", "")
         plan       = result.get("plan_name", "")
         diff_plan  = result.get("is_different_plan", False)
         plan_note  = "다른 플랜" if diff_plan else "동일 플랜"
-
-        state.add_ai_message(
+        
+        success_msg = (
             f"✅ 와이파이 회선변경이 완료되었습니다!\n\n"
             f"• 변경된 IMSI: `{imsi}`\n"
             f"• 기존 요금제: {plan}\n"
             f"• SIM 유형: {plan_note}\n\n"
             "_단말기를 재부팅하면 새 회선이 적용됩니다._"
         )
+
+        state.add_ai_message(success_msg)
         await add_event(state.session_id, EventType.COMPLETE, f"회선변경 완료: {imsi}", task_id=state.task_id)
         await set_completed(state, result=f"회선변경 완료: {imsi}")
+
+        # 외부 API 요청 시 콜백 전송 (성공)
+        callback_msg = f"{imsi} 회선의 요금제 변경이 완료됨. 요금제는 '{plan}'"
+        await send_inter_agent_callback(state, success=True, status="COMPLETED", message=callback_msg, value=result)
 
     state.current_agent = None
     _set_param(state, "job_done", True)

@@ -356,9 +356,11 @@ from pydantic import BaseModel
 from typing import Optional, Dict, Any
 
 class IARequestModel(BaseModel):
+    job_id: str
     session_id: str
     user_id: str
     agent_name: str
+    new_task: bool
     parameters: Optional[Dict[str, Any]] = None
     message: Optional[str] = None
     
@@ -410,6 +412,9 @@ async def receive_agent_request(
     base_subagent_graph = AGENT_REGISTRY[agent_name]["graph"]
     subagent_graph = base_subagent_graph.builder.compile(checkpointer=checkpointer)
     
+    from src.core.task_manager import create_task
+    from src.core.mongo_client import get_collection
+
     # 1. Thread ID (세션 ID) 기반으로 이전 State 복원 시도
     config = {"configurable": {"thread_id": request.session_id}}
     print(f"[Agent Request] 🔄 Graph State 복원 시도, config: {config}")
@@ -434,11 +439,32 @@ async def receive_agent_request(
         state.chat_context = {}
         
     state.chat_context["user_id"] = request.user_id
+    state.chat_context["user_name"] = "CS챗봇"
     state.chat_context["is_cs_api"] = True
+    state.chat_context["ia_job_id"] = request.job_id
+
+    # domain_id 조회 및 주입
+    agent_doc = await get_collection("boa_agent_registry").find_one({"agent_id": agent_name})
+    if agent_doc and agent_doc.get("domain_id"):
+        state.domain_id = agent_doc["domain_id"]
+
+    # new_task 여부에 따른 초기화 및 Task 발급
+    if request.new_task:
+        print("[Agent Request] 🆕 새로운 작업 시작: 파라미터 초기화 및 Task 발급")
+        state.collected_parameters[agent_name] = {}
+        
+        task_id = await create_task(
+            user_id=request.user_id,
+            user_name="CS챗봇",
+            agent_name=agent_name,
+            agent_display_name=AGENT_REGISTRY[agent_name].get("display_name", agent_name),
+            parameters=request.parameters or {}
+        )
+        state.task_id = task_id
     
     # CS챗봇에서 넘겨준 파라미터가 있다면 주입
     if request.parameters:
-        print(f"[Agent Request] 📥 파라미터 주입: {request.parameters}")
+        print(f"[Agent Request] 📥 파라미터 업데이트: {request.parameters}")
         if agent_name not in state.collected_parameters:
             state.collected_parameters[agent_name] = {}
         state.collected_parameters[agent_name].update(request.parameters)
@@ -471,9 +497,14 @@ async def receive_agent_request(
         
         print(f"[Agent Request] 📤 추출된 응답 메시지: {reply_message}")
         print(f"[Agent Request] 📤 추출된 action_response: {action_response}")
+
+        # 상태 판별 (current_agent가 비워졌다면 완전 종료, 남아있다면 추가 입력 대기 또는 보류 중)
+        final_agent = result_state.get("current_agent") if isinstance(result_state, dict) else getattr(result_state, "current_agent", None)
+        status_str = "COMPLETED" if final_agent is None else "NEED_INFO"
+
         return IAResponseModel(
             success=True,
-            status="COMPLETED",
+            status=status_str,
             resultValue=IAResponseValue(
                 message=reply_message,
                 value=action_response
