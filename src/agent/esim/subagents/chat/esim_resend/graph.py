@@ -130,3 +130,4 @@ workflow.add_edge("cancel_inquiry", END)
 workflow.add_edge("resend_esim",    END)
 
 esim_resend_graph = workflow.compile()
+#print(esim_resend_graph.get_graph().draw_mermaid())

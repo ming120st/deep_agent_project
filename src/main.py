@@ -348,5 +348,148 @@ async def receive_message(request: Request, background_tasks: BackgroundTasks):
     )
 
 
+
+
+# ── 인터 에이전트 데이터 검증 ───────────────────────────────────────────────────────
+
+from pydantic import BaseModel
+from typing import Optional, Dict, Any
+
+class IARequestModel(BaseModel):
+    session_id: str
+    user_id: str
+    agent_name: str
+    parameters: Optional[Dict[str, Any]] = None
+    message: Optional[str] = None
+    
+class IAResponseValue(BaseModel):
+    message: Optional[str] = None
+    value: Optional[Dict[str, Any]] = None
+
+class IAResponseModel(BaseModel):
+    success: bool
+    status: str
+    resultValue: IAResponseValue
+
+from fastapi import Header
+
+# ── 인터 에이전트 엔드포인트 ───────────────────────────────────────────────────────
+@app.post("/agent_request", response_model=IAResponseModel)
+async def receive_agent_request(
+    request: IARequestModel,
+    x_inter_agent_secret: Optional[str] = Header(None, alias="X-Inter-Agent-Secret")
+):
+    print(f"[Agent Request 수신 전문] {request.model_dump()}")
+
+    # 환경변수 시크릿 키 검증
+    secret_key = os.getenv("INTER_AGENT_SECRET")
+    if not secret_key or x_inter_agent_secret != secret_key:
+        print("[Agent Request] ❌ 시크릿 키 검증 실패 (Unauthorized)")
+        return IAResponseModel(
+            success=False,
+            status="UNAUTHORIZED",
+            resultValue=IAResponseValue(message="인증에 실패했습니다. 유효하지 않은 요청입니다.")
+        )
+    print("[Agent Request] ✅ 시크릿 키 검증 성공")
+
+    from src.agent.registry import AGENT_REGISTRY
+    from src.core.mongo_client import checkpointer
+    
+    agent_name = request.agent_name
+    print(f"[Agent Request] 🔍 대상 에이전트: {agent_name}")
+    
+    if agent_name not in AGENT_REGISTRY:
+        print(f"[Agent Request] ❌ 존재하지 않는 에이전트: {agent_name}")
+        return IAResponseModel(
+            success=False,
+            status="ERROR",
+            resultValue=IAResponseValue(message=f"존재하지 않는 에이전트입니다: {agent_name}")
+        )
+
+    # CS챗봇 등 외부 시스템에서 단독 호출할 때는 서브에이전트에 checkpointer를 붙여서 컴파일
+    base_subagent_graph = AGENT_REGISTRY[agent_name]["graph"]
+    subagent_graph = base_subagent_graph.builder.compile(checkpointer=checkpointer)
+    
+    # 1. Thread ID (세션 ID) 기반으로 이전 State 복원 시도
+    config = {"configurable": {"thread_id": request.session_id}}
+    print(f"[Agent Request] 🔄 Graph State 복원 시도, config: {config}")
+    existing = await asyncio.to_thread(subagent_graph.get_state, config)
+
+    # 2. State 합치기
+    if existing and existing.values:
+        # 이미 세션이 존재하면 복원
+        print(f"[Agent Request] 🔄 기존 상태 복원 완료. (values keys: {list(existing.values.keys())})")
+        state = GraphState(**existing.values)
+    else:
+        # 없으면 새로 생성
+        print("[Agent Request] ⭐ 기존 상태 없음 -> 신규 상태 생성")
+        state = GraphState()
+        state.session_id = request.session_id
+        
+    # 현재 실행할 에이전트 지정
+    state.current_agent = agent_name
+    
+    # 필요한 context 세팅
+    if not isinstance(state.chat_context, dict):
+        state.chat_context = {}
+        
+    state.chat_context["user_id"] = request.user_id
+    state.chat_context["is_cs_api"] = True
+    
+    # CS챗봇에서 넘겨준 파라미터가 있다면 주입
+    if request.parameters:
+        print(f"[Agent Request] 📥 파라미터 주입: {request.parameters}")
+        if agent_name not in state.collected_parameters:
+            state.collected_parameters[agent_name] = {}
+        state.collected_parameters[agent_name].update(request.parameters)
+        state.print_state()  # 상태 출력 (디버깅용)
+        
+    if request.message:
+        print(f"[Agent Request] 💬 사용자 메시지 추가: {request.message}")
+        state.add_user_message(request.message)
+        
+    try:
+        print(f"[Agent Request] 🚀 서브에이전트 ainvoke 호출 시작 ({agent_name})")
+        # 서브에이전트 직접 호출 (checkpointer가 config의 thread_id를 보고 이전 기록과 합침)
+        result_state = await subagent_graph.ainvoke(state, config=config)
+        print("[Agent Request] ✅ 서브에이전트 ainvoke 실행 완료")
+        
+        reply_message = ""
+        # 서브에이전트 그래프의 상태 반환 형태에 따라 처리
+        if isinstance(result_state, dict) and result_state.get("messages"):
+            last_msg = result_state["messages"][-1]
+            reply_message = getattr(last_msg, "content", "") if hasattr(last_msg, "content") else last_msg.get("content", "")
+        elif hasattr(result_state, "messages") and result_state.messages:
+            last_msg = result_state.messages[-1]
+            reply_message = getattr(last_msg, "content", "") if hasattr(last_msg, "content") else last_msg.get("content", "")
+        
+        action_response = {}
+        if isinstance(result_state, dict):
+            action_response = result_state.get("response", {}).get(agent_name, {})
+        elif hasattr(result_state, "response"):
+            action_response = result_state.response.get(agent_name, {})
+        
+        print(f"[Agent Request] 📤 추출된 응답 메시지: {reply_message}")
+        print(f"[Agent Request] 📤 추출된 action_response: {action_response}")
+        return IAResponseModel(
+            success=True,
+            status="COMPLETED",
+            resultValue=IAResponseValue(
+                message=reply_message,
+                value=action_response
+            )
+        )
+        
+    except Exception as e:
+        print(f"[Agent Request] ❌ 실행 중 오류 발생: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return IAResponseModel(
+            success=False,
+            status="ERROR",
+            resultValue=IAResponseValue(message=f"실행 중 오류 발생: {str(e)}")
+        )
+
+
 if __name__ == "__main__":
     uvicorn.run("src.main:app", host="0.0.0.0", port=8080, reload=True)

@@ -39,6 +39,7 @@ def route_wifi_line_change(state: GraphState) -> Literal[
     "end",
 ]:
     params = state.collected_parameters.get(AGENT_NAME, {})
+    print(f"[라우터] 현재 수집된 파라미터: {params}")
 
     if state.error_message:
         return "end"
