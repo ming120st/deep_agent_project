@@ -23,7 +23,7 @@ oauth.register(
 )
 
 # ── 허용 도메인 (회사 이메일만 접근 가능) ────────────────────────────────────────
-ALLOWED_DOMAIN = os.getenv("ALLOWED_DOMAIN", "widemobile.com")  # .env에서 변경 가능
+ALLOWED_DOMAIN = os.getenv("ALLOWED_DOMAIN", "widemobile.com")
 
 # ── 헬퍼 ─────────────────────────────────────────────────────────────────────
 def get_current_user(request: Request):

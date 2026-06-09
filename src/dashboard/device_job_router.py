@@ -16,7 +16,7 @@ from fastapi import APIRouter, Header, HTTPException
 from langgraph.types import Command
 
 from src.workflow.device_job.schemas import DeviceJobCallback
-from src.core.device_job_manager import get_thread_id_by_job, complete_device_job
+from src.core.device_job_manager import get_job_info_by_job, complete_device_job
 from src.workflow.main_graph.graph import main_graph
 from src.orchestrator import _get_lock
 from fastapi import Body
@@ -38,9 +38,13 @@ async def device_callback(
     ):
     _verify_key(x_device_job_key)
 
-    thread_id = await get_thread_id_by_job(payload.job_id)
-    if not thread_id:
-        raise HTTPException(status_code=404, detail=f"job_id not found: {payload.job_id}")
+    job_info = await get_job_info_by_job(payload.job_id)
+    if not job_info:
+        raise HTTPException(status_code=404, detail=f"job_id not found or already processed: {payload.job_id}")
+
+    thread_id = job_info.get("thread_id")
+    is_cs_api = job_info.get("is_cs_api", False)
+    agent_name = job_info.get("agent_name", "")
 
     await complete_device_job(
         payload.job_id,
@@ -48,12 +52,25 @@ async def device_callback(
     )
 
     config = {"configurable": {"thread_id": thread_id}}
-    lock = _get_lock(thread_id)  # thread_id == user_id 이므로 동일 lock
+    lock = _get_lock(thread_id)
 
     async with lock:
-        await main_graph.ainvoke(
-            Command(resume=payload.model_dump()),
-            config=config,
-        )
+        if is_cs_api and agent_name:
+            from src.agent.registry import AGENT_REGISTRY
+            from src.core.mongo_client import checkpointer
+            base_graph = AGENT_REGISTRY.get(agent_name, {}).get("graph")
+            if base_graph:
+                graph = base_graph.builder.compile(checkpointer=checkpointer)
+                await graph.ainvoke(
+                    Command(resume=payload.model_dump()),
+                    config=config,
+                )
+            else:
+                print(f"[DeviceCallback] 에이전트 {agent_name}의 그래프를 찾을 수 없습니다.")
+        else:
+            await main_graph.ainvoke(
+                Command(resume=payload.model_dump()),
+                config=config,
+            )
 
     return {"status": "resumed"}

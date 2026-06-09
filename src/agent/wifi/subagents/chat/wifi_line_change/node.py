@@ -46,6 +46,7 @@ async def send_inter_agent_callback(state: GraphState, success: bool, status: st
         "job_id": job_id,
         "session_id": session_id,
         "user_id": user_id,
+        "agent_name": AGENT_NAME,
         "success": success,
         "status": status,
         "resultValue": {
@@ -127,7 +128,8 @@ async def request_device_job(state: GraphState) -> GraphState:
     (대기는 다음 노드에서 수행)
     """
     params    = _get_params(state)
-    thread_id = state.chat_context.get("user_id", "")
+    is_cs_api = state.chat_context.get("is_cs_api", False)
+    thread_id = state.session_id if is_cs_api else state.chat_context.get("user_id", "")
     
     # 이미 job_id가 있다면 그대로 통과 (재실행 방지 최후 보루)
     if params.get("_job_id"):
@@ -149,7 +151,13 @@ async def request_device_job(state: GraphState) -> GraphState:
     _set_param(state, "_job_id", job_id)
 
     # MongoDB에 job 저장
-    await create_device_job(job_id, thread_id)
+    await create_device_job(
+        job_id, 
+        thread_id, 
+        task_id=state.task_id, 
+        is_cs_api=is_cs_api, 
+        agent_name=AGENT_NAME
+    )
 
     # device_agent에 전송
     try:
@@ -235,7 +243,7 @@ async def handle_result(state: GraphState) -> GraphState:
         await set_completed(state, result=f"회선변경 완료: {imsi}")
 
         # 외부 API 요청 시 콜백 전송 (성공)
-        callback_msg = f"{imsi} 회선의 요금제 변경이 완료됨. 요금제는 '{plan}'"
+        callback_msg = f"사용자가 사용중인 와이파이도시락의 장애 조치를 위한 회선 변경이 성공적으로 완료됨."
         await send_inter_agent_callback(state, success=True, status="COMPLETED", message=callback_msg, value=result)
 
     state.current_agent = None
@@ -249,4 +257,4 @@ def _error_message(reason: str) -> str:
         "NO_SIM":          "⚠️ 해당 국가에서 사용 가능한 SIM을 찾을 수 없습니다.",
         "ALL_ICCID_OCCUPIED": "⚠️ 조회된 SIM이 모두 사용 중입니다. 잠시 후 다시 시도해주세요.",
     }
-    return messages.get(reason, f"⚠️ 회선변경 중 오류가 발생했습니다.\n사유: {reason}\nAI팀에 문의해주세요.")
+    return messages.get(reason, f"⚠️ 회선변경 중 오류가 발생했습니다.")
