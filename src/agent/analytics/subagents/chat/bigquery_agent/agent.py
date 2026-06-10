@@ -84,5 +84,9 @@ async def bigquery_agent_node(state: GraphState) -> GraphState:
         state.error_message = str(e)
         await set_cancelled(state, result=f"BigQuery 분석 실패: {e}")
 
-    state.current_agent = None
-    return state
+    # LangGraph에서 상태 업데이트를 감지할 수 있도록 dict 형태로 반환
+    return {
+        "messages": list(state.messages),
+        "current_agent": None,
+        "error_message": state.error_message
+    }

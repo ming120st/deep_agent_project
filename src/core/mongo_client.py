@@ -54,3 +54,6 @@ boa_knowledge_conflicts_collection  = db["boa_knowledge_conflicts"]
 boa_knowledge_gaps_collection       = db["boa_knowledge_gaps"]
 boa_knowledge_ingest_log_collection = db["boa_knowledge_ingest_log"]
 boa_reports_collection = db["boa_reports"]
+
+# 심야 셀프픽업 히스토리 컬렉션 (심야 픽업 이력 저장용)
+self_pickup_history_collection = db["self_pickup_history"]
