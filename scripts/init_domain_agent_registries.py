@@ -72,7 +72,7 @@ DOMAINS = [
     },
 ]
 
-# 새로운 워크플로우(서브에이전트)가 추가될 때마다 AGENT_REGISTRY에 메타데이터를 등록하고, AGENT_DOMAIN_MAP에 도메인 매핑을 추가해야 합니다.
+# 새로운 워크플로우(서브에이전트)가 추가될 때마다 AGENT_REGISTRY에 메타데이터를 등록하고, AGENT_DOMAIN_MAP에 도메인 매핑을 추가해야 한다.
 AGENT_DOMAIN_MAP = {
     "wifi_usage_inquiry": "wifi",
     "wifi_line_change": "wifi",

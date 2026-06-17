@@ -189,3 +189,5 @@ if __name__ == "__main__":
 
     except Exception as e:
         print("에러 발생:", str(e))
+
+# python -m src.core.bc_client
