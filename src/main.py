@@ -1,27 +1,3 @@
-"""
-[자동 등록 로직]
-  space_type == "DM"        → boa_members upsert  (개인)
-  space_type == "ROOM"      → boa_spaces  upsert  (단체)
-  SCHEDULE_REGISTRY, TRIGGER_REGISTRY 기반 에이전트 앱 시작 시 스케줄러에 자동 등록 (MongoDB enabled 상태 반영)
-
-[부서 등록 로직]
-  순수 Chat API 앱 (gcp-sa-chat) 기반.
-  동기 응답(return {"cardsV2": ...})으로 카드 즉시 표시 가능.
-  버튼 클릭은 type == "CARD_CLICKED", action.actionMethodName 으로 수신.
-  formInputs는 common.formInputs 에서 파싱.
-
-  실제 이벤트 구조 (확인됨):
-    event.type                    → "MESSAGE" | "CARD_CLICKED" | "ADDED_TO_SPACE" 등
-    event.user.email              → 유저 ID
-    event.user.displayName        → 유저 이름
-    event.space.name              → space ID
-    event.space.type              → "DM" | "ROOM" | "GROUP_CHAT" 등
-    event.message.text            → 메시지 텍스트
-    event.message.thread.name     → 스레드 이름
-    event.action.actionMethodName → 버튼 클릭 시 function 이름
-    event.common.formInputs       → 카드 폼 입력값
-"""
-
 import os
 import json
 import time
@@ -33,7 +9,6 @@ from fastapi import FastAPI, Request, BackgroundTasks, Response, APIRouter
 from starlette.middleware.sessions import SessionMiddleware
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from dotenv import load_dotenv
-
 load_dotenv()
 
 from src.orchestrator import orchestrate_chat_event
@@ -91,6 +66,11 @@ async def lifespan(app: FastAPI):
     from src.dashboard.knowledge_v2_router import ensure_kb_v2_indexes
     await ensure_kb_v2_indexes()
 
+    # 2-2. Google Sheets singleton
+    '''
+    from src.core.google_sheets import init_google_sheets_client
+    app.state.google_sheets_client = init_google_sheets_client()
+    '''
     # 3. scheduler엔진에 스케줄 에이전트 등록
     for agent_id, meta in SCHEDULE_REGISTRY.items():
         scheduler.add_job(

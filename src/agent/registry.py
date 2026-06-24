@@ -20,6 +20,7 @@ from src.agent.analytics.subagents.chat.bigquery_agent.agent import bigquery_age
 from src.agent.esim.subagents.chat.esim_resend.graph import esim_resend_graph
 from src.agent.wifi.subagents.chat.wifi_line_change.graph import wifi_line_change_graph
 from src.agent.esim.subagents.chat.esim_fault_replacement.graph import esim_fault_replacement_graph
+from src.agent.esim.subagents.chat.esim_early_termination.graph import esim_early_termination_graph
 # from src.agent.xxx.graph import xxx_graph  ← graph 쓰는 에이전트 추가할 때마다 import
 
 
@@ -180,6 +181,29 @@ AGENT_REGISTRY: dict = {
                 "type":        "str",
                 "description": "이심 사용 국가명. 대체 상품 검색 시 국가 기반 조회에 사용. (예: 일본, 대만, 미국)",
                 "required":    False,
+            },
+        },
+    },
+    "esim_early_termination": {
+        "type":         "chat",
+        "display_name": "이심 중도 해지",
+        "description":  "사용중인 이심의 회선을 중도 해지하는 에이전트. "
+                        "주문번호를 입력하면 iccid를 기반으로 중도 해지 처리를 진행합니다. ",
+        "visible":      True,
+        "usage_guide": usage_guide.esim_early_termination, # 도움말 카드 상세설명
+        "description_short": "이심 중도 해지. 사용 중인 이심 회선 해지 처리",
+        "enabled":      True,
+        "graph":        esim_early_termination_graph,
+        "parameters": {
+            "intent_confirmed": {
+                "type":        "bool",
+                "description": "이심 중도 해지 업무 진행 의사 여부. 사용자가 업무 취소 의사를 표현하면 false로 설정.",
+                "required":    True,
+            },
+            "order_id": {
+                "type":        "str",
+                "description": "이심 인트라넷 주문번호 (E로 시작, 예: E26031101886). 링크 제공 시 주문번호만 추출하여 사용.",
+                "required":    True,
             },
         },
     },

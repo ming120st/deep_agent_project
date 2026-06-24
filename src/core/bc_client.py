@@ -171,6 +171,64 @@ class bcApiClient:
         # 3. 포맷
         return self.format_usage(usage_data, start_date, end_date)
 
+    #----------------------early termination-------------------------
+
+    # ======================
+    # NEW: F025 (套餐结束 Terminate Active Plan)
+    # ======================
+    def terminate_plan(self, iccid, order_id):
+        """
+        패키지 조기 종료 API (F025)
+         - ICCID와 orderId를 받아서 해당 패키지를 조기 종료하는 함수
+        """
+        body = {
+            "tradeType": "F045", 
+            "tradeTime": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+            "tradeData": {
+                "iccid": iccid,
+                "orderId": order_id
+            }
+        }
+        return self._post(body)
+
+    # ======================
+    # NEW: 통합 얼리 터미네이션 함수
+    # ======================
+    def terminate_by_iccid(self, iccid):
+        """
+        ICCID만 가지고 orderId를 찾아서 패키지를 조기 종료하는 파이프라인
+        """
+        # 1. F012를 통해 orderId 추출
+        order_data = self.get_order(iccid)
+        trade_data = order_data.get("tradeData", [])
+
+        if not trade_data:
+            raise Exception("해당 ICCID로 조회된 주문 정보(orderId)가 없습니다.")
+
+        # 가장 최근 주문 혹은 첫 번째 요소를 가져옴
+        order_id = trade_data[0]["orderId"]
+        
+        print(f"[Pipeline] ICCID: {iccid} -> 매핑된 Order ID: {order_id} 확보 완료.")
+
+        # 2. 패키지 종료 실행
+        terminate_res = self.terminate_plan(iccid, order_id)
+        
+        return terminate_res
+
+
+# ====================================================
+# 앱 공용 싱글턴 인스턴스
+# ====================================================
+
+try:
+    bc_cmi_client = bcApiClient(key_type="cmi")
+except ValueError:
+    bc_cmi_client = None  # 환경변수 미설정 시 None (로컬 개발 등)
+
+try:
+    bc_irc_client = bcApiClient(key_type="irc")
+except ValueError:
+    bc_irc_client = None  # 환경변수 미설정 시 None (로컬 개발 등)
 
 # ======================
 # 실행 테스트

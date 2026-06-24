@@ -79,6 +79,7 @@ AGENT_DOMAIN_MAP = {
     "esim_fault_replacement": "esim",
     "esim_order_cancellation": "esim",
     "esim_resend": "esim",
+    "esim_early_termination": "esim",
     "bigquery_agent": "analytics",
     "rag_index_reload": "system",
 }

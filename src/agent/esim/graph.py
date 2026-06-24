@@ -6,12 +6,14 @@ from src.workflow.graph_infra.state import GraphState
 from src.agent.esim.subagents.chat.esim_fault_replacement.graph import esim_fault_replacement_graph
 from src.agent.esim.subagents.chat.esim_order_cancellation.graph import esim_order_cancellation_graph
 from src.agent.esim.subagents.chat.esim_resend.graph import esim_resend_graph
+from src.agent.esim.subagents.chat.esim_early_termination.graph import esim_early_termination_graph
 
 
 ESIM_AGENT_NODES = {
     "esim_fault_replacement": "esim_fault_replacement",
     "esim_order_cancellation": "esim_order_cancellation",
     "esim_resend": "esim_resend",
+    "esim_early_termination": "esim_early_termination",
 }
 
 
@@ -19,6 +21,7 @@ def route_esim_domain(state: GraphState) -> Literal[
     "esim_fault_replacement",
     "esim_order_cancellation",
     "esim_resend",
+    "esim_early_termination",
     "end",
 ]:
     agent_name = state.current_agent
@@ -34,6 +37,7 @@ workflow = StateGraph(GraphState)
 workflow.add_node("esim_fault_replacement", esim_fault_replacement_graph)
 workflow.add_node("esim_order_cancellation", esim_order_cancellation_graph)
 workflow.add_node("esim_resend", esim_resend_graph)
+workflow.add_node("esim_early_termination", esim_early_termination_graph)
 
 workflow.add_conditional_edges(
     START,
@@ -42,11 +46,13 @@ workflow.add_conditional_edges(
         "esim_fault_replacement": "esim_fault_replacement",
         "esim_order_cancellation": "esim_order_cancellation",
         "esim_resend": "esim_resend",
+        "esim_early_termination": "esim_early_termination",
         "end": END,
     },
 )
 workflow.add_edge("esim_fault_replacement", END)
 workflow.add_edge("esim_order_cancellation", END)
 workflow.add_edge("esim_resend", END)
+workflow.add_edge("esim_early_termination", END)
 
 esim_domain_graph = workflow.compile()

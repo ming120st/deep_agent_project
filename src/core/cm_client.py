@@ -184,12 +184,12 @@ class CMIClient:
 
     def get_token(self) -> str:
         """
-        유효한 accessToken 반환. 만료됐거나 없으면 CMIAuthError raise.
-        login()을 먼저 호출해야 함.
+        유효한 accessToken 반환.
+        만료됐거나 없으면 채널 타입(type=106)으로 자동 로그인 후 반환.
         """
-        if self._is_token_valid():
-            return self._access_token
-        raise CMIAuthError("accessToken이 없거나 만료됨. login()을 먼저 호출하세요.")
+        if not self._is_token_valid():
+            self.login(id_value=self.username, id_type=106)
+        return self._access_token
 
     # ====================================================
     # 3.2.2 패키지 정보 조회
@@ -479,6 +479,46 @@ class CMIClient:
         }
         return self._post("query_esim", payload).get("cardInfo", {})
 
+    # ====================================================
+    # 핵심 메서드: iccid 단건 패키지 전체 조기 종료 (early_termination)
+    # ====================================================
+
+    def terminate_by_iccid(self, iccid: str) -> dict:
+        """
+        단일 ICCID에 구독된 모든 패키지를 조기 종료한다.
+
+        1. get_subscribed_bundles(iccid=iccid) 로 현재 구독 패키지 목록 조회
+        2. 각 패키지의 dataBundleId 를 묶어 early_termination 호출
+
+        Args:
+            iccid: 대상 ICCID 문자열
+
+        Returns:
+            early_termination API 응답 dict
+
+        Raises:
+            ValueError: 구독 중인 패키지가 없을 경우
+        """
+        bundles = self.get_subscribed_bundles(language="2", iccid=iccid)
+        if not bundles:
+            raise ValueError(f"구독 중인 패키지 없음: {iccid}")
+
+        iccid_package_list = [
+            {"iccid": iccid, "packageid": b["dataBundleId"]}
+            for b in bundles
+        ]
+        return self.early_termination(iccid_package_list)
+
+
+# ====================================================
+# 앱 공용 싱글턴 인스턴스
+# ====================================================
+
+try:
+    cm_client = CMIClient()
+except ValueError:
+    cm_client = None  # 환경변수 미설정 시 None (로컬 개발 등)
+
 
 # ====================================================
 # 실행 테스트
@@ -496,12 +536,28 @@ if __name__ == "__main__":
         print(f"✅ accessToken 발급: {token}")
 
         # --- 데이터 사용량 조회 테스트 ---
+        """
         quota = client.get_quota(
             iccid="89852342022316305597",
             begin_time='20260102',
             end_time='20260228',
             )
         print("✅ 사용량 조회:", json.dumps(quota, ensure_ascii=False, indent=2))
+        """
+
+        # --- 구독된 번들 조회 테스트 ---
+        fetch_result = client.get_subscribed_bundles(language="en", iccid="89852342022487293051")
+        print("✅ 구독된 번들 조회:", json.dumps(fetch_result, ensure_ascii=False, indent=2))
+
+        package_id = fetch_result[0]["dataBundleId"]
+
+        # early termination 테스트
+        iccid_package_list = [
+            {"iccid": "89852342022487293051", "packageid": package_id},
+        ]
+        termination_result = client.early_termination(iccid_package_list)
+        print("✅ 패키지 조기 종료:", json.dumps(termination_result, ensure_ascii=False, indent=2))
+
 
     except ValueError as e:
         print("❌ 초기화 오류:", e)
