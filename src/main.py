@@ -1,339 +1,52 @@
-import os
-import json
-import time
 import asyncio
+import json
+import os
+import time
 from contextlib import asynccontextmanager
+from typing import Any, Dict, Optional
 
 import uvicorn
-from fastapi import FastAPI, Request, BackgroundTasks, Response, APIRouter
-from starlette.middleware.sessions import SessionMiddleware
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from dotenv import load_dotenv
-load_dotenv()
+from fastapi import BackgroundTasks, FastAPI, Header, Request, Response
+from pydantic import BaseModel
+from starlette.middleware.sessions import SessionMiddleware
 
-from src.orchestrator import orchestrate_chat_event
-from src.workflow.graph_infra.state import GraphState
-from src.workflow.main_graph.graph import main_graph
-from src.dashboard.auth import router as auth_router
-from src.dashboard.task_router import router as dashboard_router
-from src.dashboard.sessions_router import router as sessions_router
-from src.dashboard.knowledge_v2_router import router as knowledge_v2_router
-from src.dashboard.device_job_router import router as device_job_router
-from src.dashboard.members_router import router as members_router
-from src.dashboard.spaces_router import router as spaces_router
-from src.core.members_manager import upsert_member, update_member_department
-from src.core.spaces_manager import upsert_space
-from src.core.google_chat import send_message
-from src.agent.registry import SCHEDULE_REGISTRY, TRIGGER_REGISTRY
-from src.agent.sync_registry import sync_registry_to_mongo
-from src.dashboard.agents_router import router as agents_router
-from src.dashboard.reports_router import router as reports_router
-from src.agent.analytics.subagents.schedule.bq_analysis_schedule.schedule_manager import (
-    register_bq_schedule,
-    restore_bq_schedules,
-    delete_bq_schedule,
-    list_user_schedules,
-    bq_schedules_collection,
-    INTERVAL_LABELS,
-)
 from src.agent.analytics.subagents.schedule.bq_analysis_schedule.cards import (
     build_bq_schedule_card,
     build_schedule_confirm_message,
 )
+from src.agent.analytics.subagents.schedule.bq_analysis_schedule.schedule_manager import (
+    INTERVAL_LABELS,
+    bq_schedules_collection,
+    delete_bq_schedule,
+    list_user_schedules,
+    register_bq_schedule,
+    restore_bq_schedules,
+)
+from src.agent.registry import SCHEDULE_REGISTRY, TRIGGER_REGISTRY
+from src.agent.sync_registry import sync_registry_to_mongo
+from src.core.members_manager import upsert_member
+from src.core.spaces_manager import upsert_space
+from src.dashboard.agents_router import router as agents_router
+from src.dashboard.auth import router as auth_router
+from src.dashboard.device_job_router import router as device_job_router
+from src.dashboard.knowledge_v2_router import router as knowledge_v2_router
+from src.dashboard.members_router import router as members_router
+from src.dashboard.reports_router import router as reports_router
+from src.dashboard.sessions_router import router as sessions_router
+from src.dashboard.spaces_router import router as spaces_router
+from src.dashboard.task_router import router as dashboard_router
+from src.orchestrator import orchestrate_chat_event
+from src.workflow.graph_infra.state import GraphState
+from src.workflow.main_graph.graph import main_graph
 
+load_dotenv()
 
 # ── 스케줄러 ──────────────────────────────────────────────────────────────────
-# 스케줄/트리거 에이전트는 다음 scheduler에 등록된다.
-# AsyncIOScheduler는 앱이 시작된 후에도 job 추가/삭제/수정이 가능하다.
+# 스케줄/트리거 에이전트는 앱 시작 시 이 scheduler에 등록된다.
 scheduler = AsyncIOScheduler(timezone="Asia/Seoul")
 
-
-@asynccontextmanager 
-async def lifespan(app: FastAPI):
-    """
-    앱의 시작과 종료 시 수행될 작업을 관리하는 함수.
-    yield 전까지는 앱 시작 시 실행되고, yield 이후는 앱 종료 시 실행된다.
-    """
-
-    # 1. Registry에 등록된 에이전트를 몽고DB에 등록/제거된 에이전트는 몽고DB에서 삭제
-    await sync_registry_to_mongo()
-
-    # 2. RAG 엔진 초기화 (Blob → 없으면 MongoDB 전체 빌드)
-    from src.core.rag_engine import init_rag_engine
-    await init_rag_engine()
-
-    # 2-1. KB v2 인덱스 확인/생성
-    from src.dashboard.knowledge_v2_router import ensure_kb_v2_indexes
-    await ensure_kb_v2_indexes()
-
-    # 2-2. Google Sheets singleton
-    '''
-    from src.core.google_sheets import init_google_sheets_client
-    app.state.google_sheets_client = init_google_sheets_client()
-    '''
-    # 3. scheduler엔진에 스케줄 에이전트 등록
-    for agent_id, meta in SCHEDULE_REGISTRY.items():
-        scheduler.add_job(
-            meta["func"], # 실제 실행할 함수
-            trigger="cron",
-            **meta["cron"],
-            id=agent_id,
-            replace_existing=True, # 기존에 같은 이름의 job이 있으면 덮어쓰기
-            misfire_grace_time=600, # 실행이 지연되었을 때 최대 10분까지 허용
-            coalesce=True, # 실행이 지연되어서 여러개의 job이 밀렸으면 하나로 합침
-            max_instances=1, # 동시에 여러 인스턴스 실행 방지. A에이전트 실행 중인데 다음 A에이전트의 실행 시간이 되면 바로 실행하지 않고, 최대 10분까지 기다렸다가 실행. 만약 10분이 지나도 이전 작업이 끝나지 않으면 다음 작업은 건너뜀.
-        )
-        print(f"[Scheduler] 스케줄 등록: {agent_id}")
-
-    # 4. scheduler엔진에 트리거 에이전트 등록
-    for agent_id, meta in TRIGGER_REGISTRY.items():
-        scheduler.add_job(
-            meta["func"], # 실제 실행할 함수
-            trigger="interval",
-            **meta["interval"],
-            id=agent_id,
-            replace_existing=True,  # 기존에 같은 이름의 job이 있으면 덮어쓰기
-            misfire_grace_time=600, # 실행이 지연되었을 때 최대 10분까지 허용
-            coalesce=True, # 실행이 지연되어서 여러개의 job이 밀렸으면 하나로 합침
-            max_instances=1, # 동시에 여러 인스턴스 실행 방지. A에이전트 실행 중인데 다음 A에이전트의 실행 시간이 되면 바로 실행하지 않고, 최대 10분까지 기다렸다가 실행. 만약 10분이 지나도 이전 작업이 끝나지 않으면 다음 작업은 건너뜀.
-        )
-        print(f"[Scheduler] 트리거 등록: {agent_id}")
-
-    # 5. MongoDB에 저장된 BQ 분석 스케줄 복원 (사용자가 등록한 스케줄 에이전트가 추가된다면 여기 추가해줘야함)
-    await restore_bq_schedules(scheduler) # 실적분석 빅쿼리 스케줄을 몽고DB에서 읽어서 여기 scheduler에 등록
-
-    # 6. MongoDB enabled=False인 job은 시작 시 바로 pause
-    from src.core.mongo_client import boa_agent_registry_collection
-    cursor = boa_agent_registry_collection.find({"enabled": False, "agent_type": {"$in": ["schedule", "trigger"]}})
-    # 위의 cursor는 결과를 바로 반환하는 것이 아니라, find() 메서드가 반환하는 커서 객체. 실제 데이터를 얻으려면 아래처럼 to_list() 메서드를 사용해야 한다.
-    disabled = await cursor.to_list(length=None)
-    for agent in disabled:
-        job = scheduler.get_job(agent["agent_id"])
-        if job:
-            job.pause()
-            print(f"[Scheduler] 비활성 상태 유지: {agent['agent_id']}")
-
-    scheduler.start()
-    yield
-    scheduler.shutdown()
-
-
-# ── FastAPI 앱 ────────────────────────────────────────────────────────────────
-app = FastAPI(lifespan=lifespan)
-
-app.add_middleware(
-    SessionMiddleware,
-    secret_key=os.getenv("SESSION_SECRET_KEY", "")
-)
-
-app.include_router(auth_router)
-app.include_router(dashboard_router)
-app.include_router(sessions_router)
-app.include_router(agents_router)
-app.include_router(members_router)
-app.include_router(spaces_router)
-app.include_router(knowledge_v2_router)
-app.include_router(device_job_router)
-app.include_router(reports_router)
-
-
-# ── Google Chat Webhook ───────────────────────────────────────────────────────
-@app.post("/chat")
-async def receive_message(request: Request, background_tasks: BackgroundTasks):
-    event = await request.json()
-    print(f"[수신데이터 전문] {json.dumps(event, ensure_ascii=False)}")
-
-    event_type = event.get("type")
-
-    # ── 스페이스 추가/제거 이벤트도 API로 들어오지만 무시 ────────────────────────────────────────
-    if event_type in ("ADDED_TO_SPACE", "REMOVED_FROM_SPACE"):
-        return {}
-
-    # ── 공통 필드 파싱 (확인된 실제 구조 기반) ─────────────────────────────────
-    user       = event.get("user", {})              # 구글챗 사용자 정보 (json)
-    user_id    = user.get("email", "")              # 구글챗 사용자 이메일
-    user_name  = user.get("displayName", "")        # 구글챗 사용자 이름
-    space      = event.get("space", {})             # 구글챗 스페이스 정보 (json)
-    space_name = space.get("name", "")              # 구글챗 스페이스 이름
-    space_type = space.get("type", "")              # 구글챗 스페이스 타입
-    display_name = space.get("displayName", "")     # 구글챗 스페이스 표시 이름
-
-    # ── 카드 인터랙션 처리 ────────────────────────────────────────────────────
-    if event_type == "CARD_CLICKED":
-
-        # 개별 버튼 
-        action_method = event.get("action", {}).get("actionMethodName", "")
-
-        # BQ 분석 스케줄 등록
-        if action_method == "submitBqSchedule":
-            form_inputs = event.get("common", {}).get("formInputs", {})
-
-            agent_name = form_inputs.get("bq_agent_name", {}).get("stringInputs", {}).get("value", [""])[0].strip()
-            query      = form_inputs.get("bq_query",      {}).get("stringInputs", {}).get("value", [""])[0].strip()
-            interval   = form_inputs.get("bq_interval",   {}).get("stringInputs", {}).get("value", ["daily"])[0]
-            hour       = int(form_inputs.get("bq_hour",   {}).get("stringInputs", {}).get("value", ["8"])[0])
-            minute     = int(form_inputs.get("bq_minute", {}).get("stringInputs", {}).get("value", ["0"])[0])
-
-            if not agent_name:
-                return {"text": "⚠️ 에이전트 이름을 입력해주세요."}
-            if not query:
-                return {"text": "⚠️ 분석 요청 내용을 입력해주세요."}
-
-            try:
-                schedule_id = await register_bq_schedule(
-                    scheduler=scheduler,
-                    user_id=user_id,
-                    space_name=space_name,
-                    agent_name=agent_name,
-                    query=query,
-                    hour=hour,
-                    minute=minute,
-                    interval=interval,
-                )
-            except ValueError as e:
-                return {"text": f"⚠️ {e}\n다른 이름을 사용해주세요."}
-
-            return {"text": build_schedule_confirm_message(agent_name, query, interval, hour, minute, schedule_id)}
-
-        # BQ 분석 스케줄 삭제
-        if action_method == "deleteBqSchedule":
-            form_inputs = event.get("common", {}).get("formInputs", {})
-            schedule_id = form_inputs.get("schedule_id", {}).get("stringInputs", {}).get("value", [""])[0]
-            if schedule_id:
-                deleted = await delete_bq_schedule(scheduler, schedule_id)
-                msg = (f"🗑️ 스케줄 `{schedule_id[-8:]}` 이 삭제되었습니다."
-                       if deleted else "⚠️ 스케줄을 찾을 수 없습니다.")
-                return {"text": msg}
-            return {}
-
-        # 도움말 카드 — 에이전트 상세 사용방법 보기
-        if action_method == "showAgentHelp":
-            from src.agent.registry import AGENT_REGISTRY, SCHEDULE_REGISTRY, TRIGGER_REGISTRY
-            from src.core.google_chat import send_card
-            from src.workflow.main_graph.nodes.help_request import _build_agent_detail_card
-
-            # 버튼에서 전달된 agent_key 파싱
-            raw_params = event.get("action", {}).get("parameters", [])
-            agent_key  = next(
-                (p["value"] for p in raw_params if p.get("key") == "agent_key"),
-                None,
-            )
-
-            if agent_key:
-                all_registries = {**AGENT_REGISTRY, **SCHEDULE_REGISTRY, **TRIGGER_REGISTRY}
-                info = all_registries.get(agent_key)
-                if info:
-                    card_body = _build_agent_detail_card(agent_key, info)
-                    await send_card(space_name, card_body)
-                    return {}
-
-            return {"text": "⚠️ 해당 에이전트 정보를 찾을 수 없습니다."}
-
-        # 다른 카드 클릭 이벤트는 여기서 추가 처리
-        return {}
-
-    # ── 일반 메시지 처리 ───────────────────────────────────────────────────────
-    if event_type != "MESSAGE":
-        return {}
-
-    message_obj    = event.get("message", {})
-    message        = message_obj.get("text", "")
-    thread_name    = message_obj.get("thread", {}).get("name")
-    event_time     = event.get("eventTime", {})
-    quoted_message = (
-        message_obj.get("quotedMessageMetadata", {})
-                   .get("quotedMessageSnapshot", {})
-                   .get("text")
-    )
-    quoted_message_sender = (
-        message_obj.get("quotedMessageMetadata", {})
-                   .get("quotedMessageSnapshot", {})
-                   .get("sender", {})
-    )
-
-    # ── DM/ROOM 정보 자동 등록 ─────────────────────────────────────────────────
-    if space_type == "DM":
-        await upsert_member(user_id, user_name, space_name)
-
-    elif space_type in ("ROOM", "GROUP_CHAT", "SPACE"):
-        background_tasks.add_task(upsert_space, space_name, display_name, space_type)
-
-    # ── 세션 처리 ─────────────────────────────────────────────────────────────
-    config   = {"configurable": {"thread_id": user_id}}
-    existing = await asyncio.to_thread(main_graph.get_state, config)
-
-    if existing.values:
-        state        = GraphState(**existing.values)
-        current_time = int(time.time())
-        if state.last_activity_time and current_time - state.last_activity_time > 3600:
-            print("세션 타임아웃 → 초기화")
-            state = GraphState()
-            is_new_session = True
-        else:
-            print("기존 세션 유지")
-            is_new_session = False
-    else:
-        state = GraphState()
-        print("새로운 세션 생성")
-        is_new_session = True
-
-    state.last_activity_time = int(time.time())
-    state.chat_context = {
-        "user_id":               user_id, # 구글챗 사용자(직원)의 이메일 주소
-        "user_name":             user_name,
-        "space_name":            space_name,
-        "space_type":            space_type,
-        "thread_name":           thread_name,
-        "quoted_message":        quoted_message,
-        "quoted_message_sender": quoted_message_sender,
-        "event_time":            event_time,
-    }
-    state.add_user_message(message)
-
-    # ── 슬래시 커맨드 처리 (LLM 없이 즉시 카드/텍스트 반환) ─────────────────────
-    # 추가로 슬래시 커맨드로 처리할 기능이 있으면 여기에 if문 추가
-    if message.strip() == "/데이터분석스케줄":
-        return build_bq_schedule_card()
-
-    if message.strip().startswith("/분석스케줄취소"):
-        parts = message.strip().split()
-        if len(parts) >= 2:
-            short_id = parts[1]
-            doc = await bq_schedules_collection.find_one(
-                {"user_id": user_id, "schedule_id": {"$regex": short_id + "$"}}
-            )
-            if doc:
-                await delete_bq_schedule(scheduler, doc["schedule_id"])
-                return {"text": f"🗑️ 스케줄 `{short_id}` 이 삭제되었습니다."}
-            return {"text": "⚠️ 해당 스케줄 ID를 찾을 수 없습니다."}
-        return {"text": "사용법: `/분석스케줄취소 {스케줄ID}`"}
-
-    if message.strip() == "/내스케줄":
-        schedules = await list_user_schedules(user_id)
-        if not schedules:
-            return {"text": "등록된 분석 스케줄이 없습니다."}
-        lines = ["📋 *등록된 데이터 분석 스케줄*\n"]
-        for s in schedules:
-            label    = INTERVAL_LABELS.get(s["interval"], s["interval"])
-            time_str = f"{s['hour']:02d}:{s['minute']:02d}" if s["interval"] != "hourly" else "매시간"
-            lines.append(f"• `{s['schedule_id'][-8:]}` | {label} {time_str}\n  _{s['query'][:40]}_")
-        return {"text": "\n".join(lines)}
-
-    asyncio.create_task(orchestrate_chat_event(state, config, is_new_session))
-    # 메시지 수신에 대한 즉각적인 응답
-    return Response(
-        content=json.dumps({}),
-        media_type="application/json",
-        status_code=200
-    )
-
-
-
-
-# ── 인터 에이전트 데이터 검증 ───────────────────────────────────────────────────────
-
-from pydantic import BaseModel
-from typing import Optional, Dict, Any
 
 class IARequestModel(BaseModel):
     job_id: str
@@ -343,163 +56,543 @@ class IARequestModel(BaseModel):
     new_task: bool
     parameters: Optional[Dict[str, Any]] = None
     message: Optional[str] = None
-    
+
+
 class IAResponseValue(BaseModel):
     message: Optional[str] = None
     value: Optional[Dict[str, Any]] = None
+
 
 class IAResponseModel(BaseModel):
     success: bool
     status: str
     resultValue: IAResponseValue
 
-from fastapi import Header
 
-# ── 인터 에이전트 엔드포인트 ───────────────────────────────────────────────────────
-@app.post("/agent_request", response_model=IAResponseModel)
-async def receive_agent_request(
-    request: IARequestModel,
-    x_inter_agent_secret: Optional[str] = Header(None, alias="X-Inter-Agent-Secret")
-):
-    print(f"[Agent Request 수신 전문] {request.model_dump()}")
+# ── 앱 초기화 ────────────────────────────────────────────────────────────────
+async def _initialize_app_runtime() -> None:
+    await sync_registry_to_mongo()
 
-    # 환경변수 시크릿 키 검증
-    secret_key = os.getenv("INTER_AGENT_SECRET")
-    if not secret_key or x_inter_agent_secret != secret_key:
-        print("[Agent Request] ❌ 시크릿 키 검증 실패 (Unauthorized)")
-        return IAResponseModel(
-            success=False,
-            status="UNAUTHORIZED",
-            resultValue=IAResponseValue(message="인증에 실패했습니다. 유효하지 않은 요청입니다.")
+    from src.core.rag_engine import init_rag_engine
+    await init_rag_engine()
+
+    from src.dashboard.knowledge_v2_router import ensure_kb_v2_indexes
+    await ensure_kb_v2_indexes()
+
+
+async def _bootstrap_scheduler_jobs() -> None:
+    _register_registry_schedule_jobs()
+    _register_registry_trigger_jobs()
+    await restore_bq_schedules(scheduler)
+    await _pause_disabled_registry_jobs()
+
+
+def _register_registry_schedule_jobs() -> None:
+    for agent_id, meta in SCHEDULE_REGISTRY.items():
+        scheduler.add_job(
+            meta["func"],
+            trigger="cron",
+            **meta["cron"],
+            id=agent_id,
+            replace_existing=True,
+            misfire_grace_time=600,
+            coalesce=True,
+            max_instances=1,
         )
-    print("[Agent Request] ✅ 시크릿 키 검증 성공")
+        print(f"[Scheduler] 스케줄 등록: {agent_id}")
 
+
+def _register_registry_trigger_jobs() -> None:
+    for agent_id, meta in TRIGGER_REGISTRY.items():
+        scheduler.add_job(
+            meta["func"],
+            trigger="interval",
+            **meta["interval"],
+            id=agent_id,
+            replace_existing=True,
+            misfire_grace_time=600,
+            coalesce=True,
+            max_instances=1,
+        )
+        print(f"[Scheduler] 트리거 등록: {agent_id}")
+
+
+async def _pause_disabled_registry_jobs() -> None:
+    from src.core.mongo_client import boa_agent_registry_collection
+
+    cursor = boa_agent_registry_collection.find(
+        {"enabled": False, "agent_type": {"$in": ["schedule", "trigger"]}}
+    )
+    disabled_agents = await cursor.to_list(length=None)
+
+    for agent in disabled_agents:
+        job = scheduler.get_job(agent["agent_id"])
+        if job:
+            job.pause()
+            print(f"[Scheduler] 비활성 상태 유지: {agent['agent_id']}")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await _initialize_app_runtime()
+    await _bootstrap_scheduler_jobs()
+    scheduler.start()
+
+    yield
+
+    scheduler.shutdown()
+
+
+def _create_app() -> FastAPI:
+    app = FastAPI(lifespan=lifespan)
+    app.add_middleware(SessionMiddleware, secret_key=os.getenv("SESSION_SECRET_KEY", ""))
+    _register_api_routers(app)
+    return app
+
+
+def _register_api_routers(app: FastAPI) -> None:
+    app.include_router(auth_router)
+    app.include_router(dashboard_router)
+    app.include_router(sessions_router)
+    app.include_router(agents_router)
+    app.include_router(members_router)
+    app.include_router(spaces_router)
+    app.include_router(knowledge_v2_router)
+    app.include_router(device_job_router)
+    app.include_router(reports_router)
+
+
+# ── Google Chat Webhook ───────────────────────────────────────────────────────
+def _parse_google_chat_event(event: dict) -> dict:
+    user = event.get("user", {})
+    space = event.get("space", {})
+    message = event.get("message", {})
+    quoted_snapshot = (
+        message.get("quotedMessageMetadata", {})
+        .get("quotedMessageSnapshot", {})
+    )
+
+    return {
+        "event_type": event.get("type"),
+        "user_id": user.get("email", ""),
+        "user_name": user.get("displayName", ""),
+        "space_name": space.get("name", ""),
+        "space_type": space.get("type", ""),
+        "display_name": space.get("displayName", ""),
+        "message": message.get("text", ""),
+        "thread_name": message.get("thread", {}).get("name"),
+        "event_time": event.get("eventTime", {}),
+        "quoted_message": quoted_snapshot.get("text"),
+        "quoted_message_sender": quoted_snapshot.get("sender", {}),
+    }
+
+
+def _is_ignored_chat_event(event_type: str | None) -> bool:
+    return event_type in {"ADDED_TO_SPACE", "REMOVED_FROM_SPACE"}
+
+
+async def _remember_chat_space(chat_event: dict, background_tasks: BackgroundTasks) -> None:
+    if chat_event["space_type"] == "DM":
+        await upsert_member(
+            chat_event["user_id"],
+            chat_event["user_name"],
+            chat_event["space_name"],
+        )
+    elif chat_event["space_type"] in ("ROOM", "GROUP_CHAT", "SPACE"):
+        background_tasks.add_task(
+            upsert_space,
+            chat_event["space_name"],
+            chat_event["display_name"],
+            chat_event["space_type"],
+        )
+
+
+async def _restore_chat_session(user_id: str) -> tuple[GraphState, bool]:
+    config = {"configurable": {"thread_id": user_id}}
+    existing = await asyncio.to_thread(main_graph.get_state, config)
+
+    if existing.values:
+        state = GraphState(**existing.values)
+        current_time = int(time.time())
+        if state.last_activity_time and current_time - state.last_activity_time > 3600:
+            print("세션 타임아웃 → 초기화")
+            return GraphState(), True
+
+        print("기존 세션 유지")
+        return state, False
+
+    print("새로운 세션 생성")
+    return GraphState(), True
+
+
+def _attach_chat_context(state: GraphState, chat_event: dict) -> None:
+    state.last_activity_time = int(time.time())
+    state.chat_context = {
+        "user_id": chat_event["user_id"],
+        "user_name": chat_event["user_name"],
+        "space_name": chat_event["space_name"],
+        "space_type": chat_event["space_type"],
+        "thread_name": chat_event["thread_name"],
+        "quoted_message": chat_event["quoted_message"],
+        "quoted_message_sender": chat_event["quoted_message_sender"],
+        "event_time": chat_event["event_time"],
+    }
+    state.add_user_message(chat_event["message"])
+
+
+async def _handle_chat_card_click(event: dict, user_id: str, space_name: str) -> dict:
+    action_method = event.get("action", {}).get("actionMethodName", "")
+
+    if action_method == "submitBqSchedule":
+        return await _submit_bq_schedule(event, user_id, space_name)
+
+    if action_method == "deleteBqSchedule":
+        return await _delete_bq_schedule_from_card(event)
+
+    if action_method == "showAgentHelp":
+        return await _show_agent_help_card(event, space_name)
+
+    return {}
+
+
+async def _submit_bq_schedule(event: dict, user_id: str, space_name: str) -> dict:
+    form_inputs = event.get("common", {}).get("formInputs", {})
+
+    agent_name = _get_form_value(form_inputs, "bq_agent_name", "").strip()
+    query = _get_form_value(form_inputs, "bq_query", "").strip()
+    interval = _get_form_value(form_inputs, "bq_interval", "daily")
+    hour = int(_get_form_value(form_inputs, "bq_hour", "8"))
+    minute = int(_get_form_value(form_inputs, "bq_minute", "0"))
+
+    if not agent_name:
+        return {"text": "⚠️ 에이전트 이름을 입력해주세요."}
+    if not query:
+        return {"text": "⚠️ 분석 요청 내용을 입력해주세요."}
+
+    try:
+        schedule_id = await register_bq_schedule(
+            scheduler=scheduler,
+            user_id=user_id,
+            space_name=space_name,
+            agent_name=agent_name,
+            query=query,
+            hour=hour,
+            minute=minute,
+            interval=interval,
+        )
+    except ValueError as e:
+        return {"text": f"⚠️ {e}\n다른 이름을 사용해주세요."}
+
+    return {"text": build_schedule_confirm_message(agent_name, query, interval, hour, minute, schedule_id)}
+
+
+async def _delete_bq_schedule_from_card(event: dict) -> dict:
+    form_inputs = event.get("common", {}).get("formInputs", {})
+    schedule_id = _get_form_value(form_inputs, "schedule_id", "")
+    if not schedule_id:
+        return {}
+
+    deleted = await delete_bq_schedule(scheduler, schedule_id)
+    msg = f"🗑️ 스케줄 `{schedule_id[-8:]}` 이 삭제되었습니다." if deleted else "⚠️ 스케줄을 찾을 수 없습니다."
+    return {"text": msg}
+
+
+async def _show_agent_help_card(event: dict, space_name: str) -> dict:
+    from src.agent.registry import AGENT_REGISTRY
+    from src.core.google_chat import send_card
+    from src.workflow.main_graph.nodes.help_request import _build_agent_detail_card
+
+    raw_params = event.get("action", {}).get("parameters", [])
+    agent_key = next((p["value"] for p in raw_params if p.get("key") == "agent_key"), None)
+
+    if agent_key:
+        all_registries = {**AGENT_REGISTRY, **SCHEDULE_REGISTRY, **TRIGGER_REGISTRY}
+        info = all_registries.get(agent_key)
+        if info:
+            card_body = _build_agent_detail_card(agent_key, info)
+            await send_card(space_name, card_body)
+            return {}
+
+    return {"text": "⚠️ 해당 에이전트 정보를 찾을 수 없습니다."}
+
+
+def _get_form_value(form_inputs: dict, key: str, default: str = "") -> str:
+    return form_inputs.get(key, {}).get("stringInputs", {}).get("value", [default])[0]
+
+
+async def _handle_chat_slash_command(message: str, user_id: str) -> dict | None:
+    stripped_message = message.strip()
+
+    if stripped_message == "/데이터분석스케줄":
+        return build_bq_schedule_card()
+
+    if stripped_message.startswith("/분석스케줄취소"):
+        return await _cancel_bq_schedule_by_command(stripped_message, user_id)
+
+    if stripped_message == "/내스케줄":
+        return await _list_bq_schedules(user_id)
+
+    return None
+
+
+async def _cancel_bq_schedule_by_command(message: str, user_id: str) -> dict:
+    parts = message.split()
+    if len(parts) < 2:
+        return {"text": "사용법: `/분석스케줄취소 {스케줄ID}`"}
+
+    short_id = parts[1]
+    doc = await bq_schedules_collection.find_one(
+        {"user_id": user_id, "schedule_id": {"$regex": short_id + "$"}}
+    )
+    if not doc:
+        return {"text": "⚠️ 해당 스케줄 ID를 찾을 수 없습니다."}
+
+    await delete_bq_schedule(scheduler, doc["schedule_id"])
+    return {"text": f"🗑️ 스케줄 `{short_id}` 이 삭제되었습니다."}
+
+
+async def _list_bq_schedules(user_id: str) -> dict:
+    schedules = await list_user_schedules(user_id)
+    if not schedules:
+        return {"text": "등록된 분석 스케줄이 없습니다."}
+
+    lines = ["📋 *등록된 데이터 분석 스케줄*\n"]
+    for schedule in schedules:
+        label = INTERVAL_LABELS.get(schedule["interval"], schedule["interval"])
+        time_str = (
+            f"{schedule['hour']:02d}:{schedule['minute']:02d}"
+            if schedule["interval"] != "hourly"
+            else "매시간"
+        )
+        lines.append(
+            f"• `{schedule['schedule_id'][-8:]}` | {label} {time_str}\n"
+            f"  _{schedule['query'][:40]}_"
+        )
+    return {"text": "\n".join(lines)}
+
+
+def _empty_json_response() -> Response:
+    return Response(content=json.dumps({}), media_type="application/json", status_code=200)
+
+
+async def _run_chat_orchestration(state: GraphState, user_id: str, is_new_session: bool) -> None:
+    config = {"configurable": {"thread_id": user_id}}
+    asyncio.create_task(orchestrate_chat_event(state, config, is_new_session))
+
+
+# ── Inter-Agent API ──────────────────────────────────────────────────────────
+def _validate_inter_agent_secret(x_inter_agent_secret: Optional[str]) -> bool:
+    secret_key = os.getenv("INTER_AGENT_SECRET")
+    return bool(secret_key and x_inter_agent_secret == secret_key)
+
+
+def _unauthorized_agent_response() -> IAResponseModel:
+    return IAResponseModel(
+        success=False,
+        status="UNAUTHORIZED",
+        resultValue=IAResponseValue(message="인증에 실패했습니다. 유효하지 않은 요청입니다."),
+    )
+
+
+def _unknown_agent_response(agent_name: str) -> IAResponseModel:
+    return IAResponseModel(
+        success=False,
+        status="ERROR",
+        resultValue=IAResponseValue(message=f"존재하지 않는 에이전트입니다: {agent_name}"),
+    )
+
+
+def _agent_error_response(error: Exception) -> IAResponseModel:
+    return IAResponseModel(
+        success=False,
+        status="ERROR",
+        resultValue=IAResponseValue(message=f"실행 중 오류 발생: {str(error)}"),
+    )
+
+
+async def _handle_agent_request(request: IARequestModel) -> IAResponseModel:
     from src.agent.registry import AGENT_REGISTRY
     from src.core.mongo_client import checkpointer
-    
+
     agent_name = request.agent_name
     print(f"[Agent Request] 🔍 대상 에이전트: {agent_name}")
-    
+
     if agent_name not in AGENT_REGISTRY:
         print(f"[Agent Request] ❌ 존재하지 않는 에이전트: {agent_name}")
-        return IAResponseModel(
-            success=False,
-            status="ERROR",
-            resultValue=IAResponseValue(message=f"존재하지 않는 에이전트입니다: {agent_name}")
-        )
+        return _unknown_agent_response(agent_name)
 
-    # CS챗봇 등 외부 시스템에서 단독 호출할 때는 서브에이전트에 checkpointer를 붙여서 컴파일
     base_subagent_graph = AGENT_REGISTRY[agent_name]["graph"]
     subagent_graph = base_subagent_graph.builder.compile(checkpointer=checkpointer)
-    
-    from src.core.task_manager import create_task
-    from src.core.mongo_client import get_collection
+    config = {"configurable": {"thread_id": request.session_id}}
 
-    # 1. Thread ID (세션 ID) 기반으로 이전 State 복원 시도
+    state = await _restore_agent_request_state(request, agent_name, subagent_graph)
+    await _merge_agent_request_inputs(state, request, agent_name)
+
+    result_state = await _invoke_agent_request_graph(subagent_graph, state, config, agent_name)
+    reply_message, action_response, status_str = _normalize_agent_request_response(result_state, agent_name)
+
+    print(f"[Agent Request] 📤 추출된 응답 메시지: {reply_message}")
+    print(f"[Agent Request] 📤 추출된 action_response: {action_response}")
+
+    return IAResponseModel(
+        success=True,
+        status=status_str,
+        resultValue=IAResponseValue(message=reply_message, value=action_response),
+    )
+
+
+async def _restore_agent_request_state(request: IARequestModel, agent_name: str, subagent_graph) -> GraphState:
     config = {"configurable": {"thread_id": request.session_id}}
     print(f"[Agent Request] 🔄 Graph State 복원 시도, config: {config}")
     existing = await asyncio.to_thread(subagent_graph.get_state, config)
 
-    # 2. State 합치기
     if existing and existing.values:
-        # 이미 세션이 존재하면 복원
         print(f"[Agent Request] 🔄 기존 상태 복원 완료. (values keys: {list(existing.values.keys())})")
         state = GraphState(**existing.values)
     else:
-        # 없으면 새로 생성
         print("[Agent Request] ⭐ 기존 상태 없음 -> 신규 상태 생성")
         state = GraphState()
         state.session_id = request.session_id
-        
-    # 현재 실행할 에이전트 지정
+
     state.current_agent = agent_name
-    
-    # 필요한 context 세팅
     if not isinstance(state.chat_context, dict):
         state.chat_context = {}
-        
+
     state.chat_context["user_id"] = request.user_id
     state.chat_context["user_name"] = "CS챗봇"
     state.chat_context["is_cs_api"] = True
     state.chat_context["ia_job_id"] = request.job_id
+    return state
 
-    # domain_id 조회 및 주입
+
+async def _merge_agent_request_inputs(state: GraphState, request: IARequestModel, agent_name: str) -> None:
+    from src.agent.registry import AGENT_REGISTRY
+    from src.core.mongo_client import get_collection
+
     agent_doc = await get_collection("boa_agent_registry").find_one({"agent_id": agent_name})
     if agent_doc and agent_doc.get("domain_id"):
         state.domain_id = agent_doc["domain_id"]
 
-    # new_task 여부에 따른 초기화 및 Task 발급
     if request.new_task:
         print("[Agent Request] 🆕 새로운 작업 시작: 파라미터 초기화 및 Task 발급")
         state.collected_parameters[agent_name] = {}
-        
+
+        from src.core.task_manager import create_task
+
         task_id = await create_task(
             user_id=request.user_id,
             user_name="CS챗봇",
             agent_name=agent_name,
             agent_display_name=AGENT_REGISTRY[agent_name].get("display_name", agent_name),
-            parameters=request.parameters or {}
+            parameters=request.parameters or {},
         )
         state.task_id = task_id
-    
-    # CS챗봇에서 넘겨준 파라미터가 있다면 주입
+
     if request.parameters:
         print(f"[Agent Request] 📥 파라미터 업데이트: {request.parameters}")
         if agent_name not in state.collected_parameters:
             state.collected_parameters[agent_name] = {}
         state.collected_parameters[agent_name].update(request.parameters)
-        state.print_state()  # 상태 출력 (디버깅용)
-        
+        state.print_state()
+
     if request.message:
         print(f"[Agent Request] 💬 사용자 메시지 추가: {request.message}")
         state.add_user_message(request.message)
-        
-    try:
-        print(f"[Agent Request] 🚀 서브에이전트 ainvoke 호출 시작 ({agent_name})")
-        # 서브에이전트 직접 호출 (checkpointer가 config의 thread_id를 보고 이전 기록과 합침)
-        result_state = await subagent_graph.ainvoke(state, config=config)
-        print("[Agent Request] ✅ 서브에이전트 ainvoke 실행 완료")
-        
-        reply_message = ""
-        # 서브에이전트 그래프의 상태 반환 형태에 따라 처리
-        if isinstance(result_state, dict) and result_state.get("messages"):
-            last_msg = result_state["messages"][-1]
-            reply_message = getattr(last_msg, "content", "") if hasattr(last_msg, "content") else last_msg.get("content", "")
-        elif hasattr(result_state, "messages") and result_state.messages:
-            last_msg = result_state.messages[-1]
-            reply_message = getattr(last_msg, "content", "") if hasattr(last_msg, "content") else last_msg.get("content", "")
-        
-        action_response = {}
-        if isinstance(result_state, dict):
-            action_response = result_state.get("response", {}).get(agent_name, {})
-        elif hasattr(result_state, "response"):
-            action_response = result_state.response.get(agent_name, {})
-        
-        print(f"[Agent Request] 📤 추출된 응답 메시지: {reply_message}")
-        print(f"[Agent Request] 📤 추출된 action_response: {action_response}")
 
-        # 상태 판별 (current_agent가 비워졌다면 완전 종료, 남아있다면 추가 입력 대기 또는 보류 중)
-        final_agent = result_state.get("current_agent") if isinstance(result_state, dict) else getattr(result_state, "current_agent", None)
-        status_str = "COMPLETED" if final_agent is None else "NEED_INFO"
 
-        return IAResponseModel(
-            success=True,
-            status=status_str,
-            resultValue=IAResponseValue(
-                message=reply_message,
-                value=action_response
-            )
+async def _invoke_agent_request_graph(subagent_graph, state: GraphState, config: dict, agent_name: str):
+    print(f"[Agent Request] 🚀 서브에이전트 ainvoke 호출 시작 ({agent_name})")
+    result_state = await subagent_graph.ainvoke(state, config=config)
+    print("[Agent Request] ✅ 서브에이전트 ainvoke 실행 완료")
+    return result_state
+
+
+def _normalize_agent_request_response(result_state, agent_name: str) -> tuple[str, dict, str]:
+    reply_message = _extract_last_message_content(result_state)
+    action_response = _extract_action_response(result_state, agent_name)
+    final_agent = _get_result_value(result_state, "current_agent")
+    status_str = "COMPLETED" if final_agent is None else "NEED_INFO"
+    return reply_message, action_response, status_str
+
+
+def _extract_last_message_content(result_state) -> str:
+    messages = _get_result_value(result_state, "messages") or []
+    if not messages:
+        return ""
+
+    last_msg = messages[-1]
+    return getattr(last_msg, "content", "") if hasattr(last_msg, "content") else last_msg.get("content", "")
+
+
+def _extract_action_response(result_state, agent_name: str) -> dict:
+    response = _get_result_value(result_state, "response") or {}
+    return response.get(agent_name, {})
+
+
+def _get_result_value(result_state, key: str):
+    if isinstance(result_state, dict):
+        return result_state.get(key)
+    return getattr(result_state, key, None)
+
+
+# ── FastAPI 앱/엔드포인트 ─────────────────────────────────────────────────────
+app = _create_app()
+
+
+@app.post("/chat")
+async def receive_message(request: Request, background_tasks: BackgroundTasks):
+    event = await request.json()
+    print(f"[수신데이터 전문] {json.dumps(event, ensure_ascii=False)}")
+
+    chat_event = _parse_google_chat_event(event)
+    event_type = chat_event["event_type"]
+
+    if _is_ignored_chat_event(event_type):
+        return {}
+
+    if event_type == "CARD_CLICKED":
+        return await _handle_chat_card_click(
+            event,
+            chat_event["user_id"],
+            chat_event["space_name"],
         )
-        
+
+    if event_type != "MESSAGE":
+        return {}
+
+    await _remember_chat_space(chat_event, background_tasks)
+
+    state, is_new_session = await _restore_chat_session(chat_event["user_id"])
+    _attach_chat_context(state, chat_event)
+
+    slash_response = await _handle_chat_slash_command(chat_event["message"], chat_event["user_id"])
+    if slash_response is not None:
+        return slash_response
+
+    await _run_chat_orchestration(state, chat_event["user_id"], is_new_session)
+    return _empty_json_response()
+
+
+@app.post("/agent_request", response_model=IAResponseModel)
+async def receive_agent_request(
+    request: IARequestModel,
+    x_inter_agent_secret: Optional[str] = Header(None, alias="X-Inter-Agent-Secret"),
+):
+    print(f"[Agent Request 수신 전문] {request.model_dump()}")
+
+    if not _validate_inter_agent_secret(x_inter_agent_secret):
+        print("[Agent Request] ❌ 시크릿 키 검증 실패 (Unauthorized)")
+        return _unauthorized_agent_response()
+
+    print("[Agent Request] ✅ 시크릿 키 검증 성공")
+
+    try:
+        return await _handle_agent_request(request)
     except Exception as e:
         print(f"[Agent Request] ❌ 실행 중 오류 발생: {str(e)}")
         import traceback
         traceback.print_exc()
-        return IAResponseModel(
-            success=False,
-            status="ERROR",
-            resultValue=IAResponseValue(message=f"실행 중 오류 발생: {str(e)}")
-        )
+        return _agent_error_response(e)
 
 
 if __name__ == "__main__":

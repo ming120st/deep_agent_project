@@ -27,3 +27,4 @@ test.py
 reset_session_test.py
 *.zip
 temp.py
+copilot-instructions.md
