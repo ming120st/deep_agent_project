@@ -12,8 +12,8 @@ MONGODB_DB_NAME = os.getenv("MONGODB_DB_NAME", "boa_db")  # 기본값 boa_db
 # Azure DocumentDB idle timeout 대응 공통 옵션
 _MONGO_OPTS = dict(
     tlsCAFile=certifi.where(),
-    heartbeatFrequencyMS=30_000,   # 30초마다 서버 ping → 4분 idle 끊김 방어
-    maxIdleTimeMS=120_000,         # 2분 이상 idle 연결은 pool에서 선제 제거
+    heartbeatFrequencyMS=10_000,   # 10초마다 서버 ping → 4분 idle 끊김 방어
+    maxIdleTimeMS=45_000,         # 45초 이상 idle 연결은 pool에서 선제 제거
     connectTimeoutMS=20_000,
     socketTimeoutMS=30_000,
     serverSelectionTimeoutMS=10_000,
