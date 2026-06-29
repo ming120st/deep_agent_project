@@ -61,7 +61,7 @@ CLASSIFY_PROMPT = """
 
 [new_task 판단 기준]
 - action이 new_agent일 때: new_task는 항상 True
-- **중요**: action이 continue_task 라 하더라도, 기존 파라미터(현재 진행중인 상태)와 다른 "새로운 파라미터 값(예: 다른 전화번호, 다른 옵션)"이 주어지거나 "이전과 다른 내용으로 다시 해줘"와 같은 요청이 온다면 **반드시 new_task를 True로 설정**하세요.
+- **중요**: action이 continue_task 라 하더라도, 기존 파라미터(현재 진행중인 상태)와 다른 "새로운 파라미터 값(예: 다른 전화번호, 다른 기기번호, 다른 주문번호 등)"이 주어지거나 "이전과 다른 내용으로 다시 해줘"와 같은 요청이 온다면 **반드시 new_task를 True로 설정**하세요.
 - 동일 에이전트 진행 중이지만 새로운 파라미터로 변경 요청: True
 - 진행 중인 업무 이어가기 (파라미터 변경 없이 계속 진행): False
 - rag, context_response, help_request, ambiguous: False

@@ -245,16 +245,19 @@ async def update_parameters(state: GraphState):
                 "current_agent": None,       # 라우팅 차단
             }
 
-    # ── new_task True이면 task 생성 ──────────────────────────────
+    # ── new_task True이면 task 생성 및 부분 재시작 처리 ──────────────────────────────
     if action_data.get("new_task") is True:
         updates["error_message"] = None # 새로운 업무 시작이므로 기존 오류 메시지 초기화
         updates["task_status"] = None
         updates["response"] = {}
 
-        collected_parameters[current_agent] = {}
-        if action_data.get("parameters"):
-            collected_parameters[current_agent].update(action_data["parameters"])
-        updates["collected_parameters"] = collected_parameters
+        # action이 완전히 새로운 에이전트 진입일 때만 파라미터를 초기화.
+        # continue_task이면서 조건만 바뀌어 재시작(new_task=True)된 경우는 기존 파라미터는 유지해야 함.
+        if action_data.get("action") == "new_agent":
+            collected_parameters[current_agent] = {}
+            if action_data.get("parameters"):
+                collected_parameters[current_agent].update(action_data["parameters"])
+            updates["collected_parameters"] = collected_parameters
 
         agent_info = AGENT_REGISTRY.get(current_agent, {})
         task_id = await create_task(
@@ -266,10 +269,10 @@ async def update_parameters(state: GraphState):
         )
         updates["task_id"] = task_id
         
-        await update_turn_meta(session_id, intent="new_agent", task_id=task_id)
+        await update_turn_meta(session_id, intent=action_data.get("action", "new_agent"), task_id=task_id)
         await add_event(session_id, EventType.AGENT_ROUTE, "에이전트 라우팅",
                         content=current_agent, task_id=task_id)
-        print(f"[Task] 새 task 생성: {task_id} ({current_agent})")
+        print(f"[Task] 새 task 생성/재시작: {task_id} ({current_agent})")
     else:
         # continue_task 시
         await update_turn_meta(session_id, intent="continue_task")
