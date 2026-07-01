@@ -8,7 +8,6 @@ from src.workflow.graph_infra.state import GraphState
 from src.core.google_chat import send_message
 from src.core.session_logger import add_event, EventType
 
-
 async def send_response(state: GraphState) -> GraphState:
     """
     [노드] Google Chat 응답 전송
@@ -27,25 +26,45 @@ async def send_response(state: GraphState) -> GraphState:
         state.print_state()
         return state
 
-    space_name = state.chat_context.get("space_name", "")
+    chat_context = getattr(state, "chat_context", {}) or {}
+
+    space_name = chat_context.get("space_name", "")
     if not space_name:
         print("[ResponseSender] chat_context에 space_name 없음 — 전송 불가")
         return state
 
+    thread_name = chat_context.get("thread_name")
+    quoted_message_name = chat_context.get("source_message_name")
+    quoted_message_last_update_time = chat_context.get("source_message_last_update_time")
+
     try:
-        await send_message(space_name, last_ai_message)
+        await send_message(
+            space_name=space_name,
+            message=last_ai_message,
+            thread_name=thread_name,
+            quoted_message_name=quoted_message_name,
+            quoted_message_last_update_time=quoted_message_last_update_time,
+        )
+
         preview = last_ai_message[:80] + ("..." if len(last_ai_message) > 80 else "")
-        print(f"[ResponseSender] 전송 완료 → {space_name}")
+
+        print(
+            f"[ResponseSender] 전송 완료 → {space_name} | "
+            f"thread={thread_name} | quoted={quoted_message_name}"
+        )
         print(f"[ResponseSender] 내용 미리보기: {preview}")
-        
-        await add_event(state.session_id, EventType.CHAT_SEND, "Google Chat 응답 전송",
-                        content=last_ai_message[:200],
-                        task_id=state.task_id)
+
+        await add_event(
+            state.session_id,
+            EventType.CHAT_SEND,
+            "Google Chat 응답 전송",
+            content=last_ai_message[:200],
+            task_id=state.task_id,
+        )
 
     except Exception as e:
         print(f"[ResponseSender] Google Chat 전송 실패: {e}")
 
-    # state 출력
     state.print_state()
 
     return state

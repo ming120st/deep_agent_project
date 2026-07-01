@@ -26,26 +26,44 @@ from src.workflow.main_graph.graph import main_graph
 # Google Chat 이벤트 수신/해석 진입 라우터
 router = APIRouter()
 
-
-# 원본 Google Chat payload를 내부 표준 이벤트 형태로 정규화
 def _parse_google_chat_event(event: dict) -> dict:
-    user = event.get("user", {})
-    space = event.get("space", {})
-    message = event.get("message", {})
-    quoted_snapshot = message.get("quotedMessageMetadata", {}).get("quotedMessageSnapshot", {})
+    event_user = event.get("user", {}) or {}
+    message = event.get("message", {}) or {}
+    space = event.get("space", {}) or {}
+    sender = message.get("sender", {}) or {}
+    thread = message.get("thread", {}) or {}
+
+    message_name = message.get("name")
+    message_create_time = message.get("createTime")
+    message_last_update_time = message.get("lastUpdateTime") or message_create_time
 
     return {
         "event_type": event.get("type"),
-        "user_id": user.get("email", ""),
-        "user_name": user.get("displayName", ""),
-        "space_name": space.get("name", ""),
-        "space_type": space.get("type", ""),
-        "display_name": space.get("displayName", ""),
+
+        # space 정보
+        "space_name": space.get("name"),
+        "space_type": space.get("type"),
+        "display_name": space.get("displayName") or space.get("name"),
+
+        # user 정보
+        "user_id": sender.get("email") or event_user.get("email", ""),
+        "user_name": sender.get("displayName") or event_user.get("displayName", ""),
+        "user_email": sender.get("email") or event_user.get("email"),
+        "user_display_name": sender.get("displayName") or event_user.get("displayName"),
+        "google_user_name": sender.get("name") or event_user.get("name"),
+
+        # 메시지 텍스트
+        # 기존 코드가 chat_event["message"]를 쓰고 있으므로 반드시 message 키 유지
         "message": message.get("text", ""),
-        "thread_name": message.get("thread", {}).get("name"),
-        "event_time": event.get("eventTime", {}),
-        "quoted_message": quoted_snapshot.get("text"),
-        "quoted_message_sender": quoted_snapshot.get("sender", {}),
+        "text": message.get("text", ""),
+
+        # Google Chat 인용 답장용
+        "message_name": message_name,
+        "message_create_time": message_create_time,
+        "message_last_update_time": message_last_update_time,
+
+        # 스레드 답장용
+        "thread_name": thread.get("name"),
     }
 
 
@@ -91,20 +109,28 @@ async def _restore_chat_session(user_id: str) -> tuple[GraphState, bool]:
     return GraphState(), True
 
 
-def _attach_chat_context(state: GraphState, chat_event: dict) -> None:
-    # 이벤트 메타를 state.chat_context에 붙이고, 사용자 메시지를 대화 히스토리에 추가한다.
+def _attach_chat_context(state, chat_event: dict) -> None:
     state.last_activity_time = int(time.time())
     state.chat_context = {
-        "user_id": chat_event["user_id"],
-        "user_name": chat_event["user_name"],
-        "space_name": chat_event["space_name"],
-        "space_type": chat_event["space_type"],
-        "thread_name": chat_event["thread_name"],
-        "quoted_message": chat_event["quoted_message"],
-        "quoted_message_sender": chat_event["quoted_message_sender"],
-        "event_time": chat_event["event_time"],
+        "space_name": chat_event.get("space_name"),
+        "space_type": chat_event.get("space_type"),
+
+        "user_id": chat_event.get("user_id"),
+        "user_name": chat_event.get("user_name"),
+        "user_email": chat_event.get("user_email"),
+        "user_display_name": chat_event.get("user_display_name"),
+        "google_user_name": chat_event.get("google_user_name"),
+
+        "message": chat_event.get("message", ""),
+        "text": chat_event.get("text", ""),
+
+        # Google Chat 인용 답장용
+        "source_message_name": chat_event.get("message_name"),
+        "source_message_last_update_time": chat_event.get("message_last_update_time"),
+
+        # 스레드 답장용
+        "thread_name": chat_event.get("thread_name"),
     }
-    state.add_user_message(chat_event["message"])
 
 
 async def _handle_chat_card_click(event: dict, user_id: str, space_name: str) -> dict:
@@ -288,6 +314,17 @@ async def receive_message(request: Request, background_tasks: BackgroundTasks):
     slash_response = await _handle_chat_slash_command(chat_event["message"], chat_event["user_id"])
     if slash_response is not None:
         return slash_response
+
+    # 일반 메시지만 graph 입력으로 추가
+    user_message = chat_event.get("message", "").strip()
+    if user_message:
+        if hasattr(state, "add_user_message"):
+            state.add_user_message(user_message)
+        else:
+            state.messages.append({
+                "role": "user",
+                "content": user_message,
+            })
 
     await _run_chat_orchestration(state, chat_event["user_id"], is_new_session)
     return _empty_json_response()

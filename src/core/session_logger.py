@@ -5,10 +5,17 @@ session_logs 컬렉션에 턴/이벤트 단위로 기록합니다.
 
 import time
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from src.core.mongo_client import session_logs_collection
+
+KST = timezone(timedelta(hours=9))
+
+
+def _now_kst_naive() -> datetime:
+    """MongoDB에 KST 시각 그대로 저장하기 위한 timezone 없는 datetime."""
+    return datetime.now(KST).replace(tzinfo=None)
 
 
 # ── 이벤트 타입 ───────────────────────────────────────────────────────────────
@@ -123,7 +130,7 @@ async def session_event(session_id: str, type: str, label: str, task_id: Optiona
 async def create_session(session_id: str, user_id: str, user_name: str, space_name: str) -> None:
     """새 GraphState 생성 시 호출 — 세션 문서 초기화."""
     try:
-        now = datetime.utcnow()
+        now = _now_kst_naive()
         result = await session_logs_collection.insert_one({
             "session_id":        session_id,
             "user_id":           user_id,
@@ -148,7 +155,7 @@ async def touch_session(session_id: str) -> None:
     """마지막 활동 시간 갱신."""
     await session_logs_collection.update_one(
         {"session_id": session_id},
-        {"$set": {"last_activity_at": datetime.utcnow()}}
+        {"$set": {"last_activity_at": _now_kst_naive()}}
     )
 
 
@@ -158,7 +165,7 @@ async def start_turn(session_id: str) -> None:
     사용자 메시지 수신 시 호출 — 새 턴 추가.
     current_turn_idx를 원자적으로 증가시켜 이후 이벤트가 올바른 턴에 기록되도록 함.
     """
-    now = datetime.utcnow()
+    now = _now_kst_naive()
     turn = {
         "started_at": now,
         "intent":     None,
@@ -210,7 +217,7 @@ async def end_turn(session_id: str) -> None:
     turn_llm_calls = len(llm_events)
 
     started_at = last_turn.get("started_at")
-    now        = datetime.utcnow()
+    now        = _now_kst_naive()
     turn_duration_ms = int((now - started_at).total_seconds() * 1000) if started_at else None
 
     turn_summary = {
@@ -256,7 +263,7 @@ async def add_event(
         return
     idx = doc.get("current_turn_idx", 0)
 
-    now = datetime.utcnow()
+    now = _now_kst_naive()
     event = {
         "type":        type,
         "label":       label,
@@ -331,15 +338,15 @@ async def get_task_trace(task_id: str) -> list:
         ev.pop("_id", None)
         ev["seq"] = i + 1
         if ev.get("ts"):
-            ev["ts"] = _to_utc_iso(ev["ts"])
+            ev["ts"] = _to_kst_iso(ev["ts"])
     return events
 
 
 # ── 내부 헬퍼 ─────────────────────────────────────────────────────────────────
-def _to_utc_iso(dt) -> str:
-    """datetime → ISO 문자열 + Z suffix (브라우저가 UTC로 인식해서 로컬시간으로 변환)"""
+def _to_kst_iso(dt) -> str:
+    """KST 기준 datetime을 +09:00 ISO 문자열로 변환."""
     if isinstance(dt, datetime):
-        return dt.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+        return dt.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "+09:00"
     return str(dt)
 
 def _inject_seq(doc: dict) -> None:
@@ -349,16 +356,16 @@ def _inject_seq(doc: dict) -> None:
         for e_idx, event in enumerate(turn.get("events", [])):
             event["seq"] = e_idx + 1
             if event.get("ts"):
-                event["ts"] = _to_utc_iso(event["ts"])
+                event["ts"] = _to_kst_iso(event["ts"])
         if turn.get("started_at"):
-            turn["started_at"] = _to_utc_iso(turn["started_at"])
+            turn["started_at"] = _to_kst_iso(turn["started_at"])
     if doc.get("started_at"):
-        doc["started_at"] = _to_utc_iso(doc["started_at"])
+        doc["started_at"] = _to_kst_iso(doc["started_at"])
     if doc.get("last_activity_at"):
-        doc["last_activity_at"] = _to_utc_iso(doc["last_activity_at"])
+        doc["last_activity_at"] = _to_kst_iso(doc["last_activity_at"])
 
 def _serialize_dates(doc: dict) -> None:
     """목록 조회용 — 최상위 datetime 필드만 변환."""
     for key in ("started_at", "last_activity_at"):
         if isinstance(doc.get(key), datetime):
-            doc[key] = _to_utc_iso(doc[key])
+            doc[key] = _to_kst_iso(doc[key])

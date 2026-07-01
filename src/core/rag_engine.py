@@ -185,7 +185,18 @@ class RAGEngine:
         self.index = faiss.read_index(faiss.PyCallbackIOReader(reader.read))
         self.meta  = pickle.loads(meta_bytes)
         self._version = self._get_blob_version_sync()
-        logger.info(f"[RAGEngine] Blob 로드 완료 | 문서 수: {len(self.meta)} | 버전: {self._version}")
+        
+        if self.index.ntotal != len(self.meta):
+            logger.error(
+                f"[RAGEngine] Blob 인덱스/메타 불일치 | "
+                f"index={self.index.ntotal}, meta={len(self.meta)}"
+            )
+            return False
+        
+        logger.info(
+            f"[RAGEngine] Blob 로드 완료 | "
+            f"vector={self.index.ntotal} | meta={len(self.meta)} | 버전: {self._version}"
+        )
         return True
 
     # ── 인덱스 빌드 ────────────────────────────────────────────────────────────
@@ -214,19 +225,39 @@ class RAGEngine:
 
             # 임베딩 생성 (title + description + tags + content)
             def _make_embed_text(d: dict) -> str:
-                title = d.get("title", "")
-                desc = d.get("description", "")
+                title = str(d.get("title") or "").strip()
+                desc = str(d.get("description") or "").strip()
+                content = str(d.get("content") or "").strip()
+
                 tags = d.get("tags") or []
-                tags_str = " ".join(tags) if tags else ""
-                content = d.get("content", "")
-                
-                parts = []
-                if title: parts.append(f"제목: {title}")
-                if desc: parts.append(f"설명: {desc}")
-                if tags_str: parts.append(f"태그: {tags_str}")
-                if content: parts.append(f"본문: {content}")
-                
-                return "\n".join(parts)
+                if not isinstance(tags, list):
+                    tags = []
+
+                tags = [
+                    str(tag).strip()
+                    for tag in tags
+                    if str(tag).strip()
+                ]
+
+                tag_text = ", ".join(tags)
+                tag_keywords = " ".join(tags)
+
+                parts = ["문서유형: CS 지식베이스"]
+
+                if title:
+                    parts.append(f"제목:\n{title}")
+
+                if tag_text:
+                    parts.append(f"핵심 태그:\n{tag_text}")
+                    parts.append(f"검색 태그:\n{tag_keywords}")
+
+                if desc:
+                    parts.append(f"요약:\n{desc}")
+
+                if content:
+                    parts.append(f"본문:\n{content}")
+
+                return "\n\n".join(parts).strip()
 
             texts = [_make_embed_text(d) for d in docs]
             embeddings = await self.embed(texts)
@@ -428,22 +459,30 @@ def get_engine() -> RAGEngine:
         _engine = RAGEngine()
     return _engine
 
-
-# ── 앱 시작 시 초기화 (lifespan에서 호출) ─────────────────────────────────────
 async def init_rag_engine() -> None:
     """
     main.py lifespan에서 호출.
-    Blob에 인덱스 있으면 로드, 없으면 MongoDB에서 빌드.
+    앱 시작 시 Azure Blob에 저장된 FAISS 인덱스를 로드한다.
+    서버 시작 시 MongoDB 기준 재빌드는 하지 않는다.
     """
     engine = get_engine()
-    logger.info("[RAGEngine] 초기화 시작")
+    logger.info("[RAGEngine] 초기화 시작 → Blob FAISS 로드")
 
-    success = await asyncio.to_thread(engine._load_index_from_blob_sync)
-    if success:
-        logger.info("[RAGEngine] Blob에서 로드 완료")
-    else:
-        logger.info("[RAGEngine] Blob 없음 → MongoDB에서 빌드")
+    loaded = await asyncio.to_thread(engine._load_index_from_blob_sync)
+
+    if not loaded:
+        logger.warning(
+            "[RAGEngine] Blob FAISS 로드 실패. "
+            "MongoDB 기준으로 인덱스를 다시 빌드합니다."
+        )
         await engine.build_from_mongo()
+        return
+
+    logger.info(
+        f"[RAGEngine] 초기화 완료 → Blob FAISS 로드 완료 | "
+        f"vector={engine.index.ntotal if engine.index else 0} | "
+        f"meta={len(engine.meta)} | version={engine._version}"
+    )
 
 
 # ── 인스턴스 동기화 트리거 함수 (TRIGGER_REGISTRY에 등록) ─────────────────────

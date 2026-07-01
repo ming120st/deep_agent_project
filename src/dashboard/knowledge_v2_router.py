@@ -979,6 +979,30 @@ KNOWLEDGE_HTML = """<!DOCTYPE html>
     .field .hint { color: var(--muted); font-size: 12px; margin-top: 6px; }
     .textarea { width: 100%; min-height: 120px; padding: 12px 14px; resize: vertical; }
     .textarea.content-field { min-height: 200px; }
+    .markdown-editor { border: 1px solid var(--border); border-radius: 12px; overflow: hidden; background: white; }
+    .markdown-editor:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.08); }
+    .markdown-editor .textarea { border: 0; border-radius: 0; box-shadow: none; min-height: 260px; }
+    .markdown-editor .textarea:focus { box-shadow: none; }
+    .markdown-editor.field-error { border-color: var(--red) !important; box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.08) !important; }
+    .markdown-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px; border-bottom: 1px solid var(--border); background: #f8fafc; }
+    .markdown-tool-group { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+    .markdown-tool, .markdown-tab { border: 1px solid var(--border); background: white; color: var(--muted); border-radius: 6px; min-width: 32px; height: 30px; padding: 0 9px; font-size: 12px; font-weight: 600; cursor: pointer; }
+    .markdown-tool:hover, .markdown-tab:hover { color: var(--text); border-color: #cbd5e1; }
+    .markdown-tab.active { color: var(--accent); background: rgba(79,70,229,0.08); border-color: rgba(79,70,229,0.2); }
+    .markdown-preview { min-height: 260px; padding: 16px; background: #fff; border: 0; overflow: auto; }
+    .markdown-preview.empty { color: var(--muted); }
+    .markdown-body { line-height: 1.85; white-space: normal; overflow-wrap: anywhere; }
+    .markdown-body h1, .markdown-body h2, .markdown-body h3 { color: var(--text); line-height: 1.35; margin: 18px 0 10px; }
+    .markdown-body h1:first-child, .markdown-body h2:first-child, .markdown-body h3:first-child { margin-top: 0; }
+    .markdown-body h1 { font-size: 22px; }
+    .markdown-body h2 { font-size: 18px; }
+    .markdown-body h3 { font-size: 15px; }
+    .markdown-body p { margin: 0 0 12px; }
+    .markdown-body ul, .markdown-body ol { margin: 0 0 12px 22px; }
+    .markdown-body blockquote { margin: 0 0 12px; padding: 10px 12px; border-left: 3px solid var(--accent); background: #f8fafc; color: #475569; }
+    .markdown-body code { font-family: 'IBM Plex Mono', monospace; background: #f1f5f9; border: 1px solid #e2e8f0; border-radius: 5px; padding: 1px 5px; font-size: 12px; }
+    .markdown-body pre { margin: 0 0 12px; padding: 12px; background: #0f172a; color: #e2e8f0; border-radius: 8px; overflow: auto; }
+    .markdown-body pre code { background: transparent; border: 0; color: inherit; padding: 0; }
     .field-error { border-color: var(--red) !important; box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.08) !important; }
     .form-grid { display: grid; grid-template-columns: 1fr 180px; gap: 16px; }
 
@@ -1274,7 +1298,23 @@ KNOWLEDGE_HTML = """<!DOCTYPE html>
         </div>
         <div class="field">
           <label for="topicContentInput">본문 *</label>
-          <textarea class="textarea content-field" id="topicContentInput" placeholder="운영 지식을 마크다운 또는 일반 텍스트로 입력합니다."></textarea>
+          <div class="markdown-editor" id="topicContentEditor">
+            <div class="markdown-toolbar">
+              <div class="markdown-tool-group">
+                <button class="markdown-tool" type="button" data-md-insert="heading">H2</button>
+                <button class="markdown-tool" type="button" data-md-insert="bold">B</button>
+                <button class="markdown-tool" type="button" data-md-insert="list">List</button>
+                <button class="markdown-tool" type="button" data-md-insert="code">Code</button>
+              </div>
+              <div class="markdown-tool-group">
+                <button class="markdown-tab active" type="button" data-md-tab="write">작성</button>
+                <button class="markdown-tab" type="button" data-md-tab="preview">미리보기</button>
+              </div>
+            </div>
+            <textarea class="textarea content-field" id="topicContentInput" placeholder="## 처리 기준&#10;- 핵심 조건&#10;- 예외 상황&#10;&#10;```&#10;필요한 예시나 응답 템플릿&#10;```"></textarea>
+            <div class="markdown-preview markdown-body hidden empty" id="topicContentPreview">미리볼 본문이 없습니다.</div>
+          </div>
+          <div class="hint">Markdown 문법을 사용할 수 있습니다. 저장 시 원문 Markdown이 그대로 보관됩니다.</div>
         </div>
         <div class="field">
           <label for="topicTagsInput">태그</label>
@@ -1357,7 +1397,7 @@ KNOWLEDGE_HTML = """<!DOCTYPE html>
           </div>
           <div class="detail-section">
             <h3>본문</h3>
-            <div class="detail-text" id="detailBody"></div>
+            <div class="detail-text markdown-body" id="detailBody"></div>
           </div>
           <div class="detail-section">
             <h3>관련 토픽</h3>
@@ -1447,6 +1487,130 @@ KNOWLEDGE_HTML = """<!DOCTYPE html>
         .replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;')
         .replace(/'/g, '&#39;');
+    }
+
+    function inlineMarkdown(value) {
+      return escHtml(value)
+        .replace(/`([^`]+)`/g, '<code>$1</code>')
+        .replace(/\\*\\*([^*]+)\\*\\*/g, '<strong>$1</strong>')
+        .replace(/\\*([^*]+)\\*/g, '<em>$1</em>');
+    }
+
+    function renderMarkdown(value) {
+      const source = String(value || '').replace(/\\r\\n/g, '\\n').trim();
+      if (!source) return '<span class="muted">-</span>';
+
+      const blocks = source.split(/```/);
+      let html = '';
+      blocks.forEach((block, index) => {
+        if (index % 2 === 1) {
+          html += `<pre><code>${escHtml(block.trim())}</code></pre>`;
+          return;
+        }
+
+        const lines = block.split('\\n');
+        let paragraph = [];
+        let list = null;
+
+        function flushParagraph() {
+          if (!paragraph.length) return;
+          html += `<p>${inlineMarkdown(paragraph.join(' '))}</p>`;
+          paragraph = [];
+        }
+
+        function flushList() {
+          if (!list) return;
+          html += `<${list.type}>${list.items.map(item => `<li>${inlineMarkdown(item)}</li>`).join('')}</${list.type}>`;
+          list = null;
+        }
+
+        lines.forEach(line => {
+          const trimmed = line.trim();
+          if (!trimmed) {
+            flushParagraph();
+            flushList();
+            return;
+          }
+
+          const heading = trimmed.match(/^(#{1,3})\\s+(.+)$/);
+          if (heading) {
+            flushParagraph();
+            flushList();
+            const level = heading[1].length;
+            html += `<h${level}>${inlineMarkdown(heading[2])}</h${level}>`;
+            return;
+          }
+
+          const quote = trimmed.match(/^>\\s?(.+)$/);
+          if (quote) {
+            flushParagraph();
+            flushList();
+            html += `<blockquote>${inlineMarkdown(quote[1])}</blockquote>`;
+            return;
+          }
+
+          const unordered = trimmed.match(/^[-*]\\s+(.+)$/);
+          const ordered = trimmed.match(/^\\d+\\.\\s+(.+)$/);
+          if (unordered || ordered) {
+            flushParagraph();
+            const type = unordered ? 'ul' : 'ol';
+            if (!list || list.type !== type) flushList();
+            if (!list) list = { type, items: [] };
+            list.items.push((unordered || ordered)[1]);
+            return;
+          }
+
+          flushList();
+          paragraph.push(trimmed);
+        });
+
+        flushParagraph();
+        flushList();
+      });
+
+      return html || '<span class="muted">-</span>';
+    }
+
+    function updateMarkdownPreview() {
+      const input = document.getElementById('topicContentInput');
+      const preview = document.getElementById('topicContentPreview');
+      if (!input || !preview) return;
+      preview.innerHTML = renderMarkdown(input.value);
+      preview.classList.toggle('empty', !input.value.trim());
+    }
+
+    function setMarkdownMode(mode) {
+      const input = document.getElementById('topicContentInput');
+      const preview = document.getElementById('topicContentPreview');
+      if (!input || !preview) return;
+      updateMarkdownPreview();
+      input.classList.toggle('hidden', mode === 'preview');
+      preview.classList.toggle('hidden', mode !== 'preview');
+      document.querySelectorAll('[data-md-tab]').forEach(tab => {
+        tab.classList.toggle('active', tab.dataset.mdTab === mode);
+      });
+    }
+
+    function insertMarkdownSnippet(kind) {
+      const input = document.getElementById('topicContentInput');
+      if (!input) return;
+      const snippets = {
+        heading: '## 제목',
+        bold: '**강조할 내용**',
+        list: '- 항목',
+        code: '```\\n예시 코드 또는 템플릿\\n```',
+      };
+      const snippet = snippets[kind] || '';
+      const start = input.selectionStart || 0;
+      const end = input.selectionEnd || 0;
+      const before = input.value.slice(0, start);
+      const after = input.value.slice(end);
+      const needsNewline = before && !before.endsWith('\\n') ? '\\n' : '';
+      input.value = before + needsNewline + snippet + after;
+      const cursor = before.length + needsNewline.length + snippet.length;
+      input.focus();
+      input.setSelectionRange(cursor, cursor);
+      updateMarkdownPreview();
     }
 
     function showToast(message) {
@@ -1802,6 +1966,7 @@ KNOWLEDGE_HTML = """<!DOCTYPE html>
       ['topicTitleInput', 'topicDescriptionInput', 'topicContentInput'].forEach(id => {
         document.getElementById(id).classList.remove('field-error');
       });
+      document.getElementById('topicContentEditor').classList.remove('field-error');
     }
 
     function validateForm() {
@@ -1810,7 +1975,11 @@ KNOWLEDGE_HTML = """<!DOCTYPE html>
       ['topicTitleInput', 'topicDescriptionInput', 'topicContentInput'].forEach(id => {
         const el = document.getElementById(id);
         if (!el.value.trim()) {
-          el.classList.add('field-error');
+          if (id === 'topicContentInput') {
+            document.getElementById('topicContentEditor').classList.add('field-error');
+          } else {
+            el.classList.add('field-error');
+          }
           valid = false;
         }
       });
@@ -1831,6 +2000,7 @@ KNOWLEDGE_HTML = """<!DOCTYPE html>
       document.getElementById('relatedSuggestions').classList.remove('open');
       clearFieldErrors();
       updateDescriptionCount();
+      setMarkdownMode('write');
       renderSelectedRelated();
     }
 
@@ -1902,6 +2072,7 @@ KNOWLEDGE_HTML = """<!DOCTYPE html>
       document.getElementById('relatedTopicSearch').value = '';
       clearFieldErrors();
       updateDescriptionCount();
+      setMarkdownMode('write');
       renderSelectedRelated();
       renderRelatedSuggestions();
       const index = topics.findIndex(item => item.id === topic.id);
@@ -1982,7 +2153,7 @@ KNOWLEDGE_HTML = """<!DOCTYPE html>
         document.getElementById('detailVisibilityBadge').innerHTML = badgeHtml('visibility', topic.visibility);
         document.getElementById('detailStatusBadge').innerHTML = badgeHtml('status', topic.status);
         document.getElementById('detailDescription').textContent = topic.description || '-';
-        document.getElementById('detailBody').textContent = topic.content || '-';
+        document.getElementById('detailBody').innerHTML = renderMarkdown(topic.content || '-');
         document.getElementById('detailTags').innerHTML = (topic.tags || []).length
           ? topic.tags.map(tag => `<span class="tag-chip">${escHtml(tag)}</span>`).join('')
           : '<span class="muted">태그 없음</span>';
@@ -2389,10 +2560,18 @@ KNOWLEDGE_HTML = """<!DOCTYPE html>
     domainFilter.addEventListener('change', () => fetchTopics(1));
     statusFilter.addEventListener('change', () => fetchTopics(1));
     descriptionInput.addEventListener('input', updateDescriptionCount);
+    document.getElementById('topicContentInput').addEventListener('input', updateMarkdownPreview);
+    document.querySelectorAll('[data-md-tab]').forEach(tab => {
+      tab.addEventListener('click', () => setMarkdownMode(tab.dataset.mdTab));
+    });
+    document.querySelectorAll('[data-md-insert]').forEach(button => {
+      button.addEventListener('click', () => insertMarkdownSnippet(button.dataset.mdInsert));
+    });
     document.getElementById('relatedTopicSearch').addEventListener('input', renderRelatedSuggestions);
 
     document.addEventListener('DOMContentLoaded', async () => {
       updateDescriptionCount();
+      updateMarkdownPreview();
       await Promise.all([fetchTopics(1), fetchConflicts()]);
     });
   </script>
