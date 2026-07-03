@@ -646,7 +646,7 @@ async def confirm_payload(state: GraphState) -> GraphState:
         f"• 상품코드: {p.get('ProductCode', '')}",
         f"• 수량: {p.get('Qty', '')}",
         f"• 결제금액: {p.get('PaymentPrice', '')}원",
-        "\n**확인** 또는 수정·상품변경 요청을 말씀해주세요.",
+        "\n재발급을 원하시면 **실행** 또는 수정·상품변경 요청을 말씀해주세요.",
     ]
     state.add_ai_message("\n".join(lines))
     _set_param(state, "payload_shown",     True)
@@ -711,14 +711,14 @@ async def process_confirmation(state: GraphState) -> GraphState:
         '  "message_to_user": "..."\n'
         "}\n\n"
         "규칙:\n"
-        "- confirm: 사용자가 '확인', '진행', '맞아요' 등 명확하게 동의·승인 의사를 표현한 경우\n"
-        "- show: '다시 보여줘', '보여줘', '내용 알려줘', '재발급 내용은?' 등 조회만 요청거나 이전 응답이 채팅방에 전달되지 않은 오류로 에이전트를 부르는 경우 (확인·승인 아님)\n"
+        "- confirm: '실행', '그대로 실행', '발송 실행', '실행해줘', '발송해'처럼 이심을 발송하라고 요청한 경우\n"
+        "- show: '다시 보여줘', '보여줘', '내용 알려줘' 등 문맥상 조회를 요청했거나 이전 응답이 채팅방에 전달되지 않은 오류로 에이전트를 부르는 경우\n"
         "- modify: 특정 필드 수정 요청 (수정 가능 필드: Email, Mobile, Qty)\n"
         "- change_product: 상품 교체 요청 (next_product_index로 product_list에서 선택)\n"
         "- 수정 불가 필드(OutOrderId, UserID, JoinRoute, ProductCode, ProductName, PaymentPrice) "
         "변경 요청 시 action=modify, updated_payload 변경 없이, message_to_user에 '해당 항목은 수정이 불가합니다' 안내\n"
         "- updated_payload는 전체 payload를 반환 (수정된 버전 또는 기존 그대로)\n"
-        "- 단순 조회·확인 요청은 반드시 show로 분류하고 절대 confirm으로 분류하지 말 것\n"
+        "- 단순 조회 및 판단이 불가한 요청은 반드시 show로 분류할 것\n"
         "JSON만 반환."
     )
 
