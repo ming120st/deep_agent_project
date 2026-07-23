@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from src.core.mongo_client import session_logs_collection
+from src.core.utils import encrypt_text, decrypt_text
 
 KST = timezone(timedelta(hours=9))
 
@@ -267,7 +268,7 @@ async def add_event(
     event = {
         "type":        type,
         "label":       label,
-        "content":     content,
+        "content":     encrypt_text(content) if content else None,
         "ts":          now,
         "duration_ms": duration_ms,
         "llm":         llm,
@@ -339,6 +340,8 @@ async def get_task_trace(task_id: str) -> list:
         ev["seq"] = i + 1
         if ev.get("ts"):
             ev["ts"] = _to_kst_iso(ev["ts"])
+        if ev.get("content"):
+            ev["content"] = decrypt_text(ev["content"])
     return events
 
 
@@ -350,13 +353,15 @@ def _to_kst_iso(dt) -> str:
     return str(dt)
 
 def _inject_seq(doc: dict) -> None:
-    """조회 시 turn_seq, event seq 주입 + datetime 직렬화."""
+    """조회 시 turn_seq, event seq 주입 + datetime 직렬화 + 평문화(복호화)."""
     for t_idx, turn in enumerate(doc.get("turns", [])):
         turn["turn_seq"] = t_idx + 1
         for e_idx, event in enumerate(turn.get("events", [])):
             event["seq"] = e_idx + 1
             if event.get("ts"):
                 event["ts"] = _to_kst_iso(event["ts"])
+            if event.get("content"):
+                event["content"] = decrypt_text(event["content"])
         if turn.get("started_at"):
             turn["started_at"] = _to_kst_iso(turn["started_at"])
     if doc.get("started_at"):
