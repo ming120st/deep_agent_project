@@ -5,6 +5,7 @@ FastAPI 백엔드에서 호출되는 진입점.
 Google Chat 메시지를 받아 메인 대화 그래프를 실행합니다.
 """
 import asyncio
+from langgraph.types import Command
 from src.workflow.graph_infra.state import GraphState
 from src.workflow.main_graph.graph import main_graph
 from src.core.session_logger import create_session, start_turn, end_turn, touch_session, add_event, EventType
@@ -28,7 +29,7 @@ def _get_chat_reply_kwargs(state: GraphState) -> dict:
     }
 
 
-async def orchestrate_chat_event(state: GraphState, config: dict, is_new_session: bool) -> None:
+async def orchestrate_chat_event(state: GraphState, config: dict, is_new_session: bool, is_pending_interrupt: bool = False, user_message: str = "") -> None:
     """
     메인 대화 그래프를 실행합니다.
 
@@ -69,7 +70,10 @@ async def orchestrate_chat_event(state: GraphState, config: dict, is_new_session
         await start_turn(session_id)
 
         try:
-            await main_graph.ainvoke(state, config=config)
+            if is_pending_interrupt:
+                await main_graph.ainvoke(Command(resume=user_message), config=config)
+            else:
+                await main_graph.ainvoke(state, config=config)
 
         except Exception as e:
             print(f"[Orchestrator] 오류: {e}")

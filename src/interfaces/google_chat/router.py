@@ -89,24 +89,28 @@ async def _remember_chat_space(chat_event: dict, background_tasks: BackgroundTas
         )
 
 
-async def _restore_chat_session(user_id: str) -> tuple[GraphState, bool]:
-    # 사용자(thread_id) 단위 기존 세션을 복원하고, 1시간 무활동이면 새 세션으로 리셋한다.
+async def _restore_chat_session(user_id: str) -> tuple[GraphState, bool, bool]:
+    # 세 번째 반환값: pending interrupt 여부 (existing.next가 비어있지 않으면 True)
     config = {"configurable": {"thread_id": user_id}}
-    # get_state는 langgraph의 메서드인데 graph.get_state(config) 하면 체크포인터에 있는 state를 반환한다.
     existing = await asyncio.to_thread(main_graph.get_state, config)
 
     if existing.values:
         state = GraphState(**existing.values)
-        current_time = int(time.time())
-        if state.last_activity_time and current_time - state.last_activity_time > 3600:
-            print("세션 타임아웃 → 초기화")
-            return GraphState(), True
-
-        print("기존 세션 유지")
-        return state, False
+        # "type": "user_input" 인 interrupt만 채팅 resume 대상으로 인식
+        interrupt_values = [
+            intr.value
+            for task in existing.tasks
+            for intr in task.interrupts
+        ]
+        has_pending_interrupt = bool(existing.next) and any(
+            isinstance(v, dict) and v.get("type") == "user_input"
+            for v in interrupt_values
+        )
+        print("기존 세션 유지" + (" (pending interrupt)" if has_pending_interrupt else ""))
+        return state, False, has_pending_interrupt
 
     print("새로운 세션 생성")
-    return GraphState(), True
+    return GraphState(), True, False
 
 
 def _attach_chat_context(state, chat_event: dict) -> None:
@@ -277,10 +281,10 @@ def _empty_json_response() -> Response:
     return Response(content=json.dumps({}), media_type="application/json", status_code=200)
 
 
-async def _run_chat_orchestration(state: GraphState, user_id: str, is_new_session: bool) -> None:
+async def _run_chat_orchestration(state: GraphState, user_id: str, is_new_session: bool, has_pending_interrupt: bool = False, user_message: str = "") -> None:
     # webhook 응답 지연을 막기 위해 오케스트레이션은 백그라운드 태스크로 실행한다.
     config = {"configurable": {"thread_id": user_id}}
-    asyncio.create_task(orchestrate_chat_event(state, config, is_new_session))
+    asyncio.create_task(orchestrate_chat_event(state, config, is_new_session, has_pending_interrupt, user_message))
 
 
 @router.post("/chat")
@@ -308,16 +312,16 @@ async def receive_message(request: Request, background_tasks: BackgroundTasks):
 
     await _remember_chat_space(chat_event, background_tasks)
 
-    state, is_new_session = await _restore_chat_session(chat_event["user_id"])
+    state, is_new_session, has_pending_interrupt = await _restore_chat_session(chat_event["user_id"])
     _attach_chat_context(state, chat_event)
 
     slash_response = await _handle_chat_slash_command(chat_event["message"], chat_event["user_id"])
     if slash_response is not None:
         return slash_response
 
-    # 일반 메시지만 graph 입력으로 추가
     user_message = chat_event.get("message", "").strip()
-    if user_message:
+    if user_message and not has_pending_interrupt:
+        # resume 케이스는 Command(resume=user_message)로 전달하므로 state에 추가하지 않음
         if hasattr(state, "add_user_message"):
             state.add_user_message(user_message)
         else:
@@ -326,5 +330,5 @@ async def receive_message(request: Request, background_tasks: BackgroundTasks):
                 "content": user_message,
             })
 
-    await _run_chat_orchestration(state, chat_event["user_id"], is_new_session)
+    await _run_chat_orchestration(state, chat_event["user_id"], is_new_session, has_pending_interrupt, user_message)
     return _empty_json_response()
