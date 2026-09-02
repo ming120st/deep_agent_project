@@ -1,0 +1,23 @@
+# Python 캐시
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*$py.class
+
+# 가상 환경
+venv/
+env/
+.venv/
+
+# 패키지 관리
+*.egg-info/
+dist/
+build/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# 환경 설정
+.env
+.env.local
