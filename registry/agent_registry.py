@@ -7,50 +7,43 @@ AGENT_REGISTRY: dict[str, dict[str, Any]] = {}
 
 
 def register_agent(
+    *,
     name: str,
     description: str,
-):
-    def decorator(factory):
+    system_prompt: str | None = None,
+    model: Any = None,
+    tools: list[Any] | None = None,
+    runnable: Any = None,
+) -> None:
+
+    if runnable is not None:
         AGENT_REGISTRY[name] = {
-            "factory": factory,
+            "name": name,
             "description": description,
+            "runnable": runnable,
         }
-        return factory
+        return
 
-    return decorator
+    AGENT_REGISTRY[name] = {
+        "name": name,
+        "description": description,
+        "system_prompt": system_prompt,
+        "model": model,
+        "tools": tools or [],
+    }
 
 
-
-def get_agent(name: str):
-    item = AGENT_REGISTRY.get(name)
-
-    if not item:
-        raise ValueError(
-            f"Agent not found: {name}"
-        )
-
-    agent_or_factory = item["factory"]
-
-    if hasattr(agent_or_factory, "ainvoke"):
-        return agent_or_factory
-
-    return agent_or_factory()
-
-def get_agent_catalog() -> list[dict]:
+def get_agent_catalog() -> list[dict[str, str]]:
     return [
         {
-            "name": name,
+            "name": item["name"],
             "description": item["description"],
         }
-        for name, item in AGENT_REGISTRY.items()
+        for item in AGENT_REGISTRY.values()
     ]
+
 
 def get_subagents() -> list[dict[str, Any]]:
-    return [
-        {
-            "name": name,
-            "description": item["description"],
-            "runnable": get_agent(name),
-        }
-        for name, item in AGENT_REGISTRY.items()
-    ]
+    return list(
+        AGENT_REGISTRY.values()
+    )

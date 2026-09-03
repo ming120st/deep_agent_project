@@ -20,9 +20,7 @@ from registry.agent_search import (
     search_subagents,
 )
 
-
 logger = get_logger("subagent_filter")
-
 
 class SubAgentFilterMiddleware(AgentMiddleware):
     state_schema = MainDeepAgentState
@@ -71,7 +69,25 @@ class SubAgentFilterMiddleware(AgentMiddleware):
                 for m in request.messages
             ],
         )
-    
+        logger.info(
+            "[MODEL_MESSAGE_DETAIL] %s",
+            [
+                {
+                    "type": type(message).__name__,
+                    "content": getattr(
+                        message,
+                        "content",
+                        None,
+                    ),
+                    "tool_calls": getattr(
+                        message,
+                        "tool_calls",
+                        None,
+                    ),
+                }
+                for message in request.messages
+            ],
+        )
         logger.info(
             "[MODEL_TOOLS] count=%s names=%s",
             len(request.tools or []),

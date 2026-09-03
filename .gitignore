@@ -21,3 +21,7 @@ build/
 # 환경 설정
 .env
 .env.local
+
+# 로그 업로드 X
+/logs
+*.txt

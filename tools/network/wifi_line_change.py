@@ -1,28 +1,26 @@
-from __future__ import annotations
+from langchain.tools import ToolRuntime
+from langchain_core.tools import tool
 
-from dataclasses import dataclass
-
-from integrations.device_job.client import (
-    DeviceJobClient,
-)
-from integrations.device_job.schemas import (
-    DeviceJobRequest,
-)
+from integrations.device_job.client import DeviceJobClient, DeviceJobRequest
 
 
-@dataclass(slots=True)
-class WifiLineChangeSubmission:
-    job_id: str
-
-
-async def submit_wifi_line_change_job(
-    *,
+@tool
+async def submit_wifi_line_change(
     device_number: str,
     country_code: str,
     expiry_date: str,
-    thread_id: str,
-    user_name: str | None = None,
-) -> WifiLineChangeSubmission:
+    runtime: ToolRuntime,
+) -> str:
+    """ 
+    WiFi 단말기의 회선을 변경한다.  
+    사용자가 실제 회선 변경을 요청한 경우 사용한다. 
+    device_number, country_code, expiry_date가 모두 확보된 후 호출한다.     
+    """  
+
+    state = runtime.state
+
+    thread_id = state.get("session_id")
+    user_name = state.get("user_name")
 
     request = DeviceJobRequest(
         thread_id=thread_id,
@@ -38,11 +36,6 @@ async def submit_wifi_line_change_job(
     )
 
     client = DeviceJobClient()
+    await client.submit(request)
 
-    await client.submit(
-        request
-    )
-
-    return WifiLineChangeSubmission(
-        job_id=request.job_id,
-    )
+    return request.job_id

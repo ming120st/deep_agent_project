@@ -15,7 +15,7 @@ from integrations.device_job.schemas import (
     DeviceJobCallback,
 )
 from tools.network.wifi_line_change import (
-    submit_wifi_line_change_job,
+    submit_wifi_line_change,
 )
 
 PARAMETER_PROMPTS = {
@@ -145,7 +145,7 @@ async def request_device_job(
         {},
     )
 
-    submission = await submit_wifi_line_change_job(
+    submission = await submit_wifi_line_change(
         device_number=params["device_number"],
         country_code=params["country_code"],
         expiry_date=params["expiry_date"],

@@ -1,3 +1,5 @@
+import agents.registry
+
 from deepagents import (
     create_deep_agent as create_official_deep_agent,
 )
@@ -13,7 +15,6 @@ from registry.agent_registry import (
     get_subagents,
 )
 
-
 async def create_deep_agent():
     system_prompt = await prompt_service.render(
         "deep_agent.main.system",
@@ -21,14 +22,10 @@ async def create_deep_agent():
 
     return create_official_deep_agent(
         model=LLM_LIGHT,
-
         subagents=get_subagents(),
-
         middleware=[
-            
             SubAgentFilterMiddleware(),
         ],
-
         system_prompt=system_prompt,
         state_schema=MainDeepAgentState,
         checkpointer=checkpointer,

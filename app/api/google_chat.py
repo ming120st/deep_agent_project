@@ -43,11 +43,26 @@ def _extract_response_text(
 async def google_chat(request: Request):
     deep_agent = request.app.state.deep_agent
 
-    chat_message = parse_google_chat_event(
-        await request.json()
+    payload = await request.json()
+
+    logger.info(
+        "[RAW_CHAT] message_name=%s thread_name=%s text=%r",
+        payload.get("message", {}).get("name"),
+        payload.get("message", {})
+        .get("thread", {})
+        .get("name"),
+        payload.get("message", {})
+        .get("text", ""),
     )
 
-    session_id = chat_message.thread_id
+    chat_message = parse_google_chat_event(
+        payload
+    )
+
+    session_id = (
+        f"{chat_message.space_id}:"
+        f"{chat_message.user_id}"
+    )
 
     logger.info(
         "[CHAT] session_id=%s user_id=%s message=%r",

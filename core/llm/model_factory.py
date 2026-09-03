@@ -11,6 +11,7 @@ LLM_LIGHT = ChatGoogleGenerativeAI(
     model="gemini-2.5-flash", 
     temperature=0,
     request_timeout=60,
+    thinking_budget=128,
     max_retries=1,)
 
 # LLM_LIGHT = ChatOpenAI(model="gpt-5.1", temperature=0)

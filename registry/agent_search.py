@@ -17,7 +17,6 @@ def _normalize(text: str) -> str:
         text.lower().strip(),
     )
 
-
 def _calculate_score(
     query: str,
     agent: dict[str, Any],
@@ -37,13 +36,17 @@ def _calculate_score(
         description.split()
     )
 
-    overlap = (
-        query_tokens
-        & description_tokens
-    )
+    score = 0.0
 
-    return float(len(overlap))
+    for query_token in query_tokens:
+        for description_token in description_tokens:
+            if (
+                query_token in description_token
+                or description_token in query_token
+            ):
+                score += 1.0
 
+    return score
 
 async def search_subagents(
     query: str,
