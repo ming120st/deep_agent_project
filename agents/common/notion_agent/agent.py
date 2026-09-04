@@ -5,6 +5,7 @@ from pathlib import Path
 
 from core.llm.model_factory import LLM_LIGHT
 from registry.agent_registry import register_agent
+
 from tools.common.notion.tool import (
     notion_append_markdown,
     notion_create_page,
@@ -15,6 +16,7 @@ from tools.common.notion.tool import (
     notion_replace_page_content,
     notion_search,
 )
+
 
 SYSTEM_PROMPT = (
     Path(__file__).parent

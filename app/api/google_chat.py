@@ -1,12 +1,25 @@
+import hashlib
 from typing import Any
+
 from fastapi import APIRouter, Request
+
 from integrations.google_chat.event_parser import (
     parse_google_chat_event,
 )
 from core.tracing.logger import get_logger
 
+
 router = APIRouter()
 logger = get_logger("google_chat")
+
+
+def _make_internal_thread_id(
+    external_thread_id: str,
+) -> str:
+    return hashlib.sha256(
+        external_thread_id.encode("utf-8")
+    ).hexdigest()[:32]
+
 
 def _extract_text(content: Any) -> str:
     if isinstance(content, str):
@@ -21,52 +34,67 @@ def _extract_text(content: Any) -> str:
 
     return str(content)
 
+
 def _extract_response_text(
     result: dict,
 ) -> str:
-    messages = result.get("messages", [])
+    messages = result.get(
+        "messages",
+        [],
+    )
 
     if not messages:
         return "처리 결과가 없습니다."
 
     last_message = messages[-1]
 
-    content = (
-        last_message.content
-        if hasattr(last_message, "content")
-        else last_message
-    )
+    if hasattr(last_message, "content"):
+        content = last_message.content
+
+    elif isinstance(last_message, dict):
+        content = last_message.get(
+            "content",
+            "",
+        )
+
+    else:
+        content = str(last_message)
 
     return _extract_text(content)
 
+
 @router.post("/chat")
-async def google_chat(request: Request):
+async def google_chat(
+    request: Request,
+):
     deep_agent = request.app.state.deep_agent
 
     payload = await request.json()
 
-    logger.info(
-        "[RAW_CHAT] message_name=%s thread_name=%s text=%r",
-        payload.get("message", {}).get("name"),
+    google_thread_name = (
         payload.get("message", {})
         .get("thread", {})
-        .get("name"),
-        payload.get("message", {})
-        .get("text", ""),
+        .get("name")
     )
 
     chat_message = parse_google_chat_event(
         payload
     )
 
-    session_id = (
-        f"{chat_message.space_id}:"
-        f"{chat_message.user_id}"
+    if not google_thread_name:
+        google_thread_name = (
+            f"{chat_message.space_id}:"
+            f"{chat_message.user_id}"
+        )
+
+    thread_id = _make_internal_thread_id(
+        google_thread_name
     )
 
     logger.info(
-        "[CHAT] session_id=%s user_id=%s message=%r",
-        session_id,
+        "[CHAT] google_thread=%s internal_thread=%s user_id=%s message=%r",
+        google_thread_name,
+        thread_id,
         chat_message.user_id,
         chat_message.text,
     )
@@ -79,14 +107,10 @@ async def google_chat(request: Request):
                     "content": chat_message.text,
                 }
             ],
-            "session_id": session_id,
-            "user_id": chat_message.user_id,
-            "current_input": chat_message.text,
-            "context": {},
         },
         config={
             "configurable": {
-                "thread_id": session_id, 
+                "thread_id": thread_id,
             }
         },
     )
@@ -95,12 +119,6 @@ async def google_chat(request: Request):
         result
     )
 
-    logger.info(
-        "[CHAT_RESPONSE] session_id=%s response=%r",
-        session_id,
-        response_text,
-    )
-
     return {
-        "text": response_text
+        "text": response_text,
     }

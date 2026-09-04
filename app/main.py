@@ -8,9 +8,6 @@ from integrations.device_job.client import (
     init_device_job_client,
     close_device_job_client,
 )
-import agents.test.dummy_agents
-import agents.network.wifi_line_change.agent
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
 

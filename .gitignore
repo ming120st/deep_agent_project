@@ -25,3 +25,4 @@ build/
 # 로그 업로드 X
 /logs
 *.txt
+test.py
