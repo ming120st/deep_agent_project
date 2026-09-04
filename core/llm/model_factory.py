@@ -7,14 +7,15 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 
 # 응답 생성, 의도분류 등 일반 작업용
 
-LLM_LIGHT = ChatGoogleGenerativeAI(
-    model="gemini-2.5-flash", 
-    temperature=0,
-    request_timeout=60,
-    thinking_budget=128,
-    max_retries=1,)
+# LLM_LIGHT = ChatGoogleGenerativeAI(
+#     model="gemini-2.5-flash", 
+#     temperature=0,
+#     request_timeout=60,
+#     max_retries=1,)
+
 
 # LLM_LIGHT = ChatOpenAI(model="gpt-5.1", temperature=0)
+LLM_LIGHT = ChatOpenAI(model="gpt-5.4-mini", temperature=0)
 # LLM_LIGHT = ChatOpenAI(model="gpt-5.2", temperature=0)
 
 # 복잡한 추론, 에이전트 작업용

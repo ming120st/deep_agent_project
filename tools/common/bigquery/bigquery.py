@@ -116,8 +116,64 @@ def _json_default(value: Any) -> str:
 # --------------------------------------------------------------------------
 # Tools
 # --------------------------------------------------------------------------
+@tool
+def list_tables(
+    dataset: Annotated[
+        str,
+        (
+            "조회할 BigQuery 데이터셋의 전체 경로. "
+            "반드시 'project_id.dataset_id' 형식으로 전달한다. "
+            "예: 'daily-report-widemobile.wifi_usage'"
+        ),
+    ],
+) -> str:
+    """지정한 BigQuery 데이터셋의 테이블 목록을 조회한다."""
 
+    if "." not in dataset:
+        return json.dumps(
+            {
+                "error": (
+                    "dataset은 'project_id.dataset_id' 형식이어야 합니다. "
+                    f"현재 값: '{dataset}'"
+                )
+            },
+            ensure_ascii=False,
+        )
 
+    try:
+        project_id, dataset_id = dataset.split(".", 1)
+
+        dataset_ref = bigquery.DatasetReference(
+            project_id,
+            dataset_id,
+        )
+
+        tables = list(
+            _client.list_tables(dataset_ref)
+        )
+
+        return json.dumps(
+            {
+                "dataset": dataset,
+                "tables": [
+                    table.table_id
+                    for table in tables
+                ],
+            },
+            ensure_ascii=False,
+        )
+
+    except Exception as exc:
+        return json.dumps(
+            {
+                "error": (
+                    f"데이터셋 '{dataset}'의 "
+                    f"테이블 목록 조회 중 오류: {exc}"
+                )
+            },
+            ensure_ascii=False,
+        )
+    
 @tool
 def get_table_schema(
     table: Annotated[
