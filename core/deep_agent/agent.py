@@ -9,7 +9,7 @@ from registry.agent_registry import get_subagents
 from core.llm.model_factory import LLM_LIGHT
 from core.prompt.dependencies import prompt_service
 from core.deep_agent.state import MainDeepAgentState
-from core.state.checkpointer import checkpointer
+from langgraph.checkpoint.memory import InMemorySaver  # noqa: E402
 from core.tracing.logger import get_logger
 
 
@@ -40,6 +40,6 @@ async def create_deep_agent():
         ],
         system_prompt=system_prompt,
         state_schema=MainDeepAgentState,
-        checkpointer=checkpointer,
+        checkpointer=InMemorySaver(),
         name="deep_agent",
     )

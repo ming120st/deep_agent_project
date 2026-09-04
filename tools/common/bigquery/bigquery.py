@@ -128,9 +128,15 @@ def get_table_schema(
         "예: 'my-gcp-project.my_dataset.my_table' 또는 'my_dataset.my_table'",
     ],
 ) -> str:
-    """BigQuery 테이블의 컬럼명, 타입, 설명을 조회한다.
+    """지정한 BigQuery 테이블의 컬럼명/타입/설명을 조회한다.
 
-    SQL 작성 전 실제 테이블 구조를 확인해야 할 때 사용한다.
+    SQL을 작성하기 전에 반드시 이 도구를 먼저 호출해서 실제 컬럼 구조를 확인해야 한다.
+    컬럼명을 추측해서 바로 run_sql_query를 호출하면 존재하지 않는 컬럼 오류가 날 수 있다.
+
+    반환값 예시:
+        {"table": "proj.ds.tbl", "columns": [{"name": "Order_ID", "type": "STRING", "description": "..."}]}
+    실패 시:
+        {"error": "사람이 읽을 수 있는 한글 오류 메시지"}
     """
     try:
         bq_table = _client.get_table(table)
@@ -175,7 +181,7 @@ def run_sql_query(
     try:
         query_job = _client.query(query, job_config=job_config)
         rows = [dict(row.items()) for row in query_job.result(timeout=_QUERY_TIMEOUT_SECONDS)]
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc: 
         return json.dumps({"error": f"쿼리 실행 중 오류가 발생했습니다: {exc}"}, ensure_ascii=False)
 
     return json.dumps({"row_count": len(rows), "rows": rows}, ensure_ascii=False, default=_json_default)

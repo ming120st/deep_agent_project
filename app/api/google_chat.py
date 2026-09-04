@@ -1,4 +1,3 @@
-import hashlib
 from typing import Any
 
 from fastapi import APIRouter, Request
@@ -7,19 +6,12 @@ from integrations.google_chat.event_parser import (
     parse_google_chat_event,
 )
 from core.tracing.logger import get_logger
-
+from core.state.session_manager import (
+    session_manager,
+)
 
 router = APIRouter()
 logger = get_logger("google_chat")
-
-
-def _make_internal_thread_id(
-    external_thread_id: str,
-) -> str:
-    return hashlib.sha256(
-        external_thread_id.encode("utf-8")
-    ).hexdigest()[:32]
-
 
 def _extract_text(content: Any) -> str:
     if isinstance(content, str):
@@ -80,17 +72,10 @@ async def google_chat(
     chat_message = parse_google_chat_event(
         payload
     )
-
-    if not google_thread_name:
-        google_thread_name = (
-            f"{chat_message.space_id}:"
-            f"{chat_message.user_id}"
-        )
-
-    thread_id = _make_internal_thread_id(
-        google_thread_name
+    thread_id = session_manager.get_or_create(
+        user_id=chat_message.user_id,
+        space_id=chat_message.space_id,
     )
-
     logger.info(
         "[CHAT] google_thread=%s internal_thread=%s user_id=%s message=%r",
         google_thread_name,
