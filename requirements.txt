@@ -1,4 +1,4 @@
-deepagents==0.7.11
+﻿deepagents==0.7.11
 fastapi==0.141.1
 httpx==0.28.1
 Jinja2==3.1.6

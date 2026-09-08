@@ -92,6 +92,7 @@ async def google_chat(
                     "content": chat_message.text,
                 }
             ],
+            "user_email": chat_message.user_email,
         },
         config={
             "configurable": {

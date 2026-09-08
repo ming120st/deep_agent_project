@@ -1,10 +1,12 @@
+"""
+메인 Deep Agent에서 사용하는 공통 State 스키마를 정의한다.
+
+"""
 from __future__ import annotations
-
 from typing import Annotated, Any, NotRequired
-
 from deepagents import DeepAgentState
 
-
+# 업데이트할 state 가 없으면 유지, 있으면 새값으로 교체
 def _keep_latest_non_empty(
     current: Any,
     update: Any,
@@ -17,7 +19,7 @@ def _keep_latest_non_empty(
 
     return update
 
-
+# 기존 dict에 새 값을 병합하고, 중복 key는 최신 값으로 갱신한다.
 def _merge_dict(
     current: dict[str, Any] | None,
     update: dict[str, Any] | None,
@@ -26,7 +28,6 @@ def _merge_dict(
         **(current or {}),
         **(update or {}),
     }
-
 
 class MainDeepAgentState(DeepAgentState):
 
@@ -40,6 +41,12 @@ class MainDeepAgentState(DeepAgentState):
     current_input: NotRequired[
         Annotated[
             str,
+            _keep_latest_non_empty,
+        ]
+    ]
+    user_email: NotRequired[
+        Annotated[
+            str | None,
             _keep_latest_non_empty,
         ]
     ]

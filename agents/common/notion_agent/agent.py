@@ -32,22 +32,22 @@ SYSTEM_PROMPT = SYSTEM_PROMPT.replace(
 )
 
 
-register_agent(
-    name="notion",
-    description=(
-        "Notion 페이지와 데이터베이스를 검색, 조회, 생성, "
-        "수정하거나 내용을 기록해야 할 때 사용한다."
-    ),
-    system_prompt=SYSTEM_PROMPT,
-    model=LLM_LIGHT,
-    tools=[
-        notion_search,
-        notion_get_page,
-        notion_get_page_markdown,
-        notion_query_database,
-        notion_get_block_children,
-        notion_create_page,
-        notion_append_markdown,
-        notion_replace_page_content,
-    ],
-)
+def register_notion_agent() -> None:
+    register_agent(
+        name="notion",
+        description=(
+            "Notion 페이지와 데이터베이스를 검색, 조회, 생성, "
+            "수정하거나 내용을 기록해야 할 때 사용한다."
+        ),
+        system_prompt=SYSTEM_PROMPT,
+        model=LLM_LIGHT,
+        tools=[
+            notion_search,
+            notion_get_page,
+            notion_get_page_markdown,
+            notion_query_database,
+            notion_append_markdown,
+            notion_create_page,
+            notion_replace_page_content,
+        ],
+    )

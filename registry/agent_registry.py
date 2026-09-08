@@ -13,6 +13,7 @@ def register_agent(
     system_prompt: str | None = None,
     model: Any = None,
     tools: list[Any] | None = None,
+    skills: list[str] | None = None,
     runnable: Any = None,
 ) -> None:
 
@@ -30,6 +31,7 @@ def register_agent(
         "system_prompt": system_prompt,
         "model": model,
         "tools": tools or [],
+        "skills": skills or [],
     }
 
 

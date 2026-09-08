@@ -7,3 +7,4 @@ class ChatMessage(BaseModel):
     space_id: str
     thread_id: str
     message_id: str
+    user_email: str
