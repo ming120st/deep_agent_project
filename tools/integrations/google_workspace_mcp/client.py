@@ -34,9 +34,3 @@ def create_google_workspace_mcp_client():
             }
         }
     )
-
-
-async def load_google_drive_tools():
-    client = create_google_workspace_mcp_client()
-
-    return await client.get_tools()
