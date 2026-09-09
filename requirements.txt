@@ -12,3 +12,6 @@ pymongo==4.17.0
 python-dotenv==1.2.3
 typing_extensions==4.16.0
 uvicorn==0.52.4
+uv==0.12.10
+mcp==1.29.1
+langchain-mcp-adapters==0.3.2

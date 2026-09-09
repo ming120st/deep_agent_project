@@ -2,13 +2,10 @@ from pathlib import Path
 
 from core.llm.model_factory import LLM_LIGHT
 from registry.agent_registry import register_agent
-from tools.integrations.google_workspace_mcp.tools import (
-    drive_search,
-    drive_create_file,
-    gmail_search,
-    gmail_recent_messages,
-    gmail_send,
+from tools.integrations.google_workspace_mcp.runtime import (
+    google_workspace_runtime,
 )
+
 
 BASE_DIR = Path(__file__).parent
 
@@ -17,23 +14,21 @@ SYSTEM_PROMPT = (
     / "prompts"
     / "system.md"
 ).read_text(
-    encoding="utf-8",
+    encoding="utf-8"
 )
 
 
-def register_drive_agent() -> None:
+def register_drive_agent():
     register_agent(
-        name="drive",
+        name="google_workspace",
         description=(
-            "Google Drive 파일 작업과 Gmail 메일 검색 및 조회가 필요할 때 사용한다."
+            "Google Drive와 Gmail 관련 업무가 "
+            "필요할 때 사용한다."
         ),
         system_prompt=SYSTEM_PROMPT,
         model=LLM_LIGHT,
-        tools=[
-            drive_search,
-            drive_create_file,
-            gmail_search,
-            gmail_recent_messages,
-            gmail_send,
-        ],
+        tools=(
+            google_workspace_runtime
+            .build_agent_tools()
+        ),
     )

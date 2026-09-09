@@ -16,18 +16,19 @@ def create_google_workspace_mcp_client():
         ],
         "GOOGLE_OAUTH_CLIENT_SECRET": os.environ[
             "GOOGLE_OAUTH_CLIENT_SECRET"
-        ],
+        ],        
     }
 
     return MultiServerMCPClient(
         {
             "google_workspace": {
-                "command": os.environ["UVX_PATH"],
+                "command": "uvx",
                 "args": [
                     "workspace-mcp",
                     "--tools",
                     "drive",
                     "gmail",
+                    "search",
                 ],
                 "transport": "stdio",
                 "env": env,

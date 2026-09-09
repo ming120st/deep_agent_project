@@ -10,11 +10,6 @@ description: BigQuery에서 실제 데이터를 조회하거나 COUNT, SUM, AVG 
 
 BigQuery 환경에서 데이터 집계, 통계 계산 및 조회를 위한 Standard SQL을 작성하고 실행합니다.
 
-## 언제 사용하나요?
-- 실제 DB 데이터 조회 및 결과 확인
-- 데이터 집계(COUNT, SUM, GROUP BY 등) 및 통계 계산
-- 특정 조건을 만족하는 샘플 데이터 탐색
-
 ## SQL 작성 규칙
 1. **조회 전용(SELECT) 문만 허용**
    - 반드시 `SELECT` 또는 `WITH ... SELECT`로 시작하는 single statement여야 합니다.
