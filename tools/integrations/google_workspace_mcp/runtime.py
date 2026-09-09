@@ -102,27 +102,21 @@ class GoogleWorkspaceMCPRuntime:
         self,
         mcp_tool,
     ) -> type[BaseModel]:
-
-        # 원본 스키마를 읽어서
-        original_schema = (
-            mcp_tool.args_schema
-            or {}
+    
+        original_schema = mcp_tool.args_schema
+    
+        properties = original_schema.get(
+            "properties",
+            {},
         )
-        # 파라미터 목록을 가져와서
-        properties = (
-            original_schema.get(
-                "properties",
-                {},
-            )
-        )
-        # 필수 파라미터 확인 후
+    
         required = set(
             original_schema.get(
                 "required",
                 [],
             )
         )
-
+    
         type_map = {
             "string": str,
             "integer": int,
@@ -131,39 +125,30 @@ class GoogleWorkspaceMCPRuntime:
             "array": list,
             "object": dict,
         }
-
+    
         fields = {}
-
-        for (
-            field_name,
-            field_schema,
-        ) in properties.items():
-
-            if (
-                field_name
-                in SYSTEM_INJECTED_PARAMS
-            ):
+    
+        for field_name, field_schema in properties.items():
+        
+            if field_name in SYSTEM_INJECTED_PARAMS:
                 continue
-
+            
             python_type = type_map.get(
                 field_schema.get("type"),
                 Any,
             )
-
+    
             default = (
                 ...
                 if field_name in required
-                else field_schema.get(
-                    "default",
-                    None,
-                )
+                else field_schema.get("default")
             )
-
+    
             fields[field_name] = (
                 python_type,
                 default,
             )
-
+    
         return create_model(
             f"{mcp_tool.name}AgentArgs",
             **fields,
