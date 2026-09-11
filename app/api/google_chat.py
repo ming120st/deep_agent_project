@@ -199,6 +199,8 @@ async def google_chat(
         )
     )
 
+    print(f"\n=== [AGENT RESPONSE] ===\n{response_text}\n========================\n")
+
     return {
         "text": response_text,
     }
