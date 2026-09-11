@@ -1,16 +1,13 @@
 from deepagents import (
     create_deep_agent as create_official_deep_agent,
 )
-from agents.registry import (
-    register_all_agents,
-)
 from langchain.agents.middleware import TodoListMiddleware
 from deepagents.backends.filesystem import FilesystemBackend
 from registry.agent_registry import get_subagents
-from core.llm.model_factory import LLM_LIGHT
-from core.prompt.dependencies import prompt_service
+from core.llm.model_service import model_service
+from core.prompt.prompt_service import prompt_service
 from core.deep_agent.state import MainDeepAgentState
-from langgraph.checkpoint.memory import InMemorySaver  # noqa: E402
+from langgraph.checkpoint.memory import InMemorySaver
 from core.tracing.logger import get_logger
 import os
 
@@ -22,8 +19,8 @@ async def create_deep_agent():
     system_prompt = await prompt_service.render(
         "deep_agent.main.system",
     )
-    register_all_agents()
-    subagents = get_subagents()
+
+    subagents = await get_subagents()
 
     for agent in subagents:
         print(
@@ -41,7 +38,7 @@ async def create_deep_agent():
     )
 
     return create_official_deep_agent(
-        model=LLM_LIGHT,
+        model=model_service.LLM_LIGHT,
         subagents=subagents,
         middleware=[
             TodoListMiddleware(),
@@ -50,7 +47,9 @@ async def create_deep_agent():
         state_schema=MainDeepAgentState,
         checkpointer=InMemorySaver(),
         backend=FilesystemBackend(
-            root_dir=os.environ["DEEP_AGENT_ROOT_DIR"],
+            root_dir=os.environ[
+                "DEEP_AGENT_ROOT_DIR"
+            ],
         ),
         name="deep_agent",
     )

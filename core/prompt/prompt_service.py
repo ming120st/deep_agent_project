@@ -1,16 +1,19 @@
-# Repository에서 프롬프트를 가져와 변수 치환 등 실제 사용 로직을 처리
-
 from typing import Any
+
 from jinja2 import Environment, StrictUndefined
-from core.prompt.prompt_repository import PromptRepository
+from pymongo.asynchronous.database import AsyncDatabase
+
+from core.database.mongo import mongo_db
+from core.prompt.schemas import PromptConfig
+
 
 class PromptService:
 
     def __init__(
         self,
-        repository: PromptRepository,
+        db: AsyncDatabase,
     ):
-        self.repository = repository
+        self.collection = db["prompts"]
 
         self.jinja = Environment(
             undefined=StrictUndefined,
@@ -22,7 +25,9 @@ class PromptService:
         key: str,
     ) -> str:
 
-        prompt = await self.repository.get_active_prompt(key)
+        prompt = await self.get_active_prompt(
+            key
+        )
 
         if prompt is None:
             raise ValueError(
@@ -37,35 +42,91 @@ class PromptService:
         **values: Any,
     ) -> str:
 
-        prompt = await self.repository.get_active_prompt(key)
+        prompt = await self.get_active_prompt(
+            key
+        )
 
         if prompt is None:
             raise ValueError(
                 f"Active prompt not found: {key}"
             )
 
-        render_values = dict(values)
-
-        # 변수 검증 및 기본값 처리
-        for variable in prompt.variables:
-
-            if variable.name in render_values:
-                continue
-
-            if variable.default is not None:
-                render_values[variable.name] = variable.default
-                continue
-
-            if variable.required:
-                raise ValueError(
-                    "Required prompt variable missing: "
-                    f"{key}.{variable.name}"
-                )
-
-            render_values[variable.name] = ""
-
         template = self.jinja.from_string(
             prompt.content
         )
 
-        return template.render(**render_values)
+        return template.render(
+            **values
+        )
+
+    async def get_active_prompt(
+        self,
+        key: str,
+    ) -> PromptConfig | None:
+
+        document = await self.collection.find_one(
+            {
+                "key": key,
+                "enabled": True,
+            },
+            sort=[
+                ("version", -1),
+            ],
+        )
+
+        if document is None:
+            return None
+
+        document.pop(
+            "_id",
+            None,
+        )
+
+        return PromptConfig.model_validate(
+            document
+        )
+
+    async def get_active_skills_by_agent(
+        self,
+        agent: str,
+    ) -> list[PromptConfig]:
+
+        cursor = (
+            self.collection
+            .find(
+                {
+                    "agent": agent,
+                    "prompt_type": "skill",
+                    "enabled": True,
+                }
+            )
+            .sort(
+                "skill_name",
+                1,
+            )
+        )
+
+        documents = await cursor.to_list(
+            length=None
+        )
+
+        skills: list[PromptConfig] = []
+
+        for document in documents:
+            document.pop(
+                "_id",
+                None,
+            )
+
+            skills.append(
+                PromptConfig.model_validate(
+                    document
+                )
+            )
+
+        return skills
+
+
+prompt_service = PromptService(
+    mongo_db
+)

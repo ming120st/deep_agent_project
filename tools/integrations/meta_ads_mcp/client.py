@@ -1,4 +1,4 @@
-# tools/integrations/meta_ads_mcp/client.py
+from __future__ import annotations
 
 import os
 
@@ -7,22 +7,30 @@ from langchain_mcp_adapters.client import (
 )
 
 
-def create_meta_ads_mcp_client():
+META_MCP_URL = os.environ.get("META_MCP_URL")
+
+
+def create_meta_ads_mcp_client() -> MultiServerMCPClient:
+    access_token = os.environ.get(
+        "META_ACCESS_TOKEN"
+    )
+
+    if not access_token:
+        raise RuntimeError(
+            "META_ACCESS_TOKEN 환경변수가 설정되지 않았습니다."
+        )
+
     return MultiServerMCPClient(
         {
             "meta_ads": {
-                "url": os.environ[
-                    "META_ADS_MCP_URL"
-                ],
-                "transport": "streamable_http",
+                "url": META_MCP_URL,
+                "transport": "http",
                 "headers": {
                     "Authorization": (
-                        "Bearer "
-                        + os.environ[
-                            "META_ADS_ACCESS_TOKEN"
-                        ]
-                    )
+                        f"Bearer {access_token}"
+                    ),
                 },
             }
-        }
+        },
+        handle_tool_errors=True,
     )

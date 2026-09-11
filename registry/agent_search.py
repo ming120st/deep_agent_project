@@ -54,7 +54,7 @@ async def search_subagents(
 ) -> list[dict[str, Any]]:
     """사용자 요청과 관련된 SubAgent 후보를 반환한다."""
 
-    catalog = get_agent_catalog()
+    catalog =await get_agent_catalog()
 
     scored_agents = [
         {
