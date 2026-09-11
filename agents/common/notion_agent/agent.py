@@ -1,6 +1,5 @@
 import os
 
-from core.llm.model_service import model_service
 from core.prompt.prompt_service import prompt_service
 from registry.agent_registry import register_agent
 from tools.common.notion.tool import (
@@ -29,7 +28,6 @@ async def register_notion_agent() -> None:
             "수정하거나 내용을 기록해야 할 때 사용한다."
         ),
         system_prompt=system_prompt,
-        model=model_service.LLM_LIGHT,
         tools=[
             notion_search,
             notion_get_page,

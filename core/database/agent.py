@@ -194,3 +194,17 @@ async def get_enabled_tools(
         if _get_tool_name(tool)
         in enabled_names
     ]
+async def get_agent_config(
+    agent_id: str,
+) -> dict | None:
+
+    return await mongo_db[
+        "agent_settings"
+    ].find_one(
+        {
+            "agent_id": agent_id,
+        },
+        {
+            "_id": 0,
+        },
+    )

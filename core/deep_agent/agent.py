@@ -37,8 +37,12 @@ async def create_deep_agent():
         ],
     )
 
+    main_model = await model_service.get_model(
+        "llm.light"
+    )
+
     return create_official_deep_agent(
-        model=model_service.LLM_LIGHT,
+        model=main_model,
         subagents=subagents,
         middleware=[
             TodoListMiddleware(),

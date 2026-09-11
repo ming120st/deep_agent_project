@@ -1,14 +1,10 @@
 from __future__ import annotations
-
 import os
-
 from langchain_mcp_adapters.client import (
     MultiServerMCPClient,
 )
 
-
 META_MCP_URL = os.environ.get("META_MCP_URL")
-
 
 def create_meta_ads_mcp_client() -> MultiServerMCPClient:
     access_token = os.environ.get(
