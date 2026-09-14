@@ -1,3 +1,6 @@
+# Google Chat 사용자별 대화 세션을 생성하고,
+# 마지막 활동 시간을 기준으로 세션 만료 및 재사용을 관리한다.
+
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone

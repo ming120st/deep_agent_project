@@ -1,10 +1,20 @@
+"""
+Agent의 DB 설정을 저장하고 조회
+
+주요 역할:
+Agent 기본정보 DB 동기화
+Tool 목록 DB 동기화
+Agent 활성화 여부 조회
+활성 Tool 조회
+모델/skills/prompt_key 같은 설정 조회
+"""
 from __future__ import annotations
-
 from typing import Any
-
 from core.database.mongo import mongo_db
-
-
+from core.llm.model_service import (
+    model_service,
+)
+# Tool 객체에서 이름을 추출한다.
 def _get_tool_name(
     tool: Any,
 ) -> str:
@@ -30,7 +40,7 @@ def _get_tool_name(
         f"Tool 이름을 확인할 수 없습니다: {tool}"
     )
 
-
+# 코드에 등록된 Agent 기본정보와 Tool 목록을 DB 설정과 동기화한다.
 async def sync_agent_to_db(
     agent: dict[str, Any],
 ) -> None:
@@ -65,16 +75,18 @@ async def sync_agent_to_db(
         upsert=True,
     )
 
-    # runnable Agent는 Tool 동기화 제외
-    if "runnable" in agent:
-        return
-
     settings = await settings_collection.find_one(
         {
             "agent_id": agent_id,
         }
     )
+    default_model_key = None
 
+    if settings is None:
+        default_model_key = (
+            await model_service
+            .get_default_model_key()
+        )
     existing_tools = {}
 
     if settings:
@@ -128,7 +140,7 @@ async def sync_agent_to_db(
             },
             "$setOnInsert": {
                 "agent_id": agent_id,
-                "model": "LLM_LIGHT",
+                "model": default_model_key,
                 "skills": [],
                 "prompt_key": None,
                 "enabled": True,
@@ -137,7 +149,7 @@ async def sync_agent_to_db(
         upsert=True,
     )
 
-
+# DB에 저장된 Agent의 활성화 여부를 조회한다.
 async def is_agent_enabled(
     agent_id: str,
 ) -> bool:
@@ -157,7 +169,7 @@ async def is_agent_enabled(
         True,
     )
 
-
+# DB 설정을 기준으로 활성화된 Tool만 필터링해 반환한다.
 async def get_enabled_tools(
     agent_id: str,
     tools: list[Any],
@@ -194,6 +206,8 @@ async def get_enabled_tools(
         if _get_tool_name(tool)
         in enabled_names
     ]
+
+# Agent의 실행 설정(model, tools, skills 등)을 DB에서 조회한다.
 async def get_agent_config(
     agent_id: str,
 ) -> dict | None:
@@ -206,5 +220,26 @@ async def get_agent_config(
         },
         {
             "_id": 0,
+        },
+    )
+
+# 코드에 더 이상 등록되지 않은 Agent를 비활성화한다.
+async def disable_missing_agents(
+    registered_agent_ids: set[str],
+) -> None:
+    await mongo_db[
+        "agent_registry"
+    ].update_many(
+        {
+            "agent_id": {
+                "$nin": list(
+                    registered_agent_ids
+                )
+            }
+        },
+        {
+            "$set": {
+                "enabled": False
+            }
         },
     )

@@ -1,6 +1,6 @@
 """
 메인 Deep Agent에서 사용하는 공통 State 스키마를 정의한다.
-
+이 state 필드는 이 타입이고, 값이 업데이트 될 때, 제공되는 함수를 사용해서 병합해라.
 """
 from __future__ import annotations
 from typing import Annotated, Any, NotRequired

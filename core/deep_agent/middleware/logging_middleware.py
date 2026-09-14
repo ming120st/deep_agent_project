@@ -1,32 +1,45 @@
-"""Middleware 실습: Tool 호출 전후 로깅.
-
-AgentMiddleware.wrap_tool_call 훅으로 모든 Tool 실행을 가로채서
-호출 전/후를 터미널에 출력한다. Deep Agents가 제공하는 표준 확장 지점이며,
-Tool 자체를 수정하지 않고도 모든 Tool 호출에 공통 동작(로깅, 재시도, 모니터링 등)을
-끼워 넣을 수 있음을 보여준다.
-"""
-
 import time
-from bson.json_util import _truncate
-from langchain.agents.middleware.types import AgentMiddleware
-
-from core.tracing.logger import get_logger
-
+from typing import Any
+from langchain.agents.middleware.types import (
+    AgentMiddleware,
+)
+from core.tracing.logger import (
+    get_logger,
+)
 logger = get_logger("tool_logging")
-class ToolLoggingMiddleware(AgentMiddleware):
 
+
+def _truncate_value(
+    value: Any,
+    max_length: int = 1000,
+) -> str:
+    text = str(value)
+
+    if len(text) <= max_length:
+        return text
+
+    return text[:max_length] + "..."
+
+
+class ToolLoggingMiddleware(
+    AgentMiddleware
+):
     async def awrap_tool_call(
         self,
         request,
         handler,
     ):
-        tool_name = request.tool_call["name"]
-        args = request.tool_call.get("args", {})
+        tool_call = request.tool_call
+
+        tool_name = tool_call["name"]
+        tool_call_id = tool_call.get("id")
+        args = tool_call.get("args", {})
 
         logger.info(
-            "[TOOL_CALL] name=%s args=%s",
+            "[TOOL_CALL] id=%s name=%s args=%s",
+            tool_call_id,
             tool_name,
-            _truncate(args),
+            _truncate_value(args),
         )
 
         start = time.monotonic()
@@ -35,7 +48,8 @@ class ToolLoggingMiddleware(AgentMiddleware):
             result = await handler(request)
 
             logger.info(
-                "[TOOL_RESULT] name=%s elapsed=%.2fs",
+                "[TOOL_RESULT] id=%s name=%s elapsed=%.2fs",
+                tool_call_id,
                 tool_name,
                 time.monotonic() - start,
             )
@@ -44,7 +58,8 @@ class ToolLoggingMiddleware(AgentMiddleware):
 
         except Exception:
             logger.exception(
-                "[TOOL_ERROR] name=%s elapsed=%.2fs",
+                "[TOOL_ERROR] id=%s name=%s elapsed=%.2fs",
+                tool_call_id,
                 tool_name,
                 time.monotonic() - start,
             )

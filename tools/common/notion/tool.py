@@ -1,4 +1,4 @@
-# tools/common/notion/tools.py
+# notion too 정의들.
 
 from __future__ import annotations
 
@@ -225,7 +225,6 @@ def _resolve_data_source_id(
 # --------------------------------------------------------------------------
 # Search
 # --------------------------------------------------------------------------
-
 
 @tool
 def notion_search(

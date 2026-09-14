@@ -9,7 +9,6 @@ from core.llm.model_repository import (
 
 
 class ModelService:
-
     async def get_model(
         self,
         model: str,
@@ -30,6 +29,21 @@ class ModelService:
         return create_model(
             config
         )
+    
+    async def get_default_model_key(
+        self,
+    ) -> str:
+        model_key = await (
+            model_repository
+            .get_default_chat_model_key()
+        )
+
+        if model_key is None:
+            raise ValueError(
+                "Default chat model not found."
+            )
+
+        return model_key
 
 
 model_service = ModelService()

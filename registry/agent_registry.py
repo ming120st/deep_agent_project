@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 from typing import Any
-from core.database.agent import (
+from core.deep_agent.agent_config import (
     get_agent_config,
     get_enabled_tools,
     is_agent_enabled,
     sync_agent_to_db,
+    disable_missing_agents,
 )
 from core.llm.model_service import (
     model_service,
@@ -27,10 +28,10 @@ def register_agent(
     tools: list[Any] | None = None,
     skills: list[str] | None = None,
     middleware: list[Any] | None = None,
+    runnable: Any | None = None,
 ) -> None:
 
-
-    AGENT_REGISTRY[name] = {
+    agent = {
         "name": name,
         "description": description,
         "system_prompt": system_prompt,
@@ -39,14 +40,27 @@ def register_agent(
         "middleware": middleware or [],
     }
 
+    if runnable is not None:
+        agent["runnable"] = runnable
+
+    AGENT_REGISTRY[name] = agent
+
 # DB 랑 코드랑 agent 들 sync 맞춰줌 
 async def sync_agents_to_db() -> None:
+    registered_agent_ids = set(
+        AGENT_REGISTRY.keys()
+    )
+
     for agent in (
         AGENT_REGISTRY.values()
     ):
         await sync_agent_to_db(
             agent
         )
+
+    await disable_missing_agents(
+        registered_agent_ids
+    )
 
 # 코드에 등록된 Agent 정의에 DB 설정을 적용해서 Deep Agent가 사용할 최종 SubAgent 목록을 만든다.
 async def get_subagents() -> list[

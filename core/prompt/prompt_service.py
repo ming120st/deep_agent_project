@@ -1,20 +1,26 @@
+# Prompt 조회 결과를 사용해 최종 프롬프트 문자열을 생성하는 서비스
+
+from pathlib import Path
 from typing import Any
-
-from jinja2 import Environment, StrictUndefined
-from pymongo.asynchronous.database import AsyncDatabase
-
-from core.database.mongo import mongo_db
-from core.prompt.schemas import PromptConfig
-
+from jinja2 import (
+    Environment,
+    StrictUndefined,
+)
+from core.prompt.prompt_repository import (
+    PromptRepository,
+    prompt_repository,
+)
+from pathlib import Path
 
 class PromptService:
-
     def __init__(
         self,
-        db: AsyncDatabase,
+        repository: PromptRepository,
     ):
-        self.collection = db["prompts"]
+        # Prompt DB 조회 로직을 담당하는 Repository를 주입
+        self.repository = repository
 
+        # DB에 저장된 Jinja 템플릿 프롬프트를 렌더링하기 위한 설정
         self.jinja = Environment(
             undefined=StrictUndefined,
             autoescape=False,
@@ -24,9 +30,12 @@ class PromptService:
         self,
         key: str,
     ) -> str:
-
-        prompt = await self.get_active_prompt(
-            key
+        # 활성화된 최신 Prompt를 조회하고 content만 반환
+        prompt = await (
+            self.repository
+            .get_active_prompt(
+                key
+            )
         )
 
         if prompt is None:
@@ -41,9 +50,12 @@ class PromptService:
         key: str,
         **values: Any,
     ) -> str:
-
-        prompt = await self.get_active_prompt(
-            key
+        # 활성 Prompt를 조회한 뒤 Jinja 변수까지 치환하여 최종 문자열 반환
+        prompt = await (
+            self.repository
+            .get_active_prompt(
+                key
+            )
         )
 
         if prompt is None:
@@ -51,82 +63,85 @@ class PromptService:
                 f"Active prompt not found: {key}"
             )
 
-        template = self.jinja.from_string(
-            prompt.content
+        template = (
+            self.jinja
+            .from_string(
+                prompt.content
+            )
         )
 
         return template.render(
             **values
         )
 
-    async def get_active_prompt(
-        self,
-        key: str,
-    ) -> PromptConfig | None:
-
-        document = await self.collection.find_one(
-            {
-                "key": key,
-                "enabled": True,
-            },
-            sort=[
-                ("version", -1),
-            ],
-        )
-
-        if document is None:
-            return None
-
-        document.pop(
-            "_id",
-            None,
-        )
-
-        return PromptConfig.model_validate(
-            document
-        )
-
     async def get_active_skills_by_agent(
         self,
         agent: str,
-    ) -> list[PromptConfig]:
-
-        cursor = (
-            self.collection
-            .find(
-                {
-                    "agent": agent,
-                    "prompt_type": "skill",
-                    "enabled": True,
-                }
+    ):
+        # 특정 Agent에 연결된 활성 Skill Prompt 목록 조회
+        return await (
+            self.repository
+            .get_active_skills_by_agent(
+                agent
             )
-            .sort(
-                "skill_name",
-                1,
+        )
+    
+    # 특정 Agent의 활성 Skill을 DB에서 조회하고
+    # Deep Agent가 사용할 수 있도록 런타임 SKILL.md 파일로 생성한다.
+    async def prepare_skills(
+        self,
+        agent: str,
+    ) -> list[str]:
+        skills = await (
+            self.repository
+            .get_active_skills_by_agent(
+                agent
             )
         )
 
-        documents = await cursor.to_list(
-            length=None
+        if not skills:
+            return []
+
+        base_dir = (
+            Path(".runtime")
+            / "skills"
+            / agent
         )
 
-        skills: list[PromptConfig] = []
+        base_dir.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
 
-        for document in documents:
-            document.pop(
-                "_id",
-                None,
+        for skill in skills:
+            if not skill.skill_name:
+                continue
+
+            skill_dir = (
+                base_dir
+                / skill.skill_name
             )
 
-            skills.append(
-                PromptConfig.model_validate(
-                    document
-                )
+            skill_dir.mkdir(
+                parents=True,
+                exist_ok=True,
             )
 
-        return skills
+            skill_file = (
+                skill_dir
+                / "SKILL.md"
+            )
 
+            skill_file.write_text(
+                skill.content,
+                encoding="utf-8",
+            )
 
+        return [
+            str(base_dir)
+        ]
+
+# 애플리케이션 전역에서 사용할 PromptService 인스턴스 생성
 prompt_service = PromptService(
-    mongo_db
+    prompt_repository
 )

@@ -22,4 +22,25 @@ class ModelRepository:
                 "_id": 0,
             },
         )
+    async def get_default_chat_model_key(
+        self,
+    ) -> str | None:
+        config = await mongo_db[
+            "llm_models"
+        ].find_one(
+            {
+                "type": "chat",
+                "enabled": True,
+                "is_default": True,
+            },
+            {
+                "_id": 0,
+                "key": 1,
+            },
+        )
+
+        if config is None:
+            return None
+
+        return config["key"]
 model_repository = ModelRepository()

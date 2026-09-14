@@ -21,6 +21,8 @@ class PromptConfig(BaseModel):
 
     version: int
     content: str
+    
+    skill_name: str | None = None
 
     variables: list[PromptVariable] = Field(
         default_factory=list
