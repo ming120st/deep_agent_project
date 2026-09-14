@@ -15,7 +15,7 @@ Agent 실행 로직, 모델 호출, Tool 연결 등을 작성합니다.
 
 ## 3. Agent 등록 정보 작성
 
-예 : agents/<agent_name>/registry.py
+예 : agents/registry.py
 
 Agent ID, 이름, 설명, Tool, 모델, Prompt 관련 등록 정보를 작성합니다.
 
