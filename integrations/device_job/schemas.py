@@ -36,7 +36,7 @@ class DeviceJobCallback(BaseModel):
     job_id: str
 
     status: Literal[
-        "completed",
+        "success",
         "error",
     ]
 
