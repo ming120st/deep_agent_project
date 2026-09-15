@@ -15,6 +15,7 @@ from tools.network.esim_replacement_tools import (
 )
 from deepagents import create_deep_agent, CompiledSubAgent
 from core.llm.model_service import model_service
+from deepagents.backends.filesystem import FilesystemBackend
 
 BASE_DIR = Path(__file__).parent
 SKILLS_DIR = BASE_DIR / "skills"
@@ -27,7 +28,7 @@ SKILLS_DIR = BASE_DIR / "skills"
 
 async def build_product_search_subagent() -> dict:
     search_skills = await prompt_service.prepare_skills(
-        "esim-search-skill"
+        "product_search_subagent"
     )
     return {
         "name": "product_search_subagent",
@@ -52,7 +53,7 @@ async def esim_replacement_agent() -> CompiledSubAgent:
     )
 
     main_skills = await prompt_service.prepare_skills(
-        "esim-replacement-main-manual"
+        "esim_replacement"
     )
 
     product_search_subagent = await build_product_search_subagent()
@@ -70,6 +71,7 @@ async def esim_replacement_agent() -> CompiledSubAgent:
         ],
         skills=main_skills,
         subagents=[product_search_subagent],
+        backend=FilesystemBackend(),
     )
 
     return CompiledSubAgent(
