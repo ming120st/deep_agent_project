@@ -11,6 +11,7 @@ from tools.common.bigquery.bigquery import (
     get_table_schema,
     run_sql_query,
 )
+from core.tracing.logging_middleware import ToolLoggingMiddleware
 
 
 BQ_PROJECT_ID = os.environ[
@@ -46,6 +47,9 @@ async def register_bigquery_agent() -> None:
             list_tables,
             get_table_schema,
             run_sql_query,
+        ],
+        middleware=[
+            ToolLoggingMiddleware(),
         ],
         skills=skills,
     )

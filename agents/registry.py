@@ -7,7 +7,7 @@ from agents.common.notion_agent.agent import (
 from agents.common.drive.agent import (
     register_drive_agent,
 )
-from agents.esim_agent.esim_replacement_agent.agent import (
+from agents.esim_replacement_agent.agent import (
     register_esim_replacement_agent,
 )
 from agents.marketing.agent import(
