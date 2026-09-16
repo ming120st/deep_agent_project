@@ -97,7 +97,7 @@ def _to_google_chat_format(
     Google Chat에서 보이기 좋은 형식으로 변환한다.
     """
 
-    # Markdown bold:
+    # Markdown bold
     # **text** -> *text*
     text = re.sub(
         r"\*\*(.+?)\*\*",
@@ -164,43 +164,70 @@ async def google_chat(
         chat_message.text,
     )
 
-    result = await deep_agent.ainvoke(
-        {
-            "messages": [
-                {
-                    "role": "user",
-                    "content": (
-                        chat_message.text
-                    ),
-                }
-            ],
-            "user_email": (
-                chat_message.user_email
-            ),
-        },
-        config={
-            "configurable": {
-                "thread_id": (
+    try:
+        result = await deep_agent.ainvoke(
+            {
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": (
+                            chat_message.text
+                        ),
+                    }
+                ],
+                "user_email": (
+                    chat_message.user_email
+                ),
+                "session_id": (
                     thread_id
                 ),
-            }
-        },
-    )
-
-    response_text = (
-        _extract_response_text(
-            result
+            },
+            config={
+                "configurable": {
+                    "thread_id": (
+                        thread_id
+                    ),
+                }
+            },
         )
-    )
 
-    response_text = (
-        _to_google_chat_format(
-            response_text
+        response_text = (
+            _extract_response_text(
+                result
+            )
         )
-    )
 
-    print(f"\n=== [AGENT RESPONSE] ===\n{response_text}\n========================\n")
+        response_text = (
+            _to_google_chat_format(
+                response_text
+            )
+        )
 
-    return {
-        "text": response_text,
-    }
+        logger.info(
+            (
+                "[AGENT_RESPONSE] "
+                "thread_id=%s "
+                "response=%r"
+            ),
+            thread_id,
+            response_text,
+        )
+
+        return {
+            "text": response_text,
+        }
+
+    except Exception:
+        logger.exception(
+            (
+                "[AGENT_ERROR] "
+                "thread_id=%s"
+            ),
+            thread_id,
+        )
+
+        return {
+            "text": (
+                "요청 처리 중 오류가 발생했습니다."
+            ),
+        }
