@@ -35,8 +35,11 @@ async def register_bigquery_agent() -> None:
     register_agent(
         name="bigquery",
         description=(
-            "BigQuery 데이터 조회 및 분석이 "
-            "필요할 때 사용한다."
+            "BigQuery 전용 Agent. "
+            "BigQuery 테이블, 데이터셋, SQL, 사내 DW 데이터를 "
+            "조회하거나 분석할 때 사용한다. "
+            "Meta Ads 캠페인, 광고세트, 광고, 소재/크리에이티브 "
+            "분석 요청에는 사용하지 않는다."
         ),
         system_prompt=system_prompt,
         tools=[

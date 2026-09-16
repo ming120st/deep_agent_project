@@ -26,4 +26,7 @@ build/
 /logs
 *.txt
 test.py
+
+# 런타임 실행시 생성 파일
+.runtime/
 yh_memo.md

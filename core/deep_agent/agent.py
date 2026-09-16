@@ -11,9 +11,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 from core.tracing.logger import get_logger
 import os
 
-
 logger = get_logger("deep_agent")
-
 
 async def create_deep_agent():
     system_prompt = await prompt_service.render(

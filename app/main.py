@@ -39,8 +39,8 @@ async def lifespan(
     app: FastAPI,
 ):
     # 1. 외부 리소스 시작
-    await google_workspace_runtime.start()
     await meta_ads_runtime.start()
+    await google_workspace_runtime.start()
     await init_device_job_client()
 
     # 2. Agent 등록

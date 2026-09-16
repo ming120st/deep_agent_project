@@ -1,6 +1,7 @@
 # Prompt 조회 결과를 사용해 최종 프롬프트 문자열을 생성하는 서비스
 
 from pathlib import Path
+import shutil
 from typing import Any
 from jinja2 import (
     Environment,
@@ -10,8 +11,6 @@ from core.prompt.prompt_repository import (
     PromptRepository,
     prompt_repository,
 )
-from pathlib import Path
-
 class PromptService:
     def __init__(
         self,
@@ -92,15 +91,6 @@ class PromptService:
         self,
         agent: str,
     ) -> list[str]:
-        skills = await (
-            self.repository
-            .get_active_skills_by_agent(
-                agent
-            )
-        )
-
-        if not skills:
-            return []
 
         base_dir = (
             Path(".runtime")
@@ -108,11 +98,31 @@ class PromptService:
             / agent
         )
 
+        # 기존 런타임 Skill 폴더 제거
+        if base_dir.exists():
+            shutil.rmtree(
+                base_dir
+            )
+
+        # DB에서 현재 활성화된 Skill 조회
+        skills = await (
+            self.repository
+            .get_active_skills_by_agent(
+                agent
+            )
+        )
+
+        # 활성 Skill이 없으면 빈 목록 반환
+        if not skills:
+            return []
+
+        # Agent별 Skill 루트 폴더 생성
         base_dir.mkdir(
             parents=True,
             exist_ok=True,
         )
 
+        # DB Skill을 런타임 SKILL.md로 생성
         for skill in skills:
             if not skill.skill_name:
                 continue

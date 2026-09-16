@@ -1,3 +1,5 @@
+# Meta Ads MCP 서버에 접속하기 위한 MultiServerMCPClient 객체를 생성하는 설정 파일
+
 from __future__ import annotations
 import os
 from langchain_mcp_adapters.client import (
