@@ -149,6 +149,7 @@ async def esim_resolve_reissue_product(
 ) -> dict:
     """
     재발급용 상품코드를 결정한다.
+    사용자의 요청으로 상품을 변경할 때는 이 tool을 사용하지 않고, product-search 서브에이전트에 위임해야 한다.
     1) 요청일수 == 구매일수면 기존 상품 그대로 사용.
     2) 다르면 같은 상품의 일수만 바꾼 대체코드(alt code)를 시도.
     3) 그것도 안 되면 status="needs_product_search"를 리턴 — 이 경우
@@ -237,7 +238,7 @@ async def esim_build_confirmation(
         "Name": name,
         "ProductName": product_name,
         "ProductCode": product_code,
-        "JoinRoute": str(join_route_id),
+        "JoinRoute": str(join_route_id), # 가입 경로 ID. 헤더에 들어가는 루트ID 아님.
         "Qty": qty,
         "Email": email,
         "Mobile": mobile,
