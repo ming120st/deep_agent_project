@@ -163,6 +163,8 @@ async def google_chat(
         )
     )
 
+    print(f"[DEBUG google_chat] chat_message parsed: user_id={chat_message.user_id!r}, email={chat_message.user_email!r}, name={chat_message.user_name!r}")
+
     thread_id = (
         session_manager
         .get_or_create(
@@ -194,6 +196,7 @@ async def google_chat(
             deep_agent=deep_agent,
             thread_id=thread_id,
         )
+        print(f"[DEBUG google_chat] ainvoke deep_agent: thread_id={thread_id!r}, task_id={task_id!r}, user_id={chat_message.user_id!r}")
         result = await deep_agent.ainvoke(
             {
                 "messages": [
@@ -204,6 +207,9 @@ async def google_chat(
                         ),
                     }
                 ],
+                "user_id": (
+                    chat_message.user_email or chat_message.user_id
+                ),
                 "user_email": (
                     chat_message.user_email
                 ),
@@ -217,7 +223,18 @@ async def google_chat(
                     "thread_id": (
                         thread_id
                     ),
+                    "user_id": (
+                        chat_message.user_email or chat_message.user_id
+                    ),
+                    "user_email": (
+                        chat_message.user_email
+                    ),
+                    "google_user_id": (
+                        chat_message.user_id
+                    ),
                     "task_id": task_id,
+                    "space_id": chat_message.space_id,
+                    "google_thread_name": google_thread_name,
                 }
             },
         )

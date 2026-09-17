@@ -19,6 +19,13 @@ from integrations.device_job.device_job_manager import (
 from integrations.device_job.schemas import (
     DeviceJobCallback,
 )
+from integrations.google_chat.message_sender import (
+    send_message,
+)
+from app.api.google_chat import (
+    _extract_response_text,
+    _to_google_chat_format,
+)
 
 
 router = APIRouter()
@@ -87,15 +94,21 @@ async def device_callback(
         request.app.state.deep_agent
     )
 
+    task_id = job_info.get("task_id")
+    user_id = job_info.get("user_id")
+    configurable = {"thread_id": thread_id}
+    if task_id:
+        configurable["task_id"] = task_id
+    if user_id:
+        configurable["user_id"] = user_id
+
     try:
         result = await deep_agent.ainvoke(
             Command(
                 resume=callback.model_dump()
             ),
             config={
-                "configurable": {
-                    "thread_id": thread_id,
-                }
+                "configurable": configurable
             },
         )
 
@@ -121,6 +134,21 @@ async def device_callback(
         "[DeviceCallback] resume result:",
         result,
     )
+
+    # 5. Google Chat으로 에이전트 최종 응답 전송
+    space_name = job_info.get("space_id")
+    thread_name = job_info.get("google_thread_name")
+
+    if space_name:
+        response_text = _extract_response_text(result)
+        formatted_text = _to_google_chat_format(response_text)
+        await send_message(
+            space_name=space_name,
+            message=formatted_text,
+            thread_name=thread_name,
+        )
+    else:
+        print(f"[DeviceCallback] space_id가 없어 Google Chat 전송을 건너뜁니다: job_id={callback.job_id}")
 
     return {
         "status": "resumed",

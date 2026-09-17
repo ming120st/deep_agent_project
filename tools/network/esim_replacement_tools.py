@@ -31,6 +31,7 @@ import httpx
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
 from langgraph.types import interrupt
+from langgraph.prebuilt import InjectedState
 
 from google.cloud import bigquery as bq
 from google.oauth2 import service_account
@@ -93,18 +94,18 @@ async def _resolve_internal_product_code(product_code_public: str) -> Optional[s
         return None
 
 
-def _cfg(config: RunnableConfig, key: str, default=""):
+def _cfg(config: RunnableConfig | None, key: str, default=""):
+    if not config:
+        return default
     return (config.get("configurable") or {}).get(key, default)
 
 
 # ── 3.2 주문 조회 ─────────────────────────────────────────────────────────
 
-@tool
-async def esim_fetch_order(order_id: Annotated[str, "E로 시작하는 내부 주문번호. 예: E26031101886"]) -> dict:
-    """
-    주문번호(E로 시작하는 내부 주문번호)로 주문 상세를 조회한다.
-    반환된 order_products 각 항목에는 product_code(외부코드), product_name, days(구매일수), price, iccid가 들어있다.
-    """
+async def _fetch_order_detail(order_id: str) -> dict:
+    """내부 헬퍼: 주문번호로 주문 상세 및 order_info를 조회한다."""
+    if not order_id:
+        return {"ok": False, "error": "주문번호가 비어있습니다."}
     formatted_order_id = esim_client.encrypt(order_id)
     try:
         response = await esim_client.call_esim_api_get(
@@ -116,7 +117,7 @@ async def esim_fetch_order(order_id: Annotated[str, "E로 시작하는 내부 �
     if response.get("resultCode") is not True:
         return {"ok": False, "error": "주문 조회 실패 (resultCode=False)"}
 
-    rv = response["resultValue"]
+    rv = response.get("resultValue", {})
     order_info = {
         "name": rv.get("name", ""),
         "email": rv.get("email", ""),
@@ -126,15 +127,24 @@ async def esim_fetch_order(order_id: Annotated[str, "E로 시작하는 내부 �
     }
     order_products = [
         {
-            "product_code": item["productCode"],
-            "product_name": item["productName"],
-            "days": item["useDay"],
-            "price": item["price"],
+            "product_code": item.get("productCode", ""),
+            "product_name": item.get("productName", ""),
+            "days": item.get("useDay", 0),
+            "price": item.get("price", 0),
             "iccid": item.get("iccid", ""),
         }
         for item in rv.get("ordersDetail", [])
     ]
     return {"ok": True, "order_info": order_info, "order_products": order_products}
+
+
+@tool
+async def esim_fetch_order(order_id: Annotated[str, "E로 시작하는 내부 주문번호. 예: E26031101886"]) -> dict:
+    """
+    주문번호(E로 시작하는 내부 주문번호)로 주문 상세를 조회한다.
+    반환된 order_products 각 항목에는 product_code(외부코드), product_name, days(구매일수), price, iccid가 들어있다.
+    """
+    return await _fetch_order_detail(order_id)
 
 
 # ── 3.3 상품 결정 (동일일수 / alt코드) ────────────────────────────────────
@@ -211,6 +221,7 @@ async def esim_get_product_detail(product_code: str) -> dict:
         "product_code": rv.get("code", product_code),
         "product_name": rv.get("name", ""),
         "product_price": rv.get("price", 0),
+
     }
 
 
@@ -218,58 +229,109 @@ async def esim_get_product_detail(product_code: str) -> dict:
 
 @tool
 async def esim_build_confirmation(
-    order_id: str,
-    name: str,
-    email: str,
-    mobile: str,
-    join_route_id: str,
-    product_name: str,
-    product_code: str,
-    qty: int,
-    config: RunnableConfig,
+    order_id: Annotated[str, "E로 시작하는 내부 주문번호 (예: E26031101886)"],
+    name: Annotated[str, "수령인/구매자 이름 (order_info의 name)"],
+    email: Annotated[str, "수령인/구매자 이메일 (order_info의 email)"],
+    mobile: Annotated[str, "수령인/구매자 휴대폰 번호 (order_info의 mobile)"],
+    join_route_id: Annotated[str, "주문의 가입경로 ID (order_info의 join_route_id)"],
+    product_name: Annotated[str, "재발급할 확정 상품명 (esim_get_product_detail 결과의 product_name)"],
+    product_code: Annotated[str, "재발급할 확정 상품코드 (esim_get_product_detail 결과의 product_code 숫자 코드 등)"],
+    qty: Annotated[int, "재발급 수량"],
+    config: RunnableConfig = None,
+    state: Annotated[dict, InjectedState] = None,
 ) -> dict:
     """
     발송용 payload를 조립해서 리턴한다. (실행은 하지 않음)
     이 결과를 사용자에게 보여주고 확답을 받은 뒤에만 esim_send를 호출할 것.
     """
-    user_id = _cfg(config, "user_id")
+    # UserID 결정: Google Chat 요청자의 이메일 계정 (config 또는 state)
+    user_id = (
+        _cfg(config, "user_email")
+        or (state.get("user_email") if isinstance(state, dict) else "")
+        or _cfg(config, "user_id")
+        or (state.get("user_id") if isinstance(state, dict) else "")
+        or ""
+    )
+    # users/112... 형태의 Google Resource ID는 API 등록계정이 아니므로 배제
+    if str(user_id).startswith("users/"):
+        user_id = _cfg(config, "user_email") or (state.get("user_email") if isinstance(state, dict) else "") or ""
+
+    print(f"[DEBUG esim_build_confirmation] config: {config}")
+    print(f"[DEBUG esim_build_confirmation] state keys: {list(state.keys()) if isinstance(state, dict) else state}")
+    print(f"[DEBUG esim_build_confirmation] resolved user_id: {user_id}")
+
     payload = {
         "OutOrderId": f"{order_id}재발급",
         "Name": name,
         "ProductName": product_name,
         "ProductCode": product_code,
-        "JoinRoute": str(join_route_id), # 가입 경로 ID. 헤더에 들어가는 루트ID 아님.
+        "JoinRoute": str(join_route_id),  # 가입 경로 ID. 헤더에 들어가는 루트ID 아님.
         "Qty": qty,
         "Email": email,
         "Mobile": mobile,
         "PaymentPrice": 0,
         "UserID": user_id,
     }
+    print(f"[DEBUG esim_build_confirmation] generated payload: {payload}")
     return {"ok": True, "payload": payload}
 
 
 # ── 3.6 이심 발송 ─────────────────────────────────────────────────────────
 
 @tool
-async def esim_send(payload: dict, request_qnt: int, order_id: str) -> dict:
+async def esim_send(
+    payload: dict,
+    request_qnt: int,
+    order_id: str,
+    config: RunnableConfig = None,
+    state: Annotated[dict, InjectedState] = None,
+) -> dict:
     """
     이심 발송 API를 호출한다. 사용자의 명시적 "실행" 확답 없이는 절대 호출하지 말 것.
     (상위 딥에이전트 설정에서 interrupt_on으로 이 tool에 승인 게이트가 걸려 있어야 한다.)
     OutOrderId 중복 오류는 suffix를 올려가며 최대 MAX_RETRY회 자동 재시도한다.
     """
+    target_order_id = order_id or re.sub(r"재발급.*$", "", str(payload.get("OutOrderId", "")))
+    payload_to_send = dict(payload)
+
+    # 요청자 UserID (Google Chat 요청자의 widemobile 이메일 계정)
+    requester_user_id = (
+        _cfg(config, "user_email")
+        or (state.get("user_email") if isinstance(state, dict) else "")
+        or _cfg(config, "user_id")
+        or (state.get("user_id") if isinstance(state, dict) else "")
+        or ""
+    )
+    if str(requester_user_id).startswith("users/"):
+        requester_user_id = _cfg(config, "user_email") or (state.get("user_email") if isinstance(state, dict) else "") or ""
+
+    print(f"[DEBUG esim_send] config: {config}")
+    print(f"[DEBUG esim_send] state keys: {list(state.keys()) if isinstance(state, dict) else state}")
+    print(f"[DEBUG esim_send] incoming payload: {payload}")
+    print(f"[DEBUG esim_send] requester_user_id: {requester_user_id}")
+
+    # UserID가 비어있거나 Google Resource ID(users/...) 형태이면 요청자의 이메일 계정으로 설정 (주문자 이메일 사용 금지)
+    current_uid = payload_to_send.get("UserID", "")
+    if not current_uid or str(current_uid).startswith("users/"):
+        payload_to_send["UserID"] = requester_user_id
+
+    print(f"[DEBUG esim_send] final payload_to_send: {payload_to_send}")
+
     results = []
     out_order_num = 1
     success = False
-    final_out_order_id = f"{order_id}재발급_{out_order_num}"
+    final_out_order_id = f"{target_order_id}재발급_{out_order_num}"
     fail_reason = "MAX_RETRY 소진"
 
     for attempt in range(MAX_RETRY):
-        out_order_id = f"{order_id}재발급_{out_order_num}"
+        out_order_id = f"{target_order_id}재발급_{out_order_num}"
         final_out_order_id = out_order_id
-        payload_i = {**payload, "OutOrderId": out_order_id, "Qty": request_qnt}
+        payload_i = {**payload_to_send, "OutOrderId": out_order_id, "Qty": request_qnt}
+        print(f"[DEBUG esim_send] [{attempt + 1}/{MAX_RETRY}] Request POST {REGIST_URL}: {json.dumps(payload_i, ensure_ascii=False)}")
 
         try:
             response = await esim_client.call_esim_api_post(api_url=REGIST_URL, json=payload_i)
+            print(f"[DEBUG esim_send] [{attempt + 1}/{MAX_RETRY}] Response: {response}")
             result_msg = response.get("resultMessage", "")
 
             if response.get("resultCode") is True:
@@ -288,20 +350,22 @@ async def esim_send(payload: dict, request_qnt: int, order_id: str) -> dict:
                 result_msg = err_body.get("resultMessage", "")
             except Exception:
                 result_msg = ""
+            print(f"[DEBUG esim_send] [{attempt + 1}/{MAX_RETRY}] HTTPStatusError: {e}, body: {result_msg}")
             if "이미 처리된 외부주문번호" in result_msg:
                 out_order_num += 1
                 fail_reason = result_msg
             else:
                 fail_reason = result_msg or f"HTTP {e.response.status_code}"
         except Exception as e:
+            print(f"[DEBUG esim_send] [{attempt + 1}/{MAX_RETRY}] Exception: {e}")
             fail_reason = f"{type(e).__name__}: {e}"
 
     return {
         "success": success,
         "out_order_id": final_out_order_id,
         "reason": "" if success else fail_reason,
-        "product_name": payload.get("ProductName", ""),
-        "product_code": payload.get("ProductCode", ""),
+        "product_name": payload_to_send.get("ProductName", ""),
+        "product_code": payload_to_send.get("ProductCode", ""),
         "qty": request_qnt,
     }
 
@@ -322,8 +386,16 @@ async def esim_register_consultation(
     이건 사용자 승인 대기가 아니라 외부 비동기 콜백 대기이므로 interrupt()를 직접 사용한다.
     send_success가 False면 호출하지 말 것 — 발송 실패 시 상담 등록 자체를 하지 않는다.
     """
+    if not name and order_id:
+        order_res = await _fetch_order_detail(order_id)
+        if order_res.get("ok"):
+            name = order_res.get("order_info", {}).get("name", "")
+
     task_id = _cfg(config, "task_id")
-    thread_id = _cfg(config, "user_id")
+    thread_id = _cfg(config, "thread_id")
+    user_id = _cfg(config, "user_id") or thread_id
+    space_id = _cfg(config, "space_id")
+    google_thread_name = _cfg(config, "google_thread_name")
 
     # ── 멱등성 가드: 프레임워크(딥에이전트/구그래프 상관없이) task_id 기준 외부 DB로 판단 ──
     # interrupt() 재실행 시 이 함수 전체가 처음부터 다시 실행되므로,
@@ -342,10 +414,17 @@ async def esim_register_consultation(
                 "iccid_list": iccids,
                 "memo": f"이심 재발급 완료. 발송 상품: {product_name}",
             },
-            context={"user_id": thread_id},
+            context={"user_id": user_id},
         )
         job_id = req.job_id
-        await create_device_job(job_id, thread_id, task_id=task_id)
+        await create_device_job(
+            job_id,
+            thread_id,
+            task_id=task_id,
+            space_id=space_id,
+            google_thread_name=google_thread_name,
+            user_id=user_id,
+        )
 
         try:
             async with httpx.AsyncClient() as client:

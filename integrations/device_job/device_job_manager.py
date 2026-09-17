@@ -21,7 +21,16 @@ _JOB_TTL_MINUTES = 30
 
 boa_device_jobs_collection = mongo_db.boa_device_jobs
 
-async def create_device_job(job_id: str, thread_id: str, task_id: str | None = None, is_cs_api: bool = False, agent_name: str | None = None) -> None:
+async def create_device_job(
+    job_id: str,
+    thread_id: str,
+    task_id: str | None = None,
+    is_cs_api: bool = False,
+    agent_name: str | None = None,
+    space_id: str | None = None,
+    google_thread_name: str | None = None,
+    user_id: str | None = None,
+) -> None:
     """신규 DeviceJob 도큐먼트 저장."""
     doc = {
         "job_id":     job_id,
@@ -35,15 +44,22 @@ async def create_device_job(job_id: str, thread_id: str, task_id: str | None = N
         doc["task_id"] = task_id
     if agent_name:
         doc["agent_name"] = agent_name
+    if space_id:
+        doc["space_id"] = space_id
+    if google_thread_name:
+        doc["google_thread_name"] = google_thread_name
+    if user_id:
+        doc["user_id"] = user_id
+
     await mongo_db.boa_device_jobs.insert_one(doc)
-    print(f"[DeviceJob] 생성: {job_id} → thread={thread_id}, task_id={task_id}")
+    print(f"[DeviceJob] 생성: {job_id} → thread={thread_id}, task_id={task_id}, space_id={space_id}")
 
 
 async def get_job_info_by_job(job_id: str) -> dict | None:
     """job_id로 job 상세 정보(thread_id, is_cs_api 등) 조회."""
     doc = await boa_device_jobs_collection.find_one(
         {"job_id": job_id},
-        {"thread_id": 1, "status": 1, "is_cs_api": 1, "agent_name": 1, "task_id":1}
+        {"thread_id": 1, "status": 1, "is_cs_api": 1, "agent_name": 1, "task_id": 1, "space_id": 1, "google_thread_name": 1}
     )
     if not doc:
         print(f"[DeviceJob] job_id 없음: {job_id}")

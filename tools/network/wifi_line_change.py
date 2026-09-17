@@ -53,7 +53,13 @@ async def submit_wifi_line_change(
             "일본/Japan -> JP, 미국/USA -> US"
         ),
     ],
-    expiry_date: str,
+    expiry_date: Annotated[
+        str,
+        (
+            "만료일을 %Y%m%d 형식으로 전달. "
+            "예: 20241231"
+        ),
+    ],
     config: RunnableConfig,
 ) -> dict:
     """
@@ -71,6 +77,16 @@ async def submit_wifi_line_change(
     thread_id = _cfg(
         config,
         "thread_id",
+    )
+
+    space_id = _cfg(
+        config,
+        "space_id",
+    )
+
+    google_thread_name = _cfg(
+        config,
+        "google_thread_name",
     )
 
     if not task_id:
@@ -107,6 +123,8 @@ async def submit_wifi_line_change(
             job_id,
             thread_id,
             task_id=task_id,
+            space_id=space_id,
+            google_thread_name=google_thread_name,
         )
 
         try:
