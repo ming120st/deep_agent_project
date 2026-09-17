@@ -4,54 +4,42 @@ from core.prompt.prompt_service import (
 from registry.agent_registry import (
     register_agent,
 )
-from langchain.agents.middleware import (
-    LLMToolSelectorMiddleware,
-)
-from core.tracing.logging_middleware import ToolLoggingMiddleware
-from tools.integrations.meta_ads_mcp.runtime import (
-    meta_ads_runtime,
+from core.tracing.logging_middleware import (
+    ToolLoggingMiddleware,
 )
 
-META_ADS_ANALYSIS_TOOL_NAMES = {
-    "ads_get_ad_accounts",
-    "ads_get_ad_entities",
-    "ads_get_ad_preview",
-    "ads_get_creatives",
-    "ads_get_creative_ads",
-    "ads_get_ad_images",
-    "ads_get_ad_videos",
-    "ads_get_field_context",
-    "ads_get_errors",
-    "ads_get_opportunity_score",
-    "ads_insights_advertiser_context",
-    "ads_insights_anomaly_signal",
-    "ads_insights_auction_ranking_benchmarks",
-    "ads_insights_industry_benchmark",
-    "ads_insights_performance_trend",
-    "ads_get_dataset_details",
-    "ads_get_dataset_quality",
-    "ads_get_dataset_stats",
-    "ads_get_datasets",
-    "ads_get_ad_account_custom_audiences",
-}
+from tools.integrations.meta_ads_mcp.tools.account import (
+    get_meta_ad_accounts,
+)
+from tools.integrations.meta_ads_mcp.tools.campaign import (
+    get_meta_ad_entities,
+)
+# from tools.integrations.meta_ads_mcp.tools.creative import (
+#     get_meta_ad_preview,
+#     get_meta_creatives,
+# )
+# from tools.integrations.meta_ads_mcp.tools.insights import (
+#     get_meta_performance_trend,
+#     get_meta_anomaly_signal,
+# )
 
 
 async def register_meta_ads_agent() -> None:
     system_prompt = await prompt_service.get(
-        "deep_agent.subagent.meta_ads.system" 
+        "deep_agent.subagent.meta_ads.system"
     )
 
     skills = await prompt_service.prepare_skills(
         "meta_ads"
     )
 
-    all_tools = meta_ads_runtime.get_tools()
-
     tools = [
-        tool
-        for tool in all_tools
-        if tool.name
-        in META_ADS_ANALYSIS_TOOL_NAMES
+        get_meta_ad_accounts,
+        get_meta_ad_entities,
+        # get_meta_ad_preview,
+        # get_meta_creatives,
+        # get_meta_performance_trend,
+        # get_meta_anomaly_signal,
     ]
 
     register_agent(

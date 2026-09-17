@@ -1,17 +1,26 @@
-# Meta Ads MCP 서버에 접속하기 위한 MultiServerMCPClient 객체를 생성하는 설정 파일
-
 from __future__ import annotations
+
 import os
+
 from langchain_mcp_adapters.client import (
     MultiServerMCPClient,
 )
 
-META_MCP_URL = os.environ.get("META_MCP_URL")
+
+META_MCP_URL = os.environ.get(
+    "META_MCP_URL"
+)
+
 
 def create_meta_ads_mcp_client() -> MultiServerMCPClient:
     access_token = os.environ.get(
         "META_ACCESS_TOKEN"
     )
+
+    if not META_MCP_URL:
+        raise RuntimeError(
+            "META_MCP_URL 환경변수가 설정되지 않았습니다."
+        )
 
     if not access_token:
         raise RuntimeError(
