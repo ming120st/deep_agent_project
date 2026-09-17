@@ -1,5 +1,5 @@
 from __future__ import annotations
-
+from uuid import uuid4
 import re
 from typing import Any
 
@@ -88,7 +88,6 @@ def _extract_response_text(
         content
     )
 
-
 def _to_google_chat_format(
     text: str,
 ) -> str:
@@ -107,6 +106,32 @@ def _to_google_chat_format(
 
     return text
 
+async def _resolve_task_id(
+    deep_agent,
+    thread_id: str,
+) -> str:
+    snapshot = await deep_agent.aget_state(
+        {
+            "configurable": {
+                "thread_id": thread_id,
+            }
+        }
+    )
+
+    state = (
+        snapshot.values
+        if snapshot
+        else {}
+    )
+
+    existing_task_id = state.get(
+        "task_id"
+    )
+
+    if existing_task_id:
+        return existing_task_id
+
+    return str(uuid4())
 
 @router.post("/chat")
 async def google_chat(
@@ -165,6 +190,10 @@ async def google_chat(
     )
 
     try:
+        task_id = await _resolve_task_id(
+            deep_agent=deep_agent,
+            thread_id=thread_id,
+        )
         result = await deep_agent.ainvoke(
             {
                 "messages": [
@@ -181,12 +210,14 @@ async def google_chat(
                 "session_id": (
                     thread_id
                 ),
+                "task_id": task_id,
             },
             config={
                 "configurable": {
                     "thread_id": (
                         thread_id
                     ),
+                    "task_id": task_id,
                 }
             },
         )

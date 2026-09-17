@@ -38,6 +38,13 @@ class MainDeepAgentState(DeepAgentState):
         ]
     ]
 
+    task_id: NotRequired[
+        Annotated[
+            str,
+            _keep_latest_non_empty,
+        ]
+    ]
+
     current_input: NotRequired[
         Annotated[
             str,

@@ -43,7 +43,7 @@ async def get_job_info_by_job(job_id: str) -> dict | None:
     """job_id로 job 상세 정보(thread_id, is_cs_api 등) 조회."""
     doc = await boa_device_jobs_collection.find_one(
         {"job_id": job_id},
-        {"thread_id": 1, "status": 1, "is_cs_api": 1, "agent_name": 1}
+        {"thread_id": 1, "status": 1, "is_cs_api": 1, "agent_name": 1, "task_id":1}
     )
     if not doc:
         print(f"[DeviceJob] job_id 없음: {job_id}")

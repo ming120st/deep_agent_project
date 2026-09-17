@@ -9,8 +9,8 @@ from core.prompt.prompt_service import prompt_service
 from core.deep_agent.state import MainDeepAgentState
 from langgraph.checkpoint.memory import InMemorySaver
 from core.tracing.logger import get_logger
+from tools.network.wifi_line_change import submit_wifi_line_change
 import os
-
 logger = get_logger("deep_agent")
 
 async def create_deep_agent():
@@ -44,6 +44,9 @@ async def create_deep_agent():
         subagents=subagents,
         middleware=[
             TodoListMiddleware(),
+        ],
+        tools=[
+            submit_wifi_line_change,
         ],
         system_prompt=system_prompt,
         state_schema=MainDeepAgentState,

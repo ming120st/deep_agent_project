@@ -32,7 +32,9 @@ from tools.integrations.google_workspace_mcp.runtime import (
 from tools.integrations.meta_ads_mcp.runtime import (
     meta_ads_runtime,
 )
-
+from app.api.device_callback import (
+    router as device_job_router,
+)
 
 @asynccontextmanager
 async def lifespan(
@@ -69,4 +71,7 @@ app = FastAPI(
 
 app.include_router(
     google_chat_router,
+)
+app.include_router(
+    device_job_router,
 )
