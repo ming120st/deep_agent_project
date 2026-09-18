@@ -7,21 +7,33 @@ from registry.agent_registry import (
 from core.tracing.logging_middleware import (
     ToolLoggingMiddleware,
 )
-
-from tools.integrations.meta_ads_mcp.tools.account import (
-    get_meta_ad_accounts,
-)
 from tools.integrations.meta_ads_mcp.tools.campaign import (
-    get_meta_ad_entities,
+    get_meta_campaigns,
+    get_meta_campaign_performance,
 )
-# from tools.integrations.meta_ads_mcp.tools.creative import (
-#     get_meta_ad_preview,
-#     get_meta_creatives,
-# )
-# from tools.integrations.meta_ads_mcp.tools.insights import (
-#     get_meta_performance_trend,
-#     get_meta_anomaly_signal,
-# )
+from tools.integrations.meta_ads_mcp.tools.adset import (
+    get_meta_campaign_adsets,
+)
+from tools.integrations.meta_ads_mcp.tools.ad import (
+    get_meta_campaign_ads,
+    get_meta_ad_preview,
+)
+from tools.integrations.meta_ads_mcp.tools.creative import (
+    get_meta_creatives,
+    get_meta_creative_ads,
+    get_meta_ad_images,
+    get_meta_ad_videos,
+)
+from tools.integrations.meta_ads_mcp.tools.insights import (
+    get_meta_performance_trend,
+    get_meta_anomaly_signal,
+)
+from tools.integrations.meta_ads_mcp.tools.campaign_analysis_snapshot import (
+    save_campaign_analysis_snapshot,
+)
+from tools.integrations.meta_ads_mcp.dashboard.tool import (
+    create_meta_ads_dashboard,
+)
 
 
 async def register_meta_ads_agent() -> None:
@@ -34,12 +46,44 @@ async def register_meta_ads_agent() -> None:
     )
 
     tools = [
-        get_meta_ad_accounts,
-        get_meta_ad_entities,
-        # get_meta_ad_preview,
-        # get_meta_creatives,
-        # get_meta_performance_trend,
-        # get_meta_anomaly_signal,
+        # 캠페인 조회
+        get_meta_campaigns,
+
+        # 특정 캠페인 성과 조회
+        get_meta_campaign_performance,
+
+        # 특정 캠페인의 광고 세트 조회
+        get_meta_campaign_adsets,
+
+        # 특정 캠페인의 광고 조회
+        get_meta_campaign_ads,
+
+        # 실제 광고 Preview 조회
+        get_meta_ad_preview,
+
+        # Creative 상세 조회
+        get_meta_creatives,
+
+        # Creative가 사용된 광고 역조회
+        get_meta_creative_ads,
+
+        # 이미지 소재 조회
+        get_meta_ad_images,
+
+        # 영상 소재 조회
+        get_meta_ad_videos,
+
+        # 성과 추이 조회
+        get_meta_performance_trend,
+
+        # 성과 이상 징후 조회
+        get_meta_anomaly_signal,
+
+        # 분석 Snapshot 저장
+        save_campaign_analysis_snapshot,
+
+        # Excel Dashboard 생성
+        create_meta_ads_dashboard,
     ]
 
     register_agent(

@@ -6,7 +6,6 @@ from langchain_core.tools import BaseTool
 from langchain_mcp_adapters.tools import (
     load_mcp_tools,
 )
-
 from tools.integrations.meta_ads_mcp.client import (
     create_meta_ads_mcp_client,
 )
@@ -55,16 +54,6 @@ class MetaAdsMCPRuntime:
 
         self.started = True
 
-        print(
-            "[META ADS MCP] "
-            f"loaded {len(self.tools)} tools"
-        )
-
-        for tool in self.tools:
-            print(
-                "[META ADS MCP TOOL]",
-                tool.name,
-            )
     
     # MCP 연결 종료
     async def stop(self):
@@ -125,17 +114,6 @@ class MetaAdsMCPRuntime:
             )
 
         return self.tools
-
-    def build_agent_tools(
-        self,
-    ) -> list[BaseTool]:
-
-        if not self.started:
-            raise RuntimeError(
-                "Meta Ads MCP Runtime이 시작되지 않았습니다."
-            )
-
-        return list(self.tools)
 
 
 meta_ads_runtime = MetaAdsMCPRuntime()
