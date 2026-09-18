@@ -50,6 +50,9 @@ async def esim_replacement_agent() -> CompiledSubAgent:
             product_search_subagent,
         ],
         backend=FilesystemBackend(),
+        interrupt_on={
+            "esim_send": True,
+        }
     )
 
     return CompiledSubAgent(

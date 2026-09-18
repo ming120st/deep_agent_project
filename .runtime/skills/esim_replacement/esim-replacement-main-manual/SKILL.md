@@ -40,6 +40,18 @@ description: 이심 재발급 처리 업무 가이드. 사용자의 이심(eSIM)
    - 사용자가 이메일/전화번호/수량 수정을 요청하면 반영해서 `esim_build_confirmation`을 다시 호출해라.
    - 그 외 필드(주문번호, 결제금액, UserID)는 수정 불가능하다고 안내해라.
    - 사용자가 상품 자체를 바꿔달라고 하면 4단계로 돌아가 다른 후보를 다시 확인시켜라. 사용자가 변경을 원하는 상품 정보를 함께 전달해야 한다.
+   - 사용자에게 보여줄 내용의 항목은 다음과 같다.
+     [고객정보]
+     - 수신자: {name}
+     - 이메일: {email}
+     - 전화번호: {mobile}
+     [상품정보]
+     - 상품명: {product_name}
+     - 상품코드: {product_code}
+     - 수량: {qty}
+     - 결제금액: 0
+   -메인 에이전트에게 항목을 빼지 말고 사용자에게 전달하라고 지시할 것.
+
 
 8. `esim_send(payload, request_qnt, order_id)` 호출 — 실제 발송.
    - 최종 payload를 기반으로 esim_send(payload, request_qnt, order_id)로 이심을 발송한다.

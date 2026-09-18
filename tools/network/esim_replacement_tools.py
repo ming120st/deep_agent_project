@@ -233,9 +233,9 @@ async def esim_build_confirmation(
     name: Annotated[str, "수령인/구매자 이름 (order_info의 name)"],
     email: Annotated[str, "수령인/구매자 이메일 (order_info의 email)"],
     mobile: Annotated[str, "수령인/구매자 휴대폰 번호 (order_info의 mobile)"],
-    join_route_id: Annotated[str, "주문의 가입경로 ID (order_info의 join_route_id)"],
+    join_route_id: Annotated[str | int, "주문의 가입경로 ID (order_info의 join_route_id)"],
     product_name: Annotated[str, "재발급할 확정 상품명 (esim_get_product_detail 결과의 product_name)"],
-    product_code: Annotated[str, "재발급할 확정 상품코드 (esim_get_product_detail 결과의 product_code 숫자 코드 등)"],
+    product_code: Annotated[str | int, "재발급할 확정 상품코드 (esim_get_product_detail 결과의 product_code 숫자 코드 등)"],
     qty: Annotated[int, "재발급 수량"],
     config: RunnableConfig = None,
     state: Annotated[dict, InjectedState] = None,
@@ -243,6 +243,7 @@ async def esim_build_confirmation(
     """
     발송용 payload를 조립해서 리턴한다. (실행은 하지 않음)
     이 결과를 사용자에게 보여주고 확답을 받은 뒤에만 esim_send를 호출할 것.
+    사용자에게 결과를 보여줄 때 메인에이전트에게 항목을 빼먹지말고 전달하라고 지시할 것.
     """
     # UserID 결정: Google Chat 요청자의 이메일 계정 (config 또는 state)
     user_id = (
@@ -264,7 +265,7 @@ async def esim_build_confirmation(
         "OutOrderId": f"{order_id}재발급",
         "Name": name,
         "ProductName": product_name,
-        "ProductCode": product_code,
+        "ProductCode": str(product_code),
         "JoinRoute": str(join_route_id),  # 가입 경로 ID. 헤더에 들어가는 루트ID 아님.
         "Qty": qty,
         "Email": email,
@@ -287,8 +288,7 @@ async def esim_send(
     state: Annotated[dict, InjectedState] = None,
 ) -> dict:
     """
-    이심 발송 API를 호출한다. 사용자의 명시적 "실행" 확답 없이는 절대 호출하지 말 것.
-    (상위 딥에이전트 설정에서 interrupt_on으로 이 tool에 승인 게이트가 걸려 있어야 한다.)
+    이심 발송 API를 호출한다. 사용자의 명시적 확답 없이는 절대 호출하지 말 것.
     OutOrderId 중복 오류는 suffix를 올려가며 최대 MAX_RETRY회 자동 재시도한다.
     """
     target_order_id = order_id or re.sub(r"재발급.*$", "", str(payload.get("OutOrderId", "")))
@@ -379,13 +379,22 @@ async def esim_register_consultation(
     product_name: str,
     iccids: list[str],
     send_success: bool,
+    send_results: list[dict],
     config: RunnableConfig,
 ) -> dict:
     """
     이심 발송 완료 후 상담 등록을 device_agent(PC 에이전트)에 요청하고 완료 콜백을 기다린다.
     이건 사용자 승인 대기가 아니라 외부 비동기 콜백 대기이므로 interrupt()를 직접 사용한다.
     send_success가 False면 호출하지 말 것 — 발송 실패 시 상담 등록 자체를 하지 않는다.
+    send_results에는 esim_send 반환값을 목록으로 감싸서 전달할 것.
+    예: send_results=[esim_send의 반환값]
     """
+    if not send_success:
+        return {
+            "ok": False,
+            "error": "이심 발송이 실패하여 상담 등록을 요청하지 않았습니다.",
+        }
+
     if not name and order_id:
         order_res = await _fetch_order_detail(order_id)
         if order_res.get("ok"):
@@ -394,8 +403,44 @@ async def esim_register_consultation(
     task_id = _cfg(config, "task_id")
     thread_id = _cfg(config, "thread_id")
     user_id = _cfg(config, "user_id") or thread_id
+    user_name = _cfg(config, "user_name") or name
     space_id = _cfg(config, "space_id")
     google_thread_name = _cfg(config, "google_thread_name")
+
+    if not task_id:
+        return {
+            "ok": False,
+            "error": "task_id가 없습니다.",
+        }
+
+    if not thread_id:
+        return {
+            "ok": False,
+            "error": "thread_id가 없습니다.",
+        }
+
+    normalized_send_results = []
+    for seq, result in enumerate(send_results, start=1):
+        if not isinstance(result, dict):
+            return {
+                "ok": False,
+                "error": "send_results는 발송 결과 객체의 목록이어야 합니다.",
+            }
+
+        normalized_send_results.append(
+            {
+                "seq": result.get("seq", seq),
+                "out_order_id": result.get("out_order_id", ""),
+                "success": result.get("success", False),
+                "reason": result.get("reason", ""),
+            }
+        )
+
+    if not normalized_send_results:
+        return {
+            "ok": False,
+            "error": "상담 등록에 필요한 발송 결과가 없습니다.",
+        }
 
     # ── 멱등성 가드: 프레임워크(딥에이전트/구그래프 상관없이) task_id 기준 외부 DB로 판단 ──
     # interrupt() 재실행 시 이 함수 전체가 처음부터 다시 실행되므로,
@@ -404,19 +449,25 @@ async def esim_register_consultation(
     job_id = await get_job_id_by_task_id(task_id) if task_id else None
 
     if not job_id:
-        req = DeviceJobRequest(
+        request = DeviceJobRequest(
             thread_id=thread_id,
             task="register_consultation",
             parameters={
                 "order_id": order_id,
                 "name": name,
                 "product_name": product_name,
+                "iccids": iccids,
                 "iccid_list": iccids,
+                "send_success": send_success,
                 "memo": f"이심 재발급 완료. 발송 상품: {product_name}",
             },
-            context={"user_id": user_id},
+            context={
+                "user_id": user_id,
+                "user_name": user_name,
+                "send_results": normalized_send_results,
+            },
         )
-        job_id = req.job_id
+        job_id = request.job_id
         await create_device_job(
             job_id,
             thread_id,
@@ -428,20 +479,63 @@ async def esim_register_consultation(
 
         try:
             async with httpx.AsyncClient() as client:
-                resp = await client.post(
+                response = await client.post(
                     f"{DEVICE_JOB_URL}/device-job",
-                    json=req.model_dump(),
+                    json=request.model_dump(),
                     headers={"X-Device-Job-Key": DEVICE_JOB_SECRET},
                     timeout=10.0,
                 )
-                resp.raise_for_status()
+                print(
+                    "[EsimRegisterConsultation] device-job response:",
+                    response.status_code,
+                    response.text,
+                )
+                response.raise_for_status()
+
+                print(
+                    "[EsimRegisterConsultation] DeviceJob 전송 성공",
+                    response.status_code,
+                    response.text,
+                )
         except Exception as e:
-            return {"ok": False, "error": f"PC 에이전트 연결 실패: {e}"}
+            return {
+                "ok": False,
+                "job_id": job_id,
+                "error": f"PC 에이전트 작업 요청 실패: {e}",
+            }
 
     # interrupt — /device-callback 수신 시 Command(resume=...)로 재개
-    callback_payload: dict = interrupt({"job_id": job_id, "status": "waiting"})
+    callback_payload: dict = interrupt(
+        {
+            "job_id": job_id,
+            "status": "waiting",
+            "message": "이심 재발급 상담 등록 작업 진행 중",
+        }
+    )
+    print(
+        "[EsimRegisterConsultation] interrupt resume:",
+        callback_payload,
+    )
     callback = DeviceJobCallback(**callback_payload)
 
-    if callback.status == "success":
-        return {"ok": True, "job_id": job_id}
-    return {"ok": False, "job_id": job_id, "error": callback.error_message or "알 수 없는 오류"}
+    if callback.status == "error":
+        return {
+            "ok": False,
+            "job_id": job_id,
+            "error": callback.error_message or "UNKNOWN",
+        }
+
+    result = callback.result or {}
+
+    if result.get("success") is False:
+        return {
+            "ok": False,
+            "job_id": job_id,
+            "error": result.get("reason", "UNKNOWN"),
+        }
+
+    return {
+        "ok": True,
+        "job_id": job_id,
+        **result,
+    }
