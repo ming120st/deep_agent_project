@@ -14,6 +14,7 @@ def create_model(
     if provider == "openai":
         return ChatOpenAI(
             model=model_name,
+            reasoning_effort=config.get("reasoning_effort"),
             temperature=config.get(
                 "temperature",
                 0,
