@@ -1,5 +1,6 @@
 """
 esim_replacement 딥에이전트 tools.
+redis store 사용 시 workflow는 "esim_replacement_agent"로 지정.
 """
 from __future__ import annotations
 
@@ -21,6 +22,8 @@ from typing import Annotated, Any
 from integrations.device_job.device_job_manager import create_device_job, get_job_id_by_task_id
 from tools.common.internal_esim_client import esim_client
 from integrations.device_job.schemas import DeviceJobCallback, DeviceJobRequest
+from core.database.redis import redis_put, redis_get, redis_delete, redis_exists
+
 
 AGENT_NAME = "esim_replacement_agent"
 REGIST_URL = "https://wapi.wifidosirak.com/api/v1/order/agentregist"
@@ -114,6 +117,7 @@ async def _fetch_order_detail(order_id: str) -> dict:
         }
         for item in rv.get("ordersDetail", [])
     ]
+    await redis_put("esim_replacement_agent","order_detail", {"order_info": order_info, "order_products": order_products})
     return {"ok": True, "order_info": order_info, "order_products": order_products}
 
 

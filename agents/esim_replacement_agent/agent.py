@@ -6,6 +6,9 @@ from core.llm.model_service import model_service
 from agents.esim_replacement_agent.subagents.product_search.agent import (
     build_product_search_subagent,
 )
+from agents.esim_replacement_agent.middleware import (
+    EsimOrderPromptMiddleware,
+)
 import os
 
 from tools.network.esim_replacement_tools import (
@@ -38,6 +41,9 @@ async def esim_replacement_agent() -> CompiledSubAgent:
     compiled_agent = create_deep_agent(
         model=main_model,
         system_prompt=system_prompt,
+        middleware=[
+            EsimOrderPromptMiddleware(),
+        ],
         tools=[
             esim_fetch_order,
             esim_resolve_reissue_product,
