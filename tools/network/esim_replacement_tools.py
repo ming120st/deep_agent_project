@@ -1,24 +1,5 @@
 """
-esim_fault_replacement 딥에이전트 tools.
-
-기존 src/agent/esim/subagents/chat/esim_fault_replacement/node.py 에서
-"사용자에게 묻고 기다리는" 부분(request_parameters, select_iccid의 목록표시,
-confirm_payload, process_confirmation의 의도분류 LLM, validate_iccid의 선택파싱 LLM)은
-전부 삭제했습니다. 그 역할은 이제 상위 딥에이전트의 ReAct 루프가 대신합니다.
-
-이 파일에 남긴 건 순수 결정론적 비즈니스 로직뿐입니다:
-  - 주문 조회
-  - 상품코드 결정 (동일일수 / alt코드) — 안 되면 product-search 서브에이전트로 위임 신호만 리턴
-  - 상품 상세 조회
-  - payload 조립
-  - 발송 API 호출 (재시도 포함)
-  - 상담 등록 (device_agent 콜백 대기 — 진짜 비동기 대기라 interrupt() 유지)
-
-TODO(마이그레이션 담당자):
-  - 아래 import 경로는 기존 node.py 기준 그대로 가져왔습니다. 실제 레포 구조에 맞게 확인해주세요.
-  - RunnableConfig에서 session_id/task_id/user_id/user_name을 어떻게 주입할지는
-    BOA 메인 딥에이전트가 thread_id/configurable을 어떻게 구성하는지에 맞춰 조정이 필요합니다.
-    (아래에서는 config["configurable"] 딕셔너리에 들어있다고 가정)
+esim_replacement 딥에이전트 tools.
 """
 from __future__ import annotations
 
@@ -41,7 +22,7 @@ from integrations.device_job.device_job_manager import create_device_job, get_jo
 from tools.common.internal_esim_client import esim_client
 from integrations.device_job.schemas import DeviceJobCallback, DeviceJobRequest
 
-AGENT_NAME = "esim_fault_replacement"
+AGENT_NAME = "esim_replacement_agent"
 REGIST_URL = "https://wapi.wifidosirak.com/api/v1/order/agentregist"
 MAX_RETRY = 5
 JOB_CALLBACK_TIMEOUT = 60  # DeviceJob 콜백 최대 대기 시간(초)
@@ -100,8 +81,6 @@ def _cfg(config: RunnableConfig | None, key: str, default=""):
     return (config.get("configurable") or {}).get(key, default)
 
 
-# ── 3.2 주문 조회 ─────────────────────────────────────────────────────────
-
 async def _fetch_order_detail(order_id: str) -> dict:
     """내부 헬퍼: 주문번호로 주문 상세 및 order_info를 조회한다."""
     if not order_id:
@@ -139,32 +118,65 @@ async def _fetch_order_detail(order_id: str) -> dict:
 
 
 @tool
-async def esim_fetch_order(order_id: Annotated[str, "E로 시작하는 내부 주문번호. 예: E26031101886"]) -> dict:
+async def esim_fetch_order(
+    order_id: Annotated[str, "E로 시작하는 내부 주문번호. 예: E26031101886"]
+    ) -> dict:
     """
-    주문번호(E로 시작하는 내부 주문번호)로 주문 상세를 조회한다.
-    반환된 order_products 각 항목에는 product_code(외부코드), product_name, days(구매일수), price, iccid가 들어있다.
+    주문번호(E로 시작하는 내부 주문번호)로 주문 상세 내용을 조회한다.
+
+    반환값:
+    - order_info: 주문자 정보.
+    - order_products: 주문 상품 목록.
+    - selection_required: order_products가 2개 이상이면 true.
+        true인 경우, 다음 단계(esim_resolve_reissue_product 등)로 절대 바로 넘어가지 말고
+        반드시 사용자에게 order_products의 상품명과 iccid를 모두 보여준 뒤
+        재발급할 항목을 선택받아라 (복수 선택 가능, 단 서로 다른 product_code는 함께 선택 불가).
     """
-    return await _fetch_order_detail(order_id)
+    result = await _fetch_order_detail(order_id)
+    if result.get("ok"):
+        products = result.get("order_products", [])
+        result["selection_required"] = len(products) > 1
+        if result["selection_required"]:
+            result["action_required"] = (
+                "구매 상품이 여러 개입니다. 다음 tool을 호출하기 전에, "
+                "지금 바로 아래 order_products의 상품명과 iccid를 사용자에게 보여주고 "
+                "재발급할 항목을 선택받으세요 (복수 선택 가능)."
+                "단, 서로 다른 product_code는 함께 선택할 수 없습니다."
+            )
+    return result
 
 
 # ── 3.3 상품 결정 (동일일수 / alt코드) ────────────────────────────────────
 
 @tool
 async def esim_resolve_reissue_product(
-    product_code_public: str,
-    product_name: str,
-    days: int,
-    price: float,
-    request_days: int,
+    product_code_public: Annotated[str, "공개용 상품코드"],
+    product_name: Annotated[str, "상품명"],
+    days: Annotated[int, "구매일수"],
+    price: Annotated[float, "상품가격"],
+    request_days: Annotated[int, "사용자가 요청한 일수"],
 ) -> dict:
     """
     재발급용 상품코드를 결정한다.
-    사용자의 요청으로 상품을 변경할 때는 이 tool을 사용하지 않고, product-search 서브에이전트에 위임해야 한다.
-    1) 요청일수 == 구매일수면 기존 상품 그대로 사용.
-    2) 다르면 같은 상품의 일수만 바꾼 대체코드(alt code)를 시도.
-    3) 그것도 안 되면 status="needs_product_search"를 리턴 — 이 경우
-       product-search 서브에이전트에 위임해서 국가 기반으로 대체 상품을 찾아야 한다.
-       (이때 사용자에게 이심을 사용할 국가명을 먼저 물어봐야 함)
+
+    사용 조건:
+    - 재발급 요청이 들어오면 우선 이 tool을 사용하여 기존 상품의 일수 변형 코드가 있는지 확인한다.
+    - 재발급 대상 상품과 종류는 동일한데 "일수만" 다시 맞추면 되는 경우에 사용한다.
+    - 사용자가 일수 외 다른 조건의 상품으로 변경을 요청한 경우에는 이 tool을 쓰지 말고 product-search 서브에이전트에 위임해야 한다.
+    
+    반환값 (status로 분기)
+    - status="resolved"
+        - product_code: 재발급에 사용할 확정된 상품코드.
+        - reason: 어떤 근거로 확정됐는지 (요청일수 일치 / 대체코드 사용).
+    - status="needs_product_search"
+        - 동일/대체 상품코드로 요청일수를 맞출 수 없는 경우.
+        - 이 결과를 받으면 반드시 product-search 서브에이전트에 위임해야 하며,
+          위임 전에 사용자에게 "이심을 사용할 국가"를 먼저 확인해야 한다.
+        - search_context: product-search 서브에이전트에 그대로 전달해야 하는 컨텍스트.
+            - original_product_name: 원래 상품명 (product-search 서브에이전트가 동일한 상품을 선택하지 않도록 전달필요).
+            - request_days: 사용자가 원하는 일수.
+            - min_daily_price: 이 값 이하의 일단가를 가진 상품은 후보에서 제외해야 한다
+              (더 싼 상품으로 대체 시 고객 불만이 발생할 수 있으므로, 대체 상품 탐색 시 반드시 준수).
     """
     internal_code = await _resolve_internal_product_code(product_code_public) or product_code_public
 
@@ -203,8 +215,10 @@ async def esim_resolve_reissue_product(
 
 
 @tool
-async def esim_get_product_detail(product_code: str) -> dict:
-    """상품코드로 상품 상세(이름/가격)를 조회한다. payload 조립 전 최종 확정 코드에 대해 호출."""
+async def esim_get_product_detail(
+    product_code: Annotated[str, "조회할 상품코드"] 
+    ) -> dict:
+    """상품코드로 상품 상세(상품코드/상품명/가격)를 조회한다. payload 조립 전 최종 확정 코드에 대해 호출."""
     try:
         response = await esim_client.call_esim_api_get(
             f"https://wapi.wifidosirak.com/api/v1/product/{product_code}"
@@ -224,7 +238,6 @@ async def esim_get_product_detail(product_code: str) -> dict:
 
     }
 
-
 # ── 3.5 payload 조립 ───────────────────────────────────────────────────────
 
 @tool
@@ -243,7 +256,7 @@ async def esim_build_confirmation(
     """
     발송용 payload를 조립해서 리턴한다. (실행은 하지 않음)
     이 결과를 사용자에게 보여주고 확답을 받은 뒤에만 esim_send를 호출할 것.
-    사용자에게 결과를 보여줄 때 메인에이전트에게 항목을 빼먹지말고 전달하라고 지시할 것.
+    사용자에게 결과를 보여줄 때 메인에이전트에게 payload 항목을 빼먹지말고 모두 사용자에게 전달하라고 지시할 것.
     """
     # UserID 결정: Google Chat 요청자의 이메일 계정 (config 또는 state)
     user_id = (

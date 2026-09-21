@@ -1,11 +1,14 @@
 from core.prompt.prompt_service import prompt_service
 from registry.agent_registry import register_agent
 from deepagents import create_deep_agent, CompiledSubAgent
+from deepagents.backends import CompositeBackend, StoreBackend
 from deepagents.backends.filesystem import FilesystemBackend
+from core.deep_agent.store import _resolve_user_namespace, shared_store
 from core.llm.model_service import model_service
 from agents.esim_replacement_agent.subagents.product_search.agent import (
     build_product_search_subagent,
 )
+import os
 
 from tools.network.esim_replacement_tools import (
     esim_build_confirmation,
@@ -49,7 +52,20 @@ async def esim_replacement_agent() -> CompiledSubAgent:
         subagents=[
             product_search_subagent,
         ],
-        backend=FilesystemBackend(),
+        store=shared_store,
+        backend=CompositeBackend(
+            default=FilesystemBackend(
+                root_dir=os.environ[
+                    "DEEP_AGENT_ROOT_DIR"
+                ],
+            ),
+            routes={
+                "/shared/": StoreBackend(
+                    store=shared_store,
+                    namespace=_resolve_user_namespace,
+                ),
+            },
+        ),
         interrupt_on={
             "esim_send": True,
         }

@@ -16,6 +16,9 @@ from app.api.google_chat import (
 from core.deep_agent.agent import (
     create_deep_agent,
 )
+from core.database.redis import (
+    close_redis_client,
+)
 from core.llm.model_service import (
     model_service,
 )
@@ -44,22 +47,22 @@ async def lifespan(
     await meta_ads_runtime.start()
     await google_workspace_runtime.start()
     await init_device_job_client()
-
-    # 2. Agent 등록
-    await register_all_agents()
-
-    # 3. Agent / Tool 정보를 DB와 동기화
-    await sync_agents_to_db()
-
-    # 4. DB 설정 적용 후 DeepAgent 생성
-    app.state.deep_agent = (
-        await create_deep_agent()
-    )
-
     try:
+        # 2. Agent 등록
+        await register_all_agents()
+
+        # 3. Agent / Tool 정보를 DB와 동기화
+        await sync_agents_to_db()
+
+        # 4. DB 설정 적용 후 DeepAgent 생성
+        app.state.deep_agent = (
+            await create_deep_agent()
+        )
+
         yield
 
     finally:
+        await close_redis_client()
         await close_device_job_client()
         await meta_ads_runtime.stop()
         await google_workspace_runtime.stop()
