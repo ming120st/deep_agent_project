@@ -3,12 +3,10 @@ from deepagents import (
 )
 from langchain.agents.middleware import TodoListMiddleware
 from deepagents.backends.filesystem import FilesystemBackend
-from deepagents.backends import CompositeBackend, StoreBackend
 from registry.agent_registry import get_subagents
 from core.llm.model_service import model_service
 from core.prompt.prompt_service import prompt_service
 from core.deep_agent.state import MainDeepAgentState
-from core.deep_agent.store import _resolve_user_namespace, shared_store
 from langgraph.checkpoint.memory import InMemorySaver
 from core.tracing.logger import get_logger
 from tools.network.wifi_line_change import submit_wifi_line_change
@@ -55,19 +53,10 @@ async def create_deep_agent():
         system_prompt=system_prompt,
         state_schema=MainDeepAgentState,
         checkpointer=InMemorySaver(),
-        store=shared_store,
-        backend=CompositeBackend(
-            default=FilesystemBackend(
-                root_dir=os.environ[
-                    "DEEP_AGENT_ROOT_DIR"
-                ],
-            ),
-            routes={
-                "/shared/": StoreBackend(
-                    store=shared_store,
-                    namespace=_resolve_user_namespace,
-                ),
-            },
+        backend=FilesystemBackend(
+            root_dir=os.environ[
+                "DEEP_AGENT_ROOT_DIR"
+            ],
         ),
         name="deep_agent",
     )
