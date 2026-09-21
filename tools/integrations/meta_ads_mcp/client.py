@@ -7,30 +7,50 @@ from langchain_mcp_adapters.client import (
 )
 
 
-META_MCP_URL = os.environ.get(
-    "META_MCP_URL"
-)
+def _get_required_env(
+    key: str,
+) -> str:
+    value = os.getenv(key)
+
+    if not value:
+        raise RuntimeError(
+            f"{key} 환경변수가 설정되지 않았습니다."
+        )
+
+    return value
 
 
-def create_meta_ads_mcp_client() -> MultiServerMCPClient:
-    access_token = os.environ.get(
+def get_meta_ad_account_id() -> str:
+    ad_account_id = _get_required_env(
+        "META_AD_ACCOUNT_ID"
+    )
+
+    if ad_account_id.startswith(
+        "act_"
+    ):
+        ad_account_id = (
+            ad_account_id[4:]
+        )
+
+    return ad_account_id
+
+
+def create_meta_ads_mcp_client(
+) -> MultiServerMCPClient:
+    meta_mcp_url = _get_required_env(
+        "META_MCP_URL"
+    )
+
+    access_token = _get_required_env(
         "META_ACCESS_TOKEN"
     )
 
-    if not META_MCP_URL:
-        raise RuntimeError(
-            "META_MCP_URL 환경변수가 설정되지 않았습니다."
-        )
-
-    if not access_token:
-        raise RuntimeError(
-            "META_ACCESS_TOKEN 환경변수가 설정되지 않았습니다."
-        )
+    get_meta_ad_account_id()
 
     return MultiServerMCPClient(
         {
             "meta_ads": {
-                "url": META_MCP_URL,
+                "url": meta_mcp_url,
                 "transport": "http",
                 "headers": {
                     "Authorization": (
