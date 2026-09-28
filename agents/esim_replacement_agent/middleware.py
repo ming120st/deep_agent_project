@@ -19,14 +19,16 @@ class EsimOrderPromptMiddleware(AgentMiddleware):
             order_detail = None
 
         if order_detail:
-            order_info = order_detail.get("order_info", {})
-            order_products = order_detail.get("order_products", [])
+            order_id = order_detail.get("주문번호", "")
+            order_info = order_detail.get("주문자정보", {})
+            order_products = order_detail.get("주문상품정보", [])
 
             order_info_text = json.dumps(order_info, ensure_ascii=False, indent=2)
             order_products_text = json.dumps(order_products, ensure_ascii=False, indent=2)
 
             prompt_injection = (
                 "\n\n[현재 조회된 주문 상세 정보]\n"
+                f"0. 주문번호: {order_id}\n\n"
                 f"1. 주문자 정보:\n{order_info_text}\n\n"
                 f"2. 주문 상품 목록:\n{order_products_text}\n\n"
                 "위 주문 정보를 참고하여 재발급 대상 확인 및 후속 작업을 진행하세요."

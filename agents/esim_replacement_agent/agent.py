@@ -61,9 +61,6 @@ async def esim_replacement_agent() -> CompiledSubAgent:
                 "DEEP_AGENT_ROOT_DIR"
             ],
         ),
-        interrupt_on={
-            "esim_send": True,
-        }
     )
 
     return CompiledSubAgent(

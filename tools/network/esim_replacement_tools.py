@@ -117,7 +117,7 @@ async def _fetch_order_detail(order_id: str) -> dict:
         }
         for item in rv.get("ordersDetail", [])
     ]
-    await redis_put("esim_replacement_agent","order_detail", {"order_info": order_info, "order_products": order_products})
+    await redis_put("esim_replacement_agent","order_detail", {"주문번호": order_id, "주문자정보": order_info, "주문상품정보": order_products})
     return {"ok": True, "order_info": order_info, "order_products": order_products}
 
 

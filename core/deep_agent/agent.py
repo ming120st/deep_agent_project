@@ -10,6 +10,8 @@ from core.deep_agent.state import MainDeepAgentState
 from langgraph.checkpoint.memory import InMemorySaver
 from core.tracing.logger import get_logger
 from tools.network.wifi_line_change import submit_wifi_line_change
+from tools.network.wifi_usage_inquiry import inquire_wifi_usage
+from tools.common.mail_tools import send_email
 import os
 
 logger = get_logger("deep_agent")
@@ -49,6 +51,8 @@ async def create_deep_agent():
         ],
         tools=[
             submit_wifi_line_change,
+            inquire_wifi_usage,
+            send_email,
         ],
         system_prompt=system_prompt,
         state_schema=MainDeepAgentState,
