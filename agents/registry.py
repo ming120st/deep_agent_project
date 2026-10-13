@@ -13,6 +13,9 @@ from agents.esim_replacement_agent.agent import (
 from agents.marketing.agent import(
     register_meta_ads_agent,
 )
+from agents.common.search_agent.agent import (
+    register_search_agent,
+)
 
 async def register_all_agents() -> None:
     await register_bigquery_agent()
@@ -20,3 +23,4 @@ async def register_all_agents() -> None:
     await register_drive_agent()
     await register_esim_replacement_agent()
     await register_meta_ads_agent()
+    await register_search_agent()

@@ -18,3 +18,4 @@ redis>=5.0,<8
 tzdata==2026.3
 uv==0.12.10
 openpyxl
+tavily-python
