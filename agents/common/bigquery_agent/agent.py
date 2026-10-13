@@ -11,7 +11,13 @@ from tools.common.bigquery.bigquery import (
     get_table_schema,
     run_sql_query,
 )
-from core.tracing.logging_middleware import ToolLoggingMiddleware
+from tools.common.bigquery.skill import (
+    get_bigquery_skills,
+    get_bigquery_skill,
+)
+from core.tracing.logging_middleware import (
+    ToolLoggingMiddleware,
+)
 
 
 BQ_PROJECT_ID = os.environ[
@@ -22,15 +28,12 @@ BQ_DATASET_ID = os.environ[
     "BQ_SALES_DATASET"
 ]
 
+
 async def register_bigquery_agent() -> None:
     system_prompt = await prompt_service.render(
         "deep_agent.subagent.bigquery.system",
         BQ_PROJECT_ID=BQ_PROJECT_ID,
         BQ_DATASET_ID=BQ_DATASET_ID,
-    )
-
-    skills = await prompt_service.prepare_skills(
-        "bigquery"
     )
 
     register_agent(
@@ -44,6 +47,13 @@ async def register_bigquery_agent() -> None:
         ),
         system_prompt=system_prompt,
         tools=[
+            # 등록된 BigQuery Skill 목록 조회
+            get_bigquery_skills,
+
+            # 특정 BigQuery Skill 본문 조회
+            get_bigquery_skill,
+
+            # BigQuery Tool
             list_tables,
             get_table_schema,
             run_sql_query,
@@ -51,5 +61,4 @@ async def register_bigquery_agent() -> None:
         middleware=[
             ToolLoggingMiddleware(),
         ],
-        skills=skills,
     )

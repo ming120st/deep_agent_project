@@ -18,7 +18,6 @@ from langgraph.config import get_config
 
 load_dotenv()
 
-
 REDIS_HOST = os.getenv("REDIS_HOST")
 REDIS_PORT = int(os.getenv("REDIS_PORT", "10000"))
 REDIS_PASSWORD = os.getenv("REDIS_PASSWORD")
@@ -188,3 +187,113 @@ await redis_delete("esim_reissue", "order_summary")
 exists = await redis_exists("esim_reissue", "order_summary")
 # 여기서 예시로 esim_reissue라고 명시된 workflow이름은 agents/ 하단 디렉토리 이름과 동일하게 하는걸로!
 """
+
+# =========================================================
+# Prompt / Skill Redis Cache
+# Agent Prompt 및 Skill 조회 시 사용하는 Redis 캐시 영역입니다.
+# =========================================================
+
+def _prompt_key(
+    agent: str,
+    identifier: str,
+) -> str:
+    """
+    Agent명과 Prompt/Skill 식별자를 조합해
+    Redis에서 사용할 캐시 Key를 생성한다.
+
+        Key 구조:
+        boa:prompt:{agent}:{identifier}
+    """
+    clean_agent = str(agent).strip().strip(":")
+    clean_identifier = str(identifier).strip().strip(":")
+
+    if not clean_agent:
+        raise ValueError("agent is required.")
+
+    if not clean_identifier:
+        raise ValueError("identifier is required.")
+
+    return (
+        f"boa:prompt:"
+        f"{clean_agent}:"
+        f"{clean_identifier}"
+    )
+
+async def prompt_cache_put(
+    agent: str,
+    identifier: str,
+    value: Any,
+    *,
+    ttl: int | None = DEFAULT_TTL_SECONDS,
+) -> bool:
+    client = await get_redis_client()
+
+    redis_key = _prompt_key(
+        agent=agent,
+        identifier=identifier,
+    )
+
+    payload = json.dumps(
+        value,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+
+    if ttl is None:
+        return bool(
+            await client.set(
+                redis_key,
+                payload,
+            )
+        )
+
+    if ttl <= 0:
+        raise ValueError(
+            "ttl must be greater than zero or None."
+        )
+
+    return bool(
+        await client.set(
+            redis_key,
+            payload,
+            ex=ttl,
+        )
+    )
+
+async def prompt_cache_get(
+    agent: str,
+    identifier: str,
+    *,
+    default: Any = None,
+) -> Any:
+    client = await get_redis_client()
+
+    redis_key = _prompt_key(
+        agent=agent,
+        identifier=identifier,
+    )
+
+    value = await client.get(redis_key)
+
+    if value is None:
+        return default
+
+    if isinstance(value, bytes):
+        value = value.decode("utf-8")
+
+    return json.loads(value)
+
+async def prompt_cache_delete(
+    agent: str,
+    identifier: str,
+) -> int:
+    client = await get_redis_client()
+
+    redis_key = _prompt_key(
+        agent=agent,
+        identifier=identifier,
+    )
+
+    return int(
+        await client.delete(redis_key)
+    )

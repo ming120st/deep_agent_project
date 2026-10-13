@@ -1,7 +1,12 @@
 # 프롬프트 데이터 구조를 정의하는 Pydantic 모델/스키마 파일
 
 from datetime import datetime
-from pydantic import BaseModel, Field
+
+from pydantic import (
+    BaseModel,
+    Field,
+)
+
 
 class PromptVariable(BaseModel):
     name: str
@@ -21,7 +26,7 @@ class PromptConfig(BaseModel):
 
     version: int
     content: str
-    
+
     skill_name: str | None = None
 
     variables: list[PromptVariable] = Field(

@@ -78,3 +78,10 @@ class MainDeepAgentState(DeepAgentState):
             _keep_latest_non_empty,
         ]
     ]
+    
+    # 현재 사용자 요청에 적용할 업무 Planning Skill
+    # 요청마다 새 값으로 교체하며,
+    # None을 허용하여 이전 요청의 Skill을 제거할 수 있게 한다.
+    planning_skill: NotRequired[
+        str | None
+    ]

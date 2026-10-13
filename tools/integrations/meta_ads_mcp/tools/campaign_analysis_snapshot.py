@@ -17,12 +17,12 @@ async def save_campaign_analysis_snapshot(
     snapshot: CampaignAnalysisSnapshot,
 ) -> dict:
     """
-    완료된 Meta Ads 일일 캠페인 분석 결과를 저장한다.
+    완료된 Meta Ads 캠페인 분석 결과를 저장한다.
 
-    오늘의 원본 성과 지표와
-    전일/최근 성과를 비교해 작성한 분석 결과를 저장한다.
+    일별 원본 성과 데이터는 이 Tool에서 저장하지 않으며,
+    sync_meta_campaign_daily_performance에서 별도로 저장한다.
 
-    분석이 완료된 후
+    성과 조회 및 분석이 모두 완료된 후, 
     최종 사용자 응답 전에 호출한다.
     """
 
@@ -32,7 +32,7 @@ async def save_campaign_analysis_snapshot(
 
     await (
         meta_ads_analysis_repository
-        .save_snapshot(
+        .update_analysis_to_daily_snapshot(
             data
         )
     )

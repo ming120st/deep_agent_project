@@ -136,13 +136,14 @@ async def sync_agent_to_db(
         },
         {
             "$set": {
-                "tools": synced_tools,
+                "tools": synced_tools,               
             },
             "$setOnInsert": {
                 "agent_id": agent_id,
                 "model": default_model_key,
                 "skills": [],
                 "prompt_key": None,
+                "planning_skill": None,
                 "enabled": True,
             },
         },
