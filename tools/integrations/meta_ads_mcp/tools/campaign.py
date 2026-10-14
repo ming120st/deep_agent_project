@@ -90,6 +90,13 @@ async def get_meta_campaigns(
         tool_name="ads_get_ad_entities",
         payload={
             "level": "campaign",
+            "fields": [
+                "id",
+                "name",
+                "objective",
+                "status",
+                "effective_status",
+            ],
         },
         config=config,
     )

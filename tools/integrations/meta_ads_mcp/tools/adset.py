@@ -31,7 +31,7 @@ async def get_meta_campaign_adsets(
             "fields": [
                 "optimization_goal",
                 "promoted_object",
-                "targeting",
+                # "targeting",
                 "daily_budget",
                 "lifetime_budget",
                 "bid_strategy",

@@ -15,19 +15,14 @@ from core.deep_agent.agent_config import (
 from core.llm.model_service import (
     model_service,
 )
-from deepagents import (
-    create_deep_agent as create_official_deep_agent,
-)
-
-from core.sandbox.docker_backend import (
-    DockerSandboxBackend,
-)
 
 # 코드에 등록한 Agent 정의를 메모리에 저장
 AGENT_REGISTRY: dict[
     str,
     dict[str, Any],
 ] = {}
+
+
 
 
 def _compiled_subagent(
@@ -42,64 +37,104 @@ def _compiled_subagent(
         "runnable": runnable,
     }
 
-
 def _raw_subagent(
     *,
     agent: dict[str, Any],
     model: Any,
     tools: list[Any],
 ) -> dict[str, Any]:
-    subagent = {
-        **agent,
+    return {
+        "name": agent["name"],
+        "description": agent["description"],
+        "system_prompt": agent.get(
+            "system_prompt"
+        ),
         "model": model,
         "tools": tools,
     }
 
-    subagent.pop(
-        "planning_skill",
-        None,
-    )
+# def _sync_agent_skills(
+#     *,
+#     backend: DockerSandboxBackend,
+#     skill_roots: list[str],
+# ) -> None:
 
-    subagent.pop(
-        "sandbox",
-        None,
-    )
+#     for skill_root in skill_roots:
+#         host_root = Path(
+#             skill_root
+#         )
 
-    return subagent
+#         if not host_root.exists():
+#             continue
 
-def _sandbox_subagent(
-    *,
-    agent_id: str,
-    agent: dict[str, Any],
-    model: Any,
-    tools: list[Any],
-) -> dict[str, Any]:
+#         sandbox_root = (
+#             "/"
+#             + host_root.as_posix().lstrip("/")
+#         )
 
-    runnable = create_official_deep_agent(
-        model=model,
-        tools=tools,
-        system_prompt=agent.get(
-            "system_prompt"
-        ),
-        skills=agent.get(
-            "skills",
-            [],
-        ),
-        middleware=agent.get(
-            "middleware",
-            [],
-        ),
-        backend=(
-            DockerSandboxBackend()
-        ),
-        name=agent_id,
-    )
+#         backend.sync_directory(
+#             host_root=host_root,
+#             sandbox_root=sandbox_root,
+#         )
+    
+# def _get_sandbox_backend(
+#     agent_id: str,
+# ) -> DockerSandboxBackend:
+#     backend = SANDBOX_BACKENDS.get(
+#         agent_id
+#     )
 
-    return _compiled_subagent(
-        name=agent_id,
-        description=agent["description"],
-        runnable=runnable,
-    )
+#     if backend is None:
+#         backend = DockerSandboxBackend()
+
+#         SANDBOX_BACKENDS[
+#             agent_id
+#         ] = backend
+
+#     return backend
+
+# def _sandbox_subagent(
+#     *,
+#     agent_id: str,
+#     agent: dict[str, Any],
+#     model: Any,
+#     tools: list[Any],
+# ) -> dict[str, Any]:
+
+#     backend = _get_sandbox_backend(
+#         agent_id
+#     )
+
+#     _sync_agent_skills(
+#         backend=backend,
+#         skill_roots=agent.get(
+#             "skills",
+#             [],
+#         ),
+#     )
+
+#     runnable = create_official_deep_agent(
+#         model=model,
+#         tools=tools,
+#         system_prompt=agent.get(
+#             "system_prompt"
+#         ),
+#         middleware=agent.get(
+#             "middleware",
+#             [],
+#         ),
+#         backend=backend,
+#         name=agent_id,
+#     )
+
+#     return _compiled_subagent(
+#         name=agent_id,
+#         description=agent[
+#             "description"
+#         ],
+#         runnable=runnable,
+#     )
+
 
 def register_agent(
     *,
@@ -107,12 +142,11 @@ def register_agent(
     description: str,
     system_prompt: str | None = None,
     tools: list[Any] | None = None,
-    skills: list[str] | None = None,
-    skill_files: dict[str, Any] | None = None,
+    skills: list[str] | None = None,    
     planning_skill: str | None = None,
     middleware: list[Any] | None = None,
     runnable: Any | None = None,
-    sandbox: bool = False,
+    # sandbox: bool = False,
 ) -> None:
 
     agent = {
@@ -120,17 +154,17 @@ def register_agent(
         "description": description,
         "system_prompt": system_prompt,
         "tools": tools or [],
-        "skills": skills or [],
-        "skill_files": skill_files or {},
+        "skills": skills or [],    
         "planning_skill": planning_skill,
         "middleware": middleware or [],
-        "sandbox": sandbox,
+        # "sandbox": sandbox,
     }
 
     if runnable is not None:
         agent["runnable"] = runnable
 
     AGENT_REGISTRY[name] = agent
+
 
 async def sync_agents_to_db() -> None:
     """
@@ -149,7 +183,8 @@ async def sync_agents_to_db() -> None:
     await disable_missing_agents(
         registered_agent_ids
     )
-    
+
+
 async def get_subagents() -> list[
     dict[str, Any]
 ]:
@@ -230,23 +265,34 @@ async def get_subagents() -> list[
         # =====================================================
         # 3. Sandbox SubAgent
         # =====================================================
-        if agent.get("sandbox"):
-            subagent = _sandbox_subagent(
-                agent_id=agent_id,
-                agent=agent,
-                model=model,
-                tools=enabled_tools,
-            )
+        # if agent.get(
+        #     "sandbox"
+        # ):
+        #     subagent = _sandbox_subagent(
+        #         agent_id=agent_id,
+        #         agent=agent,
+        #         model=model,
+        #         tools=enabled_tools,
+        #     )
+
+        # # =====================================================
+        # # 4. 일반 SubAgent
+        # # =====================================================
+        # else:
+        #     subagent = _raw_subagent(
+        #         agent=agent,
+        #         model=model,
+        #         tools=enabled_tools,
+        #     )
 
         # =====================================================
-        # 4. 일반 SubAgent
+        # 3. 일반 SubAgent
         # =====================================================
-        else:
-            subagent = _raw_subagent(
-                agent=agent,
-                model=model,
-                tools=enabled_tools,
-            )
+        subagent = _raw_subagent(
+            agent=agent,
+            model=model,
+            tools=enabled_tools,
+        )
 
         result.append(
             subagent
@@ -272,7 +318,7 @@ async def get_planning_skill_refs() -> list[
             agent_id
         )
 
-        if not enabled: 
+        if not enabled:
             continue
 
         agent_config = await get_agent_config(

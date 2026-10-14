@@ -19,11 +19,14 @@ async def save_campaign_analysis_snapshot(
     """
     완료된 Meta Ads 캠페인 분석 결과를 저장한다.
 
-    일별 원본 성과 데이터는 이 Tool에서 저장하지 않으며,
+    일별 원본 성과 데이터는
     sync_meta_campaign_daily_performance에서 별도로 저장한다.
 
-    성과 조회 및 분석이 모두 완료된 후, 
-    최종 사용자 응답 전에 호출한다.
+    분석 완료 후 최종 응답 전에 호출한다.
+
+    analysis의 funnel, segment, diagnosis,
+    limitations, actions는 performance 하위가 아니라
+    analysis의 직접 하위 필드로 전달한다.
     """
 
     data = snapshot.model_dump(

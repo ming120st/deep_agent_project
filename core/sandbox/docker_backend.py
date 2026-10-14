@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+from pathlib import Path
 import tarfile
 import uuid
 
@@ -112,7 +113,54 @@ class DockerSandboxBackend(
             exit_code=result.exit_code,
             truncated=False,
         )
+    def sync_directory(
+        self,
+        host_root: Path,
+        sandbox_root: str,
+    ) -> None:
+        upload_items: list[
+            tuple[str, bytes]
+        ] = []
 
+        for file_path in host_root.rglob("*"):
+            if not file_path.is_file():
+                continue
+
+            relative_path = file_path.relative_to(
+                host_root
+            )
+
+            sandbox_path = (
+                f"{sandbox_root.rstrip('/')}/"
+                f"{relative_path.as_posix()}"
+            )
+
+            upload_items.append(
+                (
+                    sandbox_path,
+                    file_path.read_bytes(),
+                )
+            )
+
+        results = self.upload_files(
+            upload_items
+        )
+
+        errors = [
+            result
+            for result in results
+            if result.error
+        ]
+
+        if errors:
+            raise RuntimeError(
+                "Sandbox directory sync failed: "
+                + "; ".join(
+                    f"{item.path}: {item.error}"
+                    for item in errors
+                )
+            )
+        
     def upload_files(
         self,
         files: list[tuple[str, bytes]],

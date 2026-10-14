@@ -4,7 +4,6 @@ from deepagents.middleware.skills import (
 from deepagents.backends.filesystem import (
     FilesystemBackend,
 )
-
 from core.prompt.prompt_service import (
     prompt_service,
 )
@@ -14,7 +13,6 @@ from registry.agent_registry import (
 from core.tracing.logging_middleware import (
     ToolLoggingMiddleware,
 )
-
 from tools.integrations.meta_ads_mcp.tools.campaign import (
     get_meta_analysis_targets,
     sync_meta_campaign_daily_performance,
@@ -42,28 +40,28 @@ from tools.integrations.meta_ads_mcp.tools.campaign_analysis_snapshot import (
 from tools.integrations.meta_ads_mcp.dashboard.tool import (
     create_meta_ads_dashboard,
 )
-
+import os 
 
 async def register_meta_ads_agent() -> None:
     system_prompt = await prompt_service.get(
         "deep_agent.subagent.meta_ads.system"
     )
 
-    # Redis / MongoDB의 최신 Skill을 확인하고
-    # 필요한 경우 Runtime SKILL.md 갱신
     skill_sources = await (
         prompt_service.prepare_skills(
             agent="meta_ads",
         )
     )
 
-    # .runtime 파일을 읽는 Backend
     skill_backend = FilesystemBackend(
-        root_dir="."
+        root_dir=os.environ[
+            "DEEP_AGENT_ROOT_DIR"
+        ]
     )
 
     register_agent(
         name="meta_ads",
+
         description=(
             "Meta Ads 전용 Agent. "
             "Meta Ads 캠페인, 광고세트, 광고, 소재/크리에이티브, "
@@ -74,9 +72,9 @@ async def register_meta_ads_agent() -> None:
         ),
 
         system_prompt=system_prompt,
-
-        # 항상 노출되는 Tool
+        skills=skill_sources,
         tools=[
+            get_meta_analysis_targets,
             get_meta_campaigns,
             sync_meta_campaign_daily_performance,
             get_meta_ad_preview,
@@ -90,10 +88,7 @@ async def register_meta_ads_agent() -> None:
             SkillsMiddleware(
                 backend=skill_backend,
                 sources=skill_sources,
-
-                # Skill을 읽은 후 노출할 Tool
                 tools=[
-                    get_meta_analysis_targets,
                     get_meta_campaign_performance,
                     get_meta_campaign_skill,
                     get_meta_campaign_adsets,
@@ -107,5 +102,5 @@ async def register_meta_ads_agent() -> None:
             ToolLoggingMiddleware(),
         ],
 
-        sandbox=False,
+        # sandbox=True,
     )

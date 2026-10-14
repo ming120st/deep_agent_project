@@ -26,7 +26,6 @@ DEFAULT_AD_PERFORMANCE_FIELDS = [
     "purchase_roas",
 ]
 
-
 @tool
 async def get_meta_campaign_ads(
     campaign_id: str,

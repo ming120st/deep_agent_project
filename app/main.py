@@ -1,3 +1,6 @@
+from __future__ import annotations
+
+import asyncio
 from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
@@ -18,9 +21,6 @@ from core.deep_agent.agent import (
 )
 from core.database.redis import (
     close_redis_client,
-)
-from core.llm.model_service import (
-    model_service,
 )
 from integrations.device_job.client import (
     close_device_job_client,
@@ -48,6 +48,7 @@ async def lifespan(
     google_workspace_started = False
     device_job_started = False
 
+    app.state.background_tasks = set()
     try:
         # 1. 외부 리소스 시작
         await meta_ads_runtime.start()
@@ -60,9 +61,12 @@ async def lifespan(
         device_job_started = True
 
         # 2. Agent 등록
+        # =====================================================
         await register_all_agents()
 
+        # =====================================================
         # 3. Agent / Tool 정보를 DB와 동기화
+        # =====================================================
         await sync_agents_to_db()
 
         # 4. DeepAgent 생성

@@ -3,7 +3,9 @@
 
 from __future__ import annotations
 
-import os
+import logging
+
+logger = logging.getLogger(__name__)
 from pathlib import Path
 import shutil
 from typing import Any
@@ -108,26 +110,28 @@ class PromptService:
         agent: str,
         skill_name: str,
     ) -> dict[str, Any]:
-        """
-        Skill 조회의 공통 진입점.
 
-        Redis Cache의 version과
-        MongoDB의 현재 활성 version을 비교한다.
+        cached = None
 
-        Cache가 최신이면 Redis 값을 반환하고,
-        오래됐거나 없으면 MongoDB에서 다시 조회한 뒤
-        Redis Cache를 갱신한다.
+        # 1. Redis Cache 조회
+        # Redis 장애가 나도 MongoDB 조회는 계속 진행
+        try:
+            cached = await prompt_cache_get(
+                agent=agent,
+                identifier=skill_name,
+            )
 
-        Skill content와 metadata를 하나의 payload로 관리한다.
-        """
+        except Exception as exc:
+            logger.warning(
+                "Redis skill cache read failed. "
+                "Continue without cache. "
+                "agent=%s skill_name=%s error=%s",
+                agent,
+                skill_name,
+                exc,
+            )
 
-        # 현재 Redis Cache 조회
-        cached = await prompt_cache_get(
-            agent=agent,
-            identifier=skill_name,
-        )
-
-        # MongoDB의 현재 활성 Skill Version 조회
+        # 2. MongoDB에서 현재 활성 version 조회
         db_version = await (
             self.repository
             .get_active_skill_version(
@@ -142,19 +146,16 @@ class PromptService:
                 f"{agent}/{skill_name}"
             )
 
-        # Redis에 저장된 Skill이
-        # 현재 DB Version과 동일하면 그대로 사용
+        # 3. Redis Cache가 최신이면 사용
         if (
             isinstance(cached, dict)
-            and cached.get("version")
-            == db_version
-            and cached.get("content")
-            is not None
+            and cached.get("version") == db_version
+            and cached.get("content") is not None
         ):
             return cached
 
-        # Cache Miss 또는 Version 불일치 시
-        # MongoDB에서 최신 Skill 전체 조회
+        # 4. Cache miss / Redis 장애 / version 불일치
+        # MongoDB에서 최신 Skill 조회
         prompt = await (
             self.repository
             .get_active_skill(
@@ -169,7 +170,6 @@ class PromptService:
                 f"{agent}/{skill_name}"
             )
 
-        # Redis에 저장할 공통 Skill Payload
         payload = {
             "agent": prompt.agent,
             "skill_name": prompt.skill_name,
@@ -179,12 +179,24 @@ class PromptService:
             "content": prompt.content,
         }
 
-        # 최신 Skill을 Redis에 저장
-        await prompt_cache_put(
-            agent=agent,
-            identifier=skill_name,
-            value=payload,
-        )
+        # 5. Redis 갱신
+        # 실패해도 MongoDB 결과는 반환
+        try:
+            await prompt_cache_put(
+                agent=agent,
+                identifier=skill_name,
+                value=payload,
+            )
+
+        except Exception as exc:
+            logger.warning(
+                "Redis skill cache write failed. "
+                "Continue without cache. "
+                "agent=%s skill_name=%s error=%s",
+                agent,
+                skill_name,
+                exc,
+            )
 
         return payload
 
@@ -256,7 +268,7 @@ class PromptService:
         self,
         agent: str,
     ) -> list[str]:
-        # 실제 Windows 파일 저장 위치
+
         base_dir = (
             Path(".runtime")
             / "skills"
@@ -303,9 +315,6 @@ class PromptService:
                 / ".version"
             )
 
-            # Redis cache 우선
-            # Redis version != DB version이면
-            # _get_skill_payload 내부에서 최신 DB 값으로 갱신
             payload = await (
                 self._get_skill_payload(
                     agent=agent,
@@ -328,8 +337,6 @@ class PromptService:
                     .strip()
                 )
 
-            # Skill 파일이 없거나
-            # Runtime version != 현재 version인 경우만 갱신
             if (
                 not skill_file.exists()
                 or local_version
@@ -350,12 +357,6 @@ class PromptService:
                     encoding="utf-8",
                 )
 
-            # -------------------------------------------------
-            # 같은 버전이면 아무 작업도 하지 않음
-            # -------------------------------------------------
-
-        # DB에서 더 이상 활성화되어 있지 않은
-        # Runtime Skill 제거
         for child in base_dir.iterdir():
             if (
                 child.is_dir()
@@ -366,9 +367,9 @@ class PromptService:
                     child
                 )
 
-        # DeepAgents에서는 POSIX virtual path 사용
+        # 여기 수정
         return [
-            f"/.runtime/skills/{agent}"
+            f".runtime/skills/{agent}"
         ]
         
 # 애플리케이션 전역 PromptService
