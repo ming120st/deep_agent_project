@@ -1,9 +1,20 @@
 ---
 name: esim-replacement-main-manual
-description: 이심 재발급 처리 업무 가이드. 사용자의 이심(eSIM) 재발급 요청 시 이 가이드를 따라 처리한다. esim-replacement-agent는 반드시 이 파일을 처음부터 참고해서 업무를 진행해라.
+description: 이심 재발급 처리 업무 가이드. 사용자의 이심(eSIM) 재발급 요청 시 이 가이드를 따라 처리한다. esim_replacement_agent는 반드시 이 파일을 처음부터 끝까지 참고해서 업무를 진행해라.
+
+metadata: 
+  include_tools: esim_fetch_order esim_resolve_reissue_product esim_get_product_detail esim_build_confirmation esim_send esim_register_consultation
 ---
 
 # 이심 재발급 (esim-replacement-agent)
+
+## Todo Planning
+1. 주문조회
+2. 상품 선택
+3. 상품 확정
+4. payload 조립
+5. 발송
+6. 상담 등록
 
 ## 처리 순서
 
@@ -21,6 +32,7 @@ description: 이심 재발급 처리 업무 가이드. 사용자의 이심(eSIM)
    - 구매 수량이 1개뿐이면 그 iccid를 자동으로 쓴다. 사용자에게 묻지 마라.
    - 구매 수량이 2개 이상이면 목록(상품과 ICCID)을 사용자에게 보여주고 재발급할 항목을 선택받아라 (복수 선택 가능).
      단, **선택된 항목들의 product_code가 서로 다르면 재발급을 진행할 수 없다** — 동일 상품의 iccid만 함께 선택하도록 다시 안내해라.
+   - 재발급은 어떤 상품을 선택하든 결제금액은 0원이니 추가결제나 차액 정산은 없다.
 
 4. 상품코드 결정
   이 단계에서는 재발급할 상품의 최종 product_code를 결정한다.
@@ -34,7 +46,7 @@ description: 이심 재발급 처리 업무 가이드. 사용자의 이심(eSIM)
 
 5. 확정된 product_code에 대해 `esim_get_product_detail(product_code)`로 최종 이름/가격을 가져온다.
 
-6. `esim_build_confirmation(...)` 호출 — payload를 조립한다.
+6. `esim_build_confirmation(...)` 호출 — payload를 조립한다. 반드시 이 과정을 거쳐야 이심 발송에 문제가 발생하지 않는다.
 
 7. 그 내용을 사용자에게 보여주고 (payload 원문이 아닌 확인용으로 가공된 텍스트로)
    - 사용자가 이메일/전화번호/수량 수정을 요청하면 반영해서 `esim_build_confirmation`을 다시 호출해라.
@@ -55,9 +67,12 @@ description: 이심 재발급 처리 업무 가이드. 사용자의 이심(eSIM)
 
 8. `esim_send(payload, request_qnt, order_id)` 호출 — 실제 발송.
    - 최종 payload를 기반으로 esim_send(payload, request_qnt, order_id)로 이심을 발송한다.
-   **"사용자로부터 실행 또는 발송 하라는 명확한 확답을 받기 전까지 발송하지 마라.**
-   - "주문상품 세팅 오류" 로 실패한다면, 다시 4단계로 돌아가 product_search_subagent 서브에이전트에 위임해 적절한 상품을 다시 선택하도록 안내해라. 기존
-   - 실패하면 사용자에게 실패 사유를 알리고 종료. 상담 등록으로 넘어가지 마라.
+   **"사용자로부터 실행 또는 발송 하라는 명확한 확답을 받기 전까지 발송하지 마라."**
+   - **발송처리 실패 시 대처**
+     - "주문상품 세팅 오류" 로 실패한다면, 다시 4단계로 돌아가 product_search_subagent 서브에이전트에 위임해 적절한 상품을 다시 선택하도록 안내해라.
+     - "이미 처리된 외부주문번호 오류"로 실패한다면 payload의 OutOrderId 뒤에 _1, _2, ... 와 같이 순차적으로 붙여 재시도해라.
+     - 최종적으로 실패하면 사용자에게 실패 사유를 알리고 종료. 상담 등록으로 넘어가지 마라.
+
 
 9. 발송이 성공했을 때만 `esim_register_consultation(...)` 호출 — 상담 등록 요청 후 완료까지 대기한다.
    - 이 tool은 완료될 때까지 다소 시간이 걸릴 수 있다(최대 약 2분). 사용자에게 "상담 등록 처리
@@ -66,7 +81,7 @@ description: 이심 재발급 처리 업무 가이드. 사용자의 이심(eSIM)
      명확히 알려라 — 발송 자체가 실패한 것처럼 말하지 마라.
 
 ## 하지 말아야 할 것
-- 사용자가 명확히 "실행"하라고 하기 전에 `esim_send`를 호출하는 것
+- 사용자가 명확히 "실행" 또는 "발송해" 등 최종 확인 의사표시를 하기 전에 `esim_send`를 호출하는 것
 - 서로 다른 product_code의 iccid를 함께 재발급 처리하는 것
 - 수정 불가 필드(주문번호, 결제금액, UserID)를 사용자 요청대로 바꾸는 것
 - 발송 실패 시에도 상담 등록을 시도하는 것

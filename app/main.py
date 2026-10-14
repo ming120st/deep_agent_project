@@ -39,22 +39,33 @@ from app.api.device_callback import (
     router as device_job_router,
 )
 
+
 @asynccontextmanager
 async def lifespan(
     app: FastAPI,
 ):
-    # 1. 외부 리소스 시작
-    await meta_ads_runtime.start()
-    await google_workspace_runtime.start()
-    await init_device_job_client()
+    meta_ads_started = False
+    google_workspace_started = False
+    device_job_started = False
+
     try:
+        # 1. 외부 리소스 시작
+        await meta_ads_runtime.start()
+        meta_ads_started = True
+
+        await google_workspace_runtime.start()
+        google_workspace_started = True
+
+        await init_device_job_client()
+        device_job_started = True
+
         # 2. Agent 등록
         await register_all_agents()
 
         # 3. Agent / Tool 정보를 DB와 동기화
         await sync_agents_to_db()
 
-        # 4. DB 설정 적용 후 DeepAgent 생성
+        # 4. DeepAgent 생성
         app.state.deep_agent = (
             await create_deep_agent()
         )
@@ -62,10 +73,17 @@ async def lifespan(
         yield
 
     finally:
+        # 역순으로 종료
+        if device_job_started:
+            await close_device_job_client()
+
         await close_redis_client()
-        await close_device_job_client()
-        await meta_ads_runtime.stop()
-        await google_workspace_runtime.stop()
+
+        if google_workspace_started:
+            await google_workspace_runtime.stop()
+
+        if meta_ads_started:
+            await meta_ads_runtime.stop()
 
 
 app = FastAPI(
@@ -75,6 +93,7 @@ app = FastAPI(
 app.include_router(
     google_chat_router,
 )
+
 app.include_router(
     device_job_router,
 )

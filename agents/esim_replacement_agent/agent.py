@@ -1,5 +1,7 @@
 from core.prompt.prompt_service import prompt_service
 from registry.agent_registry import register_agent
+from core.tracing.logging_middleware import ToolLoggingMiddleware
+from deepagents.middleware.skills import SkillsMiddleware
 from deepagents import create_deep_agent, CompiledSubAgent
 from deepagents.backends.filesystem import FilesystemBackend
 from core.llm.model_service import model_service
@@ -34,6 +36,19 @@ async def esim_replacement_agent() -> CompiledSubAgent:
         "esim_replacement"
     )
 
+    # Redis / MongoDB의 최신 Skill을 확인하고
+    # 필요한 경우 Runtime SKILL.md 갱신
+    skill_sources = await (
+        prompt_service.prepare_skills(
+            agent="esim_replacement",
+        )
+    )
+
+    # .runtime 파일을 읽는 Backend
+    skill_backend = FilesystemBackend(
+        root_dir="."
+    )
+
     product_search_subagent = (
         await build_product_search_subagent()
     )
@@ -43,13 +58,23 @@ async def esim_replacement_agent() -> CompiledSubAgent:
         system_prompt=system_prompt,
         middleware=[
             EsimOrderPromptMiddleware(),
+            SkillsMiddleware(
+                backend=skill_backend,
+                sources=skill_sources,
+
+                # Skill을 읽은 후 노출할 Tool
+                tools=[
+                    esim_send,
+                ]
+            ),
+            ToolLoggingMiddleware(),
         ],
+        # 항상 노출되는 Tools 목록
         tools=[
             esim_fetch_order,
             esim_resolve_reissue_product,
             esim_get_product_detail,
             esim_build_confirmation,
-            esim_send,
             esim_register_consultation,
         ],
         skills=main_skills,
