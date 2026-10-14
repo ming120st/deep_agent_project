@@ -100,12 +100,6 @@ action_classify_prompt = ChatPromptTemplate.from_template(
     """
 )
 
-action_classify_chain: Runnable = (
-    action_classify_prompt
-    | LLM_LIGHT
-    | action_parser
-)
-
 from src.core.session_logger import session_event, add_event, EventType, build_llm_meta
 
 # ── 메인 노드 ─────────────────────────────────────────────────────────────────

@@ -46,7 +46,7 @@ def get_collection(name: str):
 
 # checkpointer용 동기 pymongo 클라이언트
 sync_client = MongoClient(MONGODB_URI, **_MONGO_OPTS)
-checkpointer = MongoDBSaver(sync_client, db_name=MONGODB_DB_NAME, ttl=60*60*24*1)  # TTL 1일 (초 단위)
+checkpointer = MongoDBSaver(sync_client, db_name=MONGODB_DB_NAME, ttl=60*60*8)  # TTL 8시간 (초 단위)
 session_logs_collection = db['session_logs']
 # session_logs_collection.create_index('session_id', unique=True)
 # session_logs_collection.create_index('user_id')
