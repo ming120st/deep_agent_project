@@ -391,20 +391,20 @@ async def esim_send(
 
 @tool
 async def esim_register_consultation(
-    order_id: str,
-    name: str,
-    product_name: str,
-    iccids: list[str],
-    send_success: bool,
-    send_results: list[dict],
+    order_id: Annotated[str, "E로 시작하는 내부 주문번호. 예: E26031101886"],
+    name: Annotated[str, "고객/구매자 이름"],
+    product_name: Annotated[str, "재발급하여 발송한 상품명"],
+    iccids: Annotated[list[str], "재발급 대상 상품의 기존 ICCID 목록 (esim_fetch_order의 order_products에서 확인한 iccid 목록. 빈 배열 불가)"],
+    send_success: Annotated[bool, "이심 발송 성공 여부 (true인 경우에만 호출)"],
+    send_results: Annotated[list[dict], "esim_send의 반환 결과 객체를 담은 리스트 (예: [esim_send 반환값])"],
     config: RunnableConfig,
 ) -> dict:
     """
     이심 발송 완료 후 상담 등록을 device_agent(PC 에이전트)에 요청하고 완료 콜백을 기다린다.
     이건 사용자 승인 대기가 아니라 외부 비동기 콜백 대기이므로 interrupt()를 직접 사용한다.
-    send_success가 False면 호출하지 말 것 — 발송 실패 시 상담 등록 자체를 하지 않는다.
-    send_results에는 esim_send 반환값을 목록으로 감싸서 전달할 것.
-    예: send_results=[esim_send의 반환값]
+    - iccids: 재발급 대상의 기존 ICCID 문자열 목록 (예: ['8982...']). 반드시 누락 없이 1개 이상의 ICCID를 포함해야 한다.
+    - send_success: send_success가 False면 호출하지 말 것 — 발송 실패 시 상담 등록 자체를 하지 않는다.
+    - send_results: esim_send 반환값을 목록으로 감싸서 전달할 것. (예: send_results=[esim_send의 반환값])
     """
     if not send_success:
         return {
