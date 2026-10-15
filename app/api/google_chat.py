@@ -29,7 +29,9 @@ from integrations.google_chat.client import (
 from integrations.google_chat.event_parser import (
     parse_google_chat_event,
 )
-
+from core.deep_agent.reload_manager import (
+    agent_reload_manager,
+)
 
 router = APIRouter()
 logger = get_logger(
@@ -368,7 +370,13 @@ async def google_chat(
         await request.json()
     )
 
-    # Request 자체는 background task에 넘기지 않는다.
+    # SubAgent Prompt version 변경 여부 확인
+    await agent_reload_manager.refresh_if_needed(
+        request.app
+    )
+
+    # 변경이 있었다면 최신 DeepAgent 객체를 가져온다.
+    # 이번 요청에서는 이 객체를 끝까지 사용한다.
     deep_agent = (
         request.app.state.deep_agent
     )

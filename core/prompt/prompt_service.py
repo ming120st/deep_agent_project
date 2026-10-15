@@ -100,6 +100,7 @@ class PromptService:
         return template.render(
             **values
         )
+    
 
     # =========================================================
     # Skill
@@ -371,6 +372,25 @@ class PromptService:
         return [
             f".runtime/skills/{agent}"
         ]
+
+    async def get_prompt_version(
+        self,
+        key: str,
+    ) -> int:
+
+        version = await (
+            self.repository
+            .get_active_prompt_version(
+                key
+            )
+        )
+
+        if version is None:
+            raise ValueError(
+                f"Active prompt not found: {key}"
+            )
+
+        return version
         
 # 애플리케이션 전역 PromptService
 prompt_service = PromptService(

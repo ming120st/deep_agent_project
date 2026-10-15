@@ -41,10 +41,12 @@ from tools.integrations.meta_ads_mcp.dashboard.tool import (
     create_meta_ads_dashboard,
 )
 import os 
-
+META_ADS_PROMPT_KEY = (
+    "deep_agent.subagent.meta_ads.system"
+)
 async def register_meta_ads_agent() -> None:
     system_prompt = await prompt_service.get(
-        "deep_agent.subagent.meta_ads.system"
+        META_ADS_PROMPT_KEY
     )
 
     skill_sources = await (
@@ -72,6 +74,7 @@ async def register_meta_ads_agent() -> None:
         ),
 
         system_prompt=system_prompt,
+        prompt_key=META_ADS_PROMPT_KEY,
         skills=skill_sources,
         tools=[
             get_meta_analysis_targets,

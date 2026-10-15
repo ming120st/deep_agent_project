@@ -133,8 +133,32 @@ class PromptRepository:
             return None
 
         return document.get("version")
- 
+    
+    async def get_active_prompt_version(
+        self,
+        key: str,
+    ) -> int | None:
 
+        document = await self.collection.find_one(
+            {
+                "key": key,
+                "enabled": True,
+            },
+            projection={
+                "_id": 0,
+                "version": 1,
+            },
+            sort=[
+                ("version", -1),
+            ],
+        )
+
+        if document is None:
+            return None
+
+        return document.get(
+            "version"
+        )
 prompt_repository = PromptRepository(
     mongo_db
 )
