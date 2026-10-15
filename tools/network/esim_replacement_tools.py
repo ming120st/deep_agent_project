@@ -392,7 +392,7 @@ async def esim_send(
 @tool
 async def esim_register_consultation(
     order_id: Annotated[str, "E로 시작하는 내부 주문번호. 예: E26031101886"],
-    name: Annotated[str, "고객/구매자 이름"],
+    name: Annotated[str, "요청자 이름(구글챗 사용 직원 이름)"],
     product_name: Annotated[str, "재발급하여 발송한 상품명"],
     iccids: Annotated[list[str], "재발급 대상 상품의 기존 ICCID 목록 (esim_fetch_order의 order_products에서 확인한 iccid 목록. 빈 배열 불가)"],
     send_success: Annotated[bool, "이심 발송 성공 여부 (true인 경우에만 호출)"],
