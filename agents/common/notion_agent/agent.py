@@ -11,11 +11,13 @@ from tools.common.notion.tool import (
     notion_replace_page_content,
     notion_search,
 )
-
+NOTION_PROMPT_KEY = (
+    "deep_agent.subagent.notion.system"
+)
 NOTION_PAGE_ID = os.environ["NOTION_PAGE_ID"]
 async def register_notion_agent() -> None:
     system_prompt = await prompt_service.render(
-        "deep_agent.subagent.notion.system",
+        NOTION_PROMPT_KEY,
         **{
             "NOTION_PAGE_ID": NOTION_PAGE_ID,
         },
@@ -28,6 +30,7 @@ async def register_notion_agent() -> None:
             "수정하거나 내용을 기록해야 할 때 사용한다."
         ),
         system_prompt=system_prompt,
+        prompt_key=NOTION_PROMPT_KEY,
         tools=[
             notion_search,
             notion_get_page,

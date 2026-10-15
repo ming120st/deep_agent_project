@@ -4,10 +4,12 @@ from tools.integrations.google_workspace_mcp.runtime import (
     google_workspace_runtime,
 )
 
-
+GOOGLE_WORKSPACE_PROMPT_KEY = (
+    "deep_agent.subagent.google_workspace.system"
+)
 async def register_drive_agent() -> None:
     system_prompt = await prompt_service.render(
-        "deep_agent.subagent.google_workspace.system",
+        GOOGLE_WORKSPACE_PROMPT_KEY,
     )
 
     register_agent(
@@ -17,6 +19,7 @@ async def register_drive_agent() -> None:
             "필요할 때 사용한다."
         ),
         system_prompt=system_prompt,
+        prompt_key=GOOGLE_WORKSPACE_PROMPT_KEY,
         tools=(
             google_workspace_runtime
             .build_agent_tools()

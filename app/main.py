@@ -38,7 +38,9 @@ from tools.integrations.meta_ads_mcp.runtime import (
 from app.api.device_callback import (
     router as device_job_router,
 )
-
+from core.deep_agent.reload_manager import (
+    agent_reload_manager,
+)
 
 @asynccontextmanager
 async def lifespan(
@@ -60,16 +62,14 @@ async def lifespan(
         await init_device_job_client()
         device_job_started = True
 
-        # 2. Agent 등록
-        # =====================================================
         await register_all_agents()
 
-        # =====================================================
-        # 3. Agent / Tool 정보를 DB와 동기화
-        # =====================================================
         await sync_agents_to_db()
 
-        # 4. DeepAgent 생성
+        # 현재 각 SubAgent Prompt version을
+        # ReloadManager의 기준값으로 저장
+        await agent_reload_manager.initialize()
+
         app.state.deep_agent = (
             await create_deep_agent()
         )

@@ -1,16 +1,32 @@
-from core.prompt.prompt_service import prompt_service
-from registry.agent_registry import register_agent
-from core.tracing.logging_middleware import ToolLoggingMiddleware
-from deepagents.middleware.skills import SkillsMiddleware
-from deepagents import create_deep_agent, CompiledSubAgent
-from deepagents.backends.filesystem import FilesystemBackend
-from core.llm.model_service import model_service
+from core.prompt.prompt_service import (
+    prompt_service,
+)
+from registry.agent_registry import (
+    register_agent,
+)
+from core.tracing.logging_middleware import (
+    ToolLoggingMiddleware,
+)
+from deepagents.middleware.skills import (
+    SkillsMiddleware,
+)
+from deepagents import (
+    create_deep_agent,
+    CompiledSubAgent,
+)
+from deepagents.backends.filesystem import (
+    FilesystemBackend,
+)
+from core.llm.model_service import (
+    model_service,
+)
 from agents.esim_replacement_agent.subagents.product_search.agent import (
     build_product_search_subagent,
 )
 from agents.esim_replacement_agent.middleware import (
     EsimOrderPromptMiddleware,
 )
+
 import os
 
 from tools.network.esim_replacement_tools import (
@@ -23,28 +39,39 @@ from tools.network.esim_replacement_tools import (
 )
 
 
+ESIM_REPLACEMENT_PROMPT_KEY = (
+    "deep_agent.subagent.esim_replacement.system"
+)
+
+
 async def esim_replacement_agent() -> CompiledSubAgent:
-    system_prompt = await prompt_service.render(
-        "deep_agent.subagent.esim_replacement.system"
+    """
+    eSIM 재발급 SubAgent를 생성한다.
+
+    - 최신 System Prompt 조회
+    - 최신 Skill 동기화
+    - Product Search SubAgent 생성
+    - 최종 CompiledSubAgent 생성
+    """
+
+    system_prompt = await (
+        prompt_service.render(
+            ESIM_REPLACEMENT_PROMPT_KEY
+        )
     )
 
-    main_model = await model_service.get_model(
-        "llm.light"
+    main_model = await (
+        model_service.get_model(
+            "llm.light"
+        )
     )
 
-    main_skills = await prompt_service.prepare_skills(
-        "esim_replacement"
-    )
-
-    # Redis / MongoDB의 최신 Skill을 확인하고
-    # 필요한 경우 Runtime SKILL.md 갱신
     skill_sources = await (
         prompt_service.prepare_skills(
             agent="esim_replacement",
         )
     )
 
-    # .runtime 파일을 읽는 Backend
     skill_backend = FilesystemBackend(
         root_dir="."
     )
@@ -58,18 +85,17 @@ async def esim_replacement_agent() -> CompiledSubAgent:
         system_prompt=system_prompt,
         middleware=[
             EsimOrderPromptMiddleware(),
+
             SkillsMiddleware(
                 backend=skill_backend,
                 sources=skill_sources,
-
-                # Skill을 읽은 후 노출할 Tool
                 tools=[
                     esim_send,
-                ]
+                ],
             ),
+
             ToolLoggingMiddleware(),
         ],
-        # 항상 노출되는 Tools 목록
         tools=[
             esim_fetch_order,
             esim_resolve_reissue_product,
@@ -77,7 +103,7 @@ async def esim_replacement_agent() -> CompiledSubAgent:
             esim_build_confirmation,
             esim_register_consultation,
         ],
-        skills=main_skills,
+        skills=skill_sources,
         subagents=[
             product_search_subagent,
         ],
@@ -99,10 +125,15 @@ async def esim_replacement_agent() -> CompiledSubAgent:
 
 
 async def register_esim_replacement_agent() -> None:
-    subagent = await esim_replacement_agent()
+    subagent = await (
+        esim_replacement_agent()
+    )
 
     register_agent(
         name=subagent["name"],
         description=subagent["description"],
+        prompt_key=(
+            ESIM_REPLACEMENT_PROMPT_KEY
+        ),
         runnable=subagent["runnable"],
     )

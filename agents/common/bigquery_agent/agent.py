@@ -27,11 +27,13 @@ BQ_PROJECT_ID = os.environ[
 BQ_DATASET_ID = os.environ[
     "BQ_SALES_DATASET"
 ]
-
+BIGQUERY_PROMPT_KEY = (
+    "deep_agent.subagent.bigquery.system"
+)
 
 async def register_bigquery_agent() -> None:
     system_prompt = await prompt_service.render(
-        "deep_agent.subagent.bigquery.system",
+        BIGQUERY_PROMPT_KEY,
         BQ_PROJECT_ID=BQ_PROJECT_ID,
         BQ_DATASET_ID=BQ_DATASET_ID,
     )
@@ -46,6 +48,7 @@ async def register_bigquery_agent() -> None:
             "분석 요청에는 사용하지 않는다."
         ),
         system_prompt=system_prompt,
+        prompt_key=BIGQUERY_PROMPT_KEY,
         tools=[
             # 등록된 BigQuery Skill 목록 조회
             get_bigquery_skills,
