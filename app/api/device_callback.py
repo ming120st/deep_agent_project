@@ -19,6 +19,9 @@ from integrations.device_job.device_job_manager import (
 from integrations.device_job.schemas import (
     DeviceJobCallback,
 )
+from integrations.intranet_publish import (
+    try_handle_callback as try_handle_intranet_publish_callback,
+)
 from integrations.google_chat.message_sender import (
     send_message,
 )
@@ -59,6 +62,13 @@ async def device_callback(
     _verify_key(
         x_device_job_key
     )
+
+    # 인트라넷 게시 job은 대화 그래프를 resume하지 않고 게시 모듈이 처리한다
+    intranet_response = await try_handle_intranet_publish_callback(
+        callback
+    )
+    if intranet_response is not None:
+        return intranet_response
 
     # 2. Job 조회
     job_info = await get_job_info_by_job(

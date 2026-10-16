@@ -1,0 +1,93 @@
+{
+  "schema_version": 1,
+  "post_key": "ai-weekly-2026-W42",
+  "series": "ai-weekly",
+  "period": "2026-W42",
+  "board": "genai",
+  "title": "[AI 위클리] 10월 3주차 (샘플)",
+  "theme": "default",
+  "assets": [
+    {"key": "header", "filename": "header.png", "alt": "AI 위클리 헤더"},
+    {"key": "issue1", "filename": "issue1.png", "alt": "이슈 1 요약 이미지"},
+    {"key": "chart-keywords", "filename": "chart-keywords.png", "alt": "주간 키워드 빈도"}
+  ],
+  "blocks": [
+    {"type": "image", "key": "header"},
+    {"type": "heading", "level": 2, "text": "이번 주 한 줄"},
+    {"type": "callout", "tone": "info", "title": "이번 주 핵심",
+     "text": "**샘플 문서입니다.** 아래 내용은 레이아웃 확인용 가짜 데이터이며 실제 뉴스가 아닙니다.\n새 블록이 필요하면 렌더러에 블록 타입만 추가하면 모든 게시글이 같이 씁니다."},
+
+    {"type": "heading", "level": 2, "text": "이번 주 Top 이슈"},
+    {"type": "news_card",
+     "title": "[샘플] 대형 언어모델 신규 버전 공개",
+     "url": "https://example.com/news/sample-1",
+     "source": "샘플뉴스",
+     "published_date": "2026-10-14",
+     "summary": "새 버전이 **긴 문서 처리**와 도구 호출 정확도를 개선했다는 내용의 샘플 요약입니다. 원문 문장을 옮기지 않고 새로 쓴 요약이 들어갑니다.",
+     "impact": "CS 챗봇의 답변 정확도 평가 항목에 '긴 약관 문서 질의'를 추가해 볼 만합니다.",
+     "tags": ["CS", "개발"],
+     "image_key": "issue1"},
+    {"type": "news_card",
+     "title": "[샘플] 여행업계, AI 상담 도입 확산",
+     "url": "https://example.com/news/sample-2",
+     "source": "예시경제 [제휴]",
+     "published_date": "2026-10-13",
+     "summary": "여행 상품 문의를 AI가 1차 응대하는 사례가 늘고 있다는 샘플 내용입니다. 자세한 내용은 [원문 보기](https://example.com/news/sample-2)에서 확인할 수 있습니다.",
+     "impact": "eSIM 설정 문의처럼 반복 질문이 많은 영역부터 자동화 효과를 측정할 수 있습니다.",
+     "tags": ["CS", "마케팅"]},
+    {"type": "news_card",
+     "title": "[샘플] 생성형 AI 이용 가이드라인 개정 소식",
+     "url": "https://example.com/news/sample-3",
+     "source": "샘플IT",
+     "published_date": "2026-10-12",
+     "summary": "개인정보가 포함된 입력에 대한 주의 항목이 강화되었다는 샘플 내용입니다.",
+     "tags": ["보안"]},
+
+    {"type": "heading", "level": 2, "text": "이슈 한눈에 보기"},
+    {"type": "table",
+     "caption": "이번 주 이슈 요약",
+     "columns": [
+       {"label": "이슈", "align": "left", "width": "46%"},
+       {"label": "관련 부서", "align": "center"},
+       {"label": "영향도", "align": "center"},
+       {"label": "기사 수", "align": "right"}
+     ],
+     "rows": [
+       ["언어모델 신규 버전", "개발 / CS", {"text": "높음", "tone": "warn", "bold": true}, 12],
+       ["여행업계 AI 상담 확산", "CS / 마케팅", {"text": "중간", "tone": "info"}, 7],
+       ["이용 가이드라인 개정", "보안", {"text": "낮음", "tone": "good"}, 3],
+       ["합계", "", "", 22]
+     ],
+     "style": {"striped": true, "header_tone": "primary", "first_col_bold": true},
+     "footnote": "기사 수는 검색된 고유 기사 기준 (샘플 값)"},
+    {"type": "table",
+     "caption": "국내 vs 해외 비중 (compact / neutral 헤더 예시)",
+     "columns": [
+       {"label": "구분", "align": "left", "width": "40%"},
+       {"label": "비중", "align": "right"},
+       {"label": "비고", "align": "left"}
+     ],
+     "rows": [
+       ["국내", "58%", "네이버 뉴스/블로그"],
+       ["해외", "42%", {"text": "Tavily 검색", "url": "https://example.com/source"}]
+     ],
+     "style": {"striped": false, "header_tone": "neutral", "compact": true}},
+
+    {"type": "image", "key": "chart-keywords", "caption": "[샘플] 주간 키워드 빈도", "width": 640},
+
+    {"type": "heading", "level": 2, "text": "우리 팀 액션 아이템"},
+    {"type": "bullets", "ordered": true, "items": [
+      "신규 모델 버전으로 CS 응답 품질 샘플 20건 비교 테스트",
+      "반복 문의 TOP 5의 **자동 응답 가능 여부** 점검",
+      "개인정보 입력 주의 문구를 챗봇 가이드에 반영"
+    ]},
+    {"type": "callout", "tone": "warn", "title": "확인 필요",
+     "text": "샘플 문서에는 실제 출처 검증이 포함되지 않습니다. 실제 게시 전에는 팩트 체크 단계를 거칩니다."},
+    {"type": "divider"},
+
+    {"type": "heading", "level": 2, "text": "사내 AI 소식"},
+    {"type": "paragraph", "text": "이번 주에는 **BOA 지식베이스 업데이트**가 반영되었습니다. (샘플 문구)\n자세한 사용법은 [사내 가이드](https://example.com/guide)를 참고해 주세요."},
+    {"type": "bullets", "items": ["RPA 자동화 신규 1건 적용 (샘플)", "문의 환영: AI팀"]},
+    {"type": "link", "text": "지난 호 보기", "url": "https://example.com/archive"}
+  ]
+}

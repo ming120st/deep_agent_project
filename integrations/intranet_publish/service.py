@@ -1,0 +1,435 @@
+"""PostDocument -> rendered HTML -> Blob images -> Device Job -> callback -> stored result.
+
+Every BOA feature that posts to the intranet goes through ``IntranetPublisher.publish_post``.
+Agents produce only the PostDocument JSON; HTML always comes from the shared renderer.
+"""
+from __future__ import annotations
+
+import asyncio
+import logging
+from dataclasses import asdict, dataclass, field
+from datetime import datetime, timezone
+from typing import Any, Awaitable, Callable, Protocol
+
+import httpx
+from pydantic import ValidationError
+
+from integrations.device_job.schemas import DeviceJobRequest
+from integrations.intranet_post import PostDocument, RenderedPost, RenderError, is_safe_html, render_post
+
+from .blob import BlobConfigError, BlobUploadError, ImageBlobStore
+from .config import FINAL_REASONS, JOB_ID_PREFIX, MANUAL_CHECK_REASONS, RETRYABLE_REASONS, PublishSettings
+from .store import PublishStore
+from .validation import PublishError, check_board, check_image, extract_reason, make_job_id, normalize_recipients
+
+logger = logging.getLogger(__name__)
+
+PENDING, RETRY_WAIT, SUCCEEDED, FAILED, NEEDS_CHECK = "pending", "retry_wait", "succeeded", "failed", "needs_check"
+TERMINAL = (SUCCEEDED, FAILED, NEEDS_CHECK)
+CALLBACK_TIMEOUT = "CALLBACK_TIMEOUT"
+RETRY_INTERRUPTED = "RETRY_INTERRUPTED"
+DEVICE_REQUEST_REJECTED = "DEVICE_REQUEST_REJECTED"
+
+# result keys kept from the device_agent callback (everything else is dropped)
+_RESULT_KEYS = ("post_id", "post_url", "image_urls", "recipient_count", "recipient_errors", "deduplicated", "warnings", "reason")
+
+
+class DeviceSubmitter(Protocol):
+    async def submit(self, request: DeviceJobRequest) -> None: ...
+
+
+Notifier = Callable[[dict[str, Any]], Awaitable[None]]
+
+
+@dataclass
+class PublishResult:
+    job_id: str
+    status: str  # pending | succeeded (already posted earlier)
+    board: str
+    post_key: str
+    title: str
+    image_count: int
+    recipient_count: int
+    warnings: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _as_utc(value: datetime) -> datetime:
+    return value if value.tzinfo else value.replace(tzinfo=timezone.utc)  # Mongo returns naive UTC
+
+
+class IntranetPublisher:
+    def __init__(
+        self,
+        *,
+        store: PublishStore,
+        blob: ImageBlobStore | Callable[[], ImageBlobStore],
+        device: DeviceSubmitter,
+        settings: PublishSettings | None = None,
+        notifier: Notifier | None = None,
+        sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+        clock: Callable[[], datetime] = _now,
+    ) -> None:
+        self.store = store
+        self._blob = blob
+        self.device = device
+        self.settings = settings or PublishSettings()
+        self.notifier = notifier
+        self._sleep = sleep
+        self._clock = clock
+        self._tasks: set[asyncio.Task] = set()
+
+    # ------------------------------------------------------------------ helpers
+    @property
+    def blob(self) -> ImageBlobStore:
+        if callable(self._blob) and not hasattr(self._blob, "upload"):
+            self._blob = self._blob()  # lazy: callbacks without retries never need Blob config
+        return self._blob  # type: ignore[return-value]
+
+    @staticmethod
+    def owns_job_id(job_id: str) -> bool:
+        return isinstance(job_id, str) and job_id.startswith(JOB_ID_PREFIX)
+
+    async def owns_job(self, job_id: str) -> bool:
+        return self.owns_job_id(job_id) and await self.store.get(job_id) is not None
+
+    async def get_status(self, job_id: str) -> dict[str, Any] | None:
+        await self.expire_stale()
+        record = await self.store.get(job_id)
+        if record is None:
+            return None
+        return {k: record.get(k) for k in ("job_id", "status", "reason", "attempt", "board", "post_key", "title", "result")}
+
+    async def drain(self) -> None:
+        """Wait for scheduled retries (tests and scripts)."""
+        while self._tasks:
+            await asyncio.gather(*list(self._tasks), return_exceptions=True)
+
+    # ------------------------------------------------------------------ publish
+    async def publish_post(
+        self,
+        doc: PostDocument | dict[str, Any],
+        *,
+        assets: dict[str, bytes] | None = None,
+        recipients: list[str] | None = None,
+        thread_id: str,
+        context: dict[str, Any] | None = None,
+        notify: dict[str, str] | None = None,
+    ) -> PublishResult:
+        """Validate, render, upload images, and send the device job. Returns once the job is accepted;
+        the final outcome arrives through the device callback (see ``handle_callback``).
+
+        ``notify`` = {"space_id": ..., "thread_name": ...} sends the outcome to Google Chat.
+        Raises ``PublishError`` before anything is uploaded or sent when the input is invalid.
+        """
+        rendered = self._render(doc)
+        board = check_board(rendered.board, self.settings.boards)
+        names = normalize_recipients(recipients, board)
+        if not is_safe_html(rendered.body_html):
+            raise PublishError("UNSAFE_BODY", "본문에 허용되지 않는 HTML이 있습니다.")
+        uploads = self._check_assets(rendered, assets or {})
+
+        job_id = make_job_id(board.name, rendered.post_key)
+        await self.expire_stale()
+        previous = await self.store.get(job_id)
+        if previous is not None:
+            if previous["status"] == SUCCEEDED:
+                logger.info("[IntranetPublish] %s already posted; not sending again", job_id)
+                return self._result(previous, rendered, SUCCEEDED)
+            if previous["status"] in (PENDING, RETRY_WAIT):
+                raise PublishError("IN_PROGRESS", "같은 글(post_key)을 이미 게시 중입니다.", {"job_id": job_id})
+            if previous["status"] == NEEDS_CHECK:
+                raise PublishError(
+                    "NEEDS_MANUAL_CHECK",
+                    "이전 시도가 실제로 게시됐을 수 있습니다. 게시판을 확인한 뒤 새 post_key로 다시 요청하세요.",
+                    {"job_id": job_id, "reason": previous.get("reason")},
+                )
+            # FAILED: nothing was submitted on the board, the same job_id may be used again.
+
+        for item in uploads:
+            try:
+                await self.blob.upload(item["blob_path"], item.pop("data"), item["content_type"])
+            except (BlobUploadError, BlobConfigError) as exc:
+                raise PublishError("BLOB_FAILED", str(exc)) from None
+
+        now = self._clock()
+        record = {
+            "job_id": job_id,
+            "thread_id": thread_id,
+            "post_key": rendered.post_key,
+            "series": rendered.series,
+            "period": rendered.period,
+            "board": board.name,
+            "title": rendered.title,
+            "body_html": rendered.body_html,
+            "images": uploads,
+            "recipients": names,  # needed to resend on retry; never logged
+            "context": context or {},
+            "notify": notify or {},
+            "warnings": list(rendered.warnings),
+            "status": PENDING,
+            "attempt": 1,
+            "reason": None,
+            "result": None,
+            "created_at": now,
+            "updated_at": now,
+        }
+        await self.store.save(record)
+        logger.info(
+            "[IntranetPublish] send %s board=%s images=%d recipients=%d body_chars=%d",
+            job_id, board.name, len(uploads), len(names), len(rendered.body_html),
+        )
+        await self._submit(record)
+        return self._result(record, rendered, PENDING)
+
+    def _render(self, doc: PostDocument | dict[str, Any]) -> RenderedPost:
+        try:
+            return render_post(doc)
+        except ValidationError as exc:
+            errors = [{"loc": list(e.get("loc", ())), "msg": e.get("msg")} for e in exc.errors()[:20]]
+            raise PublishError("INVALID_DOCUMENT", "게시 문서가 규격에 맞지 않습니다.", errors) from None
+        except RenderError as exc:
+            raise PublishError("RENDER_FAILED", str(exc)) from None
+
+    @staticmethod
+    def _check_assets(rendered: RenderedPost, assets: dict[str, bytes]) -> list[dict[str, Any]]:
+        missing = [image.key for image in rendered.images if image.key not in assets]
+        if missing:
+            raise PublishError("MISSING_ASSET", f"이미지 데이터가 없습니다: {', '.join(missing)}", {"keys": missing})
+        uploads = []
+        for image in rendered.images:
+            content_type = check_image(image.key, image.filename, assets[image.key])
+            uploads.append(
+                {
+                    "key": image.key,
+                    "filename": image.filename,
+                    "blob_path": rendered.blob_path(image.filename),
+                    "content_type": content_type,
+                    "data": bytes(assets[image.key]),
+                }
+            )
+        return uploads
+
+    @staticmethod
+    def _result(record: dict[str, Any], rendered: RenderedPost, status: str) -> PublishResult:
+        return PublishResult(
+            job_id=record["job_id"],
+            status=status,
+            board=record["board"],
+            post_key=record["post_key"],
+            title=record["title"],
+            image_count=len(record.get("images") or []),
+            recipient_count=len(record.get("recipients") or []),
+            warnings=list(rendered.warnings),
+        )
+
+    # ------------------------------------------------------------------ sending
+    def _build_request(self, record: dict[str, Any]) -> DeviceJobRequest:
+        parameters: dict[str, Any] = {
+            "job_id": record["job_id"],  # the dispatcher does not pass the top-level job_id to the handler
+            "board": record["board"],
+            "title": record["title"],
+            "body_html": record["body_html"],
+            "images": [
+                {"key": i["key"], "filename": i["filename"], "blob_url": self.blob.read_url(i["blob_path"], self.settings.sas_ttl)}
+                for i in record.get("images") or []
+            ],
+            "mode": "create",
+        }
+        if record.get("recipients"):
+            parameters["recipients"] = list(record["recipients"])
+        return DeviceJobRequest(
+            job_id=record["job_id"],
+            thread_id=record["thread_id"],
+            task=self.settings.task_name,
+            parameters=parameters,
+            context=dict(record.get("context") or {}),
+        )
+
+    async def _submit(self, record: dict[str, Any]) -> None:
+        """POST /device-job. Retries only when the request certainly did not arrive.
+
+        - connection could not be made / 503: retry, then FAILED (nothing ran)
+        - other 4xx: FAILED (rejected, nothing ran)
+        - timeouts after connecting, other 5xx: stay PENDING; the callback or the timeout decides,
+          because the device_agent may already be working on it.
+        """
+        job_id = record["job_id"]
+        try:
+            request = self._build_request(record)
+        except Exception as exc:
+            await self._finish(job_id, [PENDING], FAILED, "BLOB_FAILED", None)
+            raise PublishError("BLOB_FAILED", f"이미지 읽기 URL 발급 실패 ({type(exc).__name__})") from None
+
+        attempts = max(1, self.settings.submit_attempts)
+        for attempt in range(1, attempts + 1):
+            try:
+                await self.device.submit(request)
+                return
+            except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
+                problem = type(exc).__name__
+            except httpx.HTTPStatusError as exc:
+                code = exc.response.status_code
+                if code == 503:
+                    problem = "HTTP 503"
+                elif 400 <= code < 500:
+                    await self._finish(job_id, [PENDING], FAILED, DEVICE_REQUEST_REJECTED, None)
+                    raise PublishError(DEVICE_REQUEST_REJECTED, f"device_agent가 요청을 거부했습니다 (HTTP {code}).") from None
+                else:
+                    logger.warning("[IntranetPublish] %s submit got HTTP %s; waiting for callback", job_id, code)
+                    return
+            except httpx.HTTPError as exc:
+                logger.warning("[IntranetPublish] %s submit outcome unknown (%s); waiting for callback", job_id, type(exc).__name__)
+                return
+            except RuntimeError as exc:  # DEVICE_JOB_URL missing / client not initialised
+                await self._finish(job_id, [PENDING], FAILED, "DEVICE_REQUEST_FAILED", None)
+                raise PublishError("DEVICE_REQUEST_FAILED", str(exc)) from None
+            logger.warning("[IntranetPublish] %s submit attempt %d/%d failed (%s)", job_id, attempt, attempts, problem)
+            if attempt < attempts:
+                await self._sleep(self.settings.submit_backoff_seconds * (2 ** (attempt - 1)))
+        await self._finish(job_id, [PENDING], FAILED, "DEVICE_REQUEST_FAILED", None)
+        raise PublishError("DEVICE_REQUEST_FAILED", "device_agent에 연결하지 못했습니다.")
+
+    # ------------------------------------------------------------------ callback
+    async def handle_callback(self, callback: dict[str, Any]) -> dict[str, Any]:
+        """Called by /device-callback for jobs that ``owns_job``. Idempotent."""
+        await self.expire_stale()
+        job_id = callback.get("job_id", "")
+        status = callback.get("status")
+        result = callback.get("result") or {}
+        kept = {k: result[k] for k in _RESULT_KEYS if k in result}
+
+        if status == "success":
+            # a late success after a timeout is still recorded
+            record = await self._finish(job_id, [PENDING], SUCCEEDED, None, kept) or await self._finish(
+                job_id, [NEEDS_CHECK], SUCCEEDED, None, kept, only_reason=CALLBACK_TIMEOUT
+            )
+            if record is None:
+                return {"status": "duplicate", "job_id": job_id}
+            logger.info("[IntranetPublish] %s posted: post_id=%s", job_id, kept.get("post_id"))
+            return {"status": SUCCEEDED, "job_id": job_id}
+
+        reason = extract_reason(callback)
+        current = await self.store.get(job_id)
+        if current is None:
+            return {"status": "duplicate", "job_id": job_id}
+        if current.get("status") == NEEDS_CHECK and current.get("reason") == CALLBACK_TIMEOUT:
+            # late failure after we gave up waiting: record it, never retry automatically
+            final = FAILED if reason in FINAL_REASONS or reason in RETRYABLE_REASONS else NEEDS_CHECK
+            record = await self._finish(job_id, [NEEDS_CHECK], final, reason, kept, only_reason=CALLBACK_TIMEOUT)
+            return {"status": final if record else "duplicate", "job_id": job_id, "reason": reason}
+        if current.get("status") != PENDING:
+            return {"status": "duplicate", "job_id": job_id}
+
+        retries_done = current.get("attempt", 1) - 1
+        if reason in RETRYABLE_REASONS and retries_done < len(self.settings.retry_delays_seconds):
+            record = await self.store.transition(
+                job_id, [PENDING], {"status": RETRY_WAIT, "reason": reason, "result": kept, "updated_at": self._clock()}
+            )
+            if record is None:
+                return {"status": "duplicate", "job_id": job_id}
+            delay = self.settings.retry_delays_seconds[retries_done]
+            logger.warning("[IntranetPublish] %s failed with %s; retry in %ss", job_id, reason, delay)
+            task = asyncio.create_task(self._retry_later(job_id, delay))
+            self._tasks.add(task)
+            task.add_done_callback(self._tasks.discard)
+            return {"status": RETRY_WAIT, "job_id": job_id, "reason": reason}
+
+        if reason in FINAL_REASONS or reason in RETRYABLE_REASONS:
+            final = FAILED  # input problem, or retries used up; nothing was submitted on the board
+        else:
+            final = NEEDS_CHECK  # MANUAL_CHECK_REASONS and anything unknown: someone has to look
+        record = await self._finish(job_id, [PENDING], final, reason, kept)
+        if record is None:
+            return {"status": "duplicate", "job_id": job_id}
+        logger.warning("[IntranetPublish] %s %s: %s", job_id, final, reason)
+        return {"status": final, "job_id": job_id, "reason": reason}
+
+    async def _retry_later(self, job_id: str, delay: float) -> None:
+        try:
+            await self._sleep(delay)
+            current = await self.store.get(job_id)
+            if current is None:
+                return
+            record = await self.store.transition(
+                job_id,
+                [RETRY_WAIT],
+                {"status": PENDING, "attempt": current.get("attempt", 1) + 1, "updated_at": self._clock()},
+            )
+            if record is not None:
+                await self._submit(record)  # fresh SAS URLs are minted here
+        except PublishError as exc:
+            logger.error("[IntranetPublish] %s retry failed: %s", job_id, exc.code)
+        except Exception as exc:
+            logger.error("[IntranetPublish] %s retry crashed (%s)", job_id, type(exc).__name__)
+            await self._finish(job_id, [PENDING, RETRY_WAIT], FAILED, RETRY_INTERRUPTED, None)
+
+    async def _finish(
+        self,
+        job_id: str,
+        from_statuses: list[str],
+        status: str,
+        reason: str | None,
+        result: dict[str, Any] | None,
+        *,
+        only_reason: str | None = None,
+    ) -> dict[str, Any] | None:
+        update: dict[str, Any] = {"status": status, "reason": reason, "updated_at": self._clock()}
+        if result is not None:
+            update["result"] = result
+        record = await self.store.transition(job_id, from_statuses, update, reason=only_reason)
+        if record is not None and status in TERMINAL:
+            await self._notify(record)
+        return record
+
+    async def _notify(self, record: dict[str, Any]) -> None:
+        if self.notifier is None:
+            return
+        try:
+            await self.notifier(record)
+        except Exception as exc:
+            logger.warning("[IntranetPublish] notify failed for %s (%s)", record.get("job_id"), type(exc).__name__)
+
+    # ------------------------------------------------------------------ timeouts
+    async def expire_stale(self) -> int:
+        """PENDING longer than the callback timeout -> NEEDS_CHECK (it may have been posted).
+        RETRY_WAIT that never resumed (process restarted) -> FAILED (nothing was posted)."""
+        before = self._clock() - self.settings.callback_timeout
+        changed = 0
+        for record in await self.store.stale([PENDING, RETRY_WAIT], before):
+            if _as_utc(record["updated_at"]) >= before:
+                continue
+            if record["status"] == PENDING:
+                done = await self._finish(record["job_id"], [PENDING], NEEDS_CHECK, CALLBACK_TIMEOUT, None)
+            else:
+                done = await self._finish(record["job_id"], [RETRY_WAIT], FAILED, RETRY_INTERRUPTED, None)
+            changed += done is not None
+        return changed
+
+
+def describe(record: dict[str, Any]) -> str:
+    """Short Korean summary for chat notifications (no recipient names, no URLs with secrets)."""
+    title = record.get("title", "")
+    status = record.get("status")
+    result = record.get("result") or {}
+    if status == SUCCEEDED:
+        line = f"인트라넷 게시 완료: {title}"
+        if result.get("post_url"):
+            line += f"\n{result['post_url']}"
+        if result.get("deduplicated"):
+            line += "\n(이미 게시된 글이라 다시 올리지 않았습니다)"
+        return line
+    reason = record.get("reason") or "UNKNOWN"
+    if status == NEEDS_CHECK:
+        return f"인트라넷 게시 확인 필요({reason}): {title}\n게시판에 글이 올라갔는지 직접 확인해 주세요. 자동으로 다시 올리지 않습니다."
+    line = f"인트라넷 게시 실패({reason}): {title}"
+    errors = result.get("recipient_errors") or []
+    if errors:
+        line += "\n수신자 확인 필요: " + ", ".join(f"{e.get('index')}번({e.get('reason')})" for e in errors)
+    return line
