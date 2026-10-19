@@ -82,18 +82,25 @@ def extension(filename: str) -> str:
     return filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
 
 
-def check_image(key: str, filename: str, data: Any) -> str:
-    """Return the content type, or raise INVALID_IMAGE."""
+def check_image_meta(key: str, filename: str, size: int, head: bytes) -> str:
+    """Check size and file signature (first bytes). Return the content type, or raise INVALID_IMAGE."""
     ext = extension(filename)
     if ext not in _SIGNATURES:
         raise PublishError("INVALID_IMAGE", f"이미지 '{key}': png/jpg/jpeg/gif만 가능합니다.", {"key": key})
-    if not isinstance(data, (bytes, bytearray)) or not data:
-        raise PublishError("INVALID_IMAGE", f"이미지 '{key}': 내용이 비어 있거나 bytes가 아닙니다.", {"key": key})
-    if len(data) > MAX_IMAGE_BYTES:
+    if not size or not head:
+        raise PublishError("INVALID_IMAGE", f"이미지 '{key}': 내용이 비어 있습니다.", {"key": key})
+    if size > MAX_IMAGE_BYTES:
         raise PublishError("INVALID_IMAGE", f"이미지 '{key}': 10MB를 넘습니다.", {"key": key})
-    if not any(bytes(data[: len(sig)]) == sig for sig in _SIGNATURES[ext]):
+    if not any(bytes(head[: len(sig)]) == sig for sig in _SIGNATURES[ext]):
         raise PublishError("INVALID_IMAGE", f"이미지 '{key}': 파일 내용이 확장자({ext})와 다릅니다.", {"key": key})
     return CONTENT_TYPES[ext]
+
+
+def check_image(key: str, filename: str, data: Any) -> str:
+    """Same checks for bytes held in memory (used by the image upload tool)."""
+    if not isinstance(data, (bytes, bytearray)):
+        raise PublishError("INVALID_IMAGE", f"이미지 '{key}': bytes가 아닙니다.", {"key": key})
+    return check_image_meta(key, filename, len(data), bytes(data[:16]))
 
 
 _REASON_TOKEN = re.compile(r"^[A-Z][A-Z_]{2,63}$")

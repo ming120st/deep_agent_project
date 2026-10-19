@@ -3,8 +3,8 @@
     from integrations.intranet_publish import get_publisher, PublishError
 
     result = await get_publisher().publish_post(
-        post_document,                       # PostDocument or dict (agents produce this JSON)
-        assets={"header": png_bytes},        # bytes for every image the post uses
+        post,                                # IntranetPost or dict: metadata + body_html (written by the HTML agent)
+        images=[{"key": "header", "filename": "header.png"}],  # uploaded first with upload_intranet_image
         recipients=["홍길동"],                # work board only
         thread_id=thread_id,
         notify={"space_id": space, "thread_name": thread},  # optional Google Chat notice of the outcome
@@ -18,6 +18,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from .post import ImageSpec, IntranetPost
 from .config import BOARDS, PublishSettings, blob_connection_string
 from .service import IntranetPublisher, PublishResult, describe
 from .validation import PublishError
@@ -26,6 +27,8 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     "BOARDS",
+    "ImageSpec",
+    "IntranetPost",
     "IntranetPublisher",
     "PublishError",
     "PublishResult",

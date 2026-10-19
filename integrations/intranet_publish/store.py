@@ -1,6 +1,6 @@
 """Where publish records live. One record per job_id (= one post on one board).
 
-Record fields: job_id, thread_id, post_key, series, period, board, title, body_html,
+Record fields: job_id, thread_id, post_key, board, title, body_html,
 images[{key, filename, blob_path, content_type}], recipients, context, notify,
 status, attempt, reason, result, created_at, updated_at.
 

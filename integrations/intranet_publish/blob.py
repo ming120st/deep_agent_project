@@ -20,6 +20,10 @@ class BlobUploadError(RuntimeError):
 class ImageBlobStore(Protocol):
     async def upload(self, path: str, data: bytes, content_type: str) -> None: ...
 
+    async def head(self, path: str, length: int = 16) -> "tuple[int, bytes] | None":
+        """(size, first ``length`` bytes) of the blob, or None if it does not exist."""
+        ...
+
     def read_url(self, path: str, ttl: timedelta) -> str: ...
 
 
@@ -61,6 +65,22 @@ class AzureImageBlobStore:
             )
         except Exception as exc:
             raise BlobUploadError(f"Blob 업로드 실패: {path} ({type(exc).__name__})") from None
+
+    async def head(self, path: str, length: int = 16) -> tuple[int, bytes] | None:
+        return await asyncio.to_thread(self._head_sync, path, length)
+
+    def _head_sync(self, path: str, length: int) -> tuple[int, bytes] | None:
+        from azure.core.exceptions import ResourceNotFoundError
+
+        blob = self._container_client.get_blob_client(path)
+        try:
+            size = blob.get_blob_properties().size
+            first = blob.download_blob(offset=0, length=min(length, size)).readall() if size else b""
+        except ResourceNotFoundError:
+            return None
+        except Exception as exc:
+            raise BlobUploadError(f"Blob 확인 실패: {path} ({type(exc).__name__})") from None
+        return size, first
 
     def read_url(self, path: str, ttl: timedelta) -> str:
         from azure.storage.blob import BlobSasPermissions, generate_blob_sas

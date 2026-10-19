@@ -1,22 +1,23 @@
-"""Publish the sample post (manual end-to-end check).
+"""Publish a sample post (manual end-to-end check). The body is plain HTML written by hand or by an agent.
 
-    python scripts/publish_intranet_sample.py                       # render only, nothing uploaded or sent
+    python scripts/publish_intranet_sample.py                       # check only, nothing uploaded or sent
+    python scripts/publish_intranet_sample.py --html my_body.html   # check your own body
     python scripts/publish_intranet_sample.py --board work --recipients "홍길동" --confirm --wait
     python scripts/publish_intranet_sample.py --board genai --confirm --confirm-public --wait
 
-Without --confirm the post is only rendered into a temp folder (files are overwritten each run).
-With --confirm the images go to Blob and the device job is sent. The callback goes to the BOA
-server named in the device_agent's BOA_CALLBACK_URL, so that server must run this code and use
-the same MongoDB as this script for --wait to see the result.
+Without --confirm the post is only validated (same checks as the publisher). With --confirm the
+images are put into Blob (like the image upload tool does) and the device job is sent. Every ``{{img:key}}`` in the body gets a generated
+solid-colour PNG named ``key.png``. The callback goes to the BOA server named in the device_agent's
+BOA_CALLBACK_URL, so that server must run this code and use the same MongoDB as this script for --wait.
 """
 from __future__ import annotations
 
 import argparse
 import asyncio
 import json
+import re
 import struct
 import sys
-import tempfile
 import time
 import zlib
 from pathlib import Path
@@ -24,8 +25,15 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-SAMPLE = ROOT / "integrations" / "intranet_post" / "samples" / "ai_weekly_sample.json"
 COLOURS = [(43, 95, 171), (32, 140, 110), (200, 120, 30), (120, 80, 160)]
+FONT = "font-family:'Malgun Gothic','Apple SD Gothic Neo',sans-serif"
+SAMPLE_BODY = f"""<div style="{FONT};font-size:14px;line-height:1.6;color:#222222;max-width:860px">
+<div style="margin:0 0 14px 0;text-align:center"><img src="{{{{img:header}}}}" alt="헤더" style="max-width:100%;height:auto;border:0;vertical-align:middle"></div>
+<div style="margin:0 0 14px 0;padding:12px 16px;background:#e8f1fb;border:1px solid #b8d3f0;border-left:5px solid #2b5fab;border-radius:6px;color:#174a7e;font-size:14px;line-height:1.65"><div style="margin:0 0 4px 0;font-weight:700;font-size:14px">샘플 게시글</div><div style="margin:0">HTML 직접 게시 확인용 글입니다.</div></div>
+<h2 style="margin:30px 0 14px 0;padding:0 0 8px 0;{FONT};font-size:20px;line-height:1.35;font-weight:700;color:#1d457f;border-bottom:2px solid #2b5fab">이미지 확인</h2>
+<div style="margin:0 0 14px 0;text-align:center"><img src="{{{{img:issue1}}}}" alt="이슈 1" style="max-width:100%;height:auto;border:0;vertical-align:middle"></div>
+<div style="margin:0 0 14px 0;text-align:center"><img src="{{{{img:chart}}}}" alt="차트" style="max-width:100%;height:auto;border:0;vertical-align:middle"></div>
+</div>"""
 
 
 def solid_png(width: int, height: int, rgb: tuple[int, int, int]) -> bytes:
@@ -40,32 +48,24 @@ def solid_png(width: int, height: int, rgb: tuple[int, int, int]) -> bytes:
     return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", header) + chunk(b"IDAT", zlib.compress(raw, 9)) + chunk(b"IEND", b"")
 
 
-def sample_assets(doc: dict) -> dict[str, bytes]:
-    assets = {}
-    for i, asset in enumerate(doc["assets"]):
-        if not asset["filename"].lower().endswith(".png"):
-            raise SystemExit(f"샘플 이미지 '{asset['key']}'는 png가 아니라 자동 생성할 수 없습니다.")
-        size = (1200, 240) if asset["key"] == "header" else (800, 400)
-        assets[asset["key"]] = solid_png(*size, COLOURS[i % len(COLOURS)])
-    return assets
+def build_post(args: argparse.Namespace) -> tuple[dict, dict[str, bytes]]:
+    body = args.html.read_text(encoding="utf-8") if args.html else SAMPLE_BODY
+    keys = list(dict.fromkeys(re.findall(r"\{\{img:([a-z0-9-]+)\}\}", body)))
+    title = args.title
+    if args.board == "work" and not title.startswith("[테스트]"):
+        title = f"[테스트] {title}"
+    post = {
+        "post_key": args.post_key,
+        "board": args.board,
+        "title": title,
+        "body_html": body,
+        "images": [{"key": k, "filename": f"{k}.png"} for k in keys],
+    }
+    assets = {k: solid_png(*((1200, 240) if k == "header" else (800, 400)), COLOURS[i % len(COLOURS)]) for i, k in enumerate(keys)}
+    return post, assets
 
 
-def render_only(doc: dict) -> None:
-    from integrations.intranet_post import render_post
-    from integrations.intranet_post.preview import build_preview_html
-
-    rendered = render_post(doc)
-    out = Path(tempfile.gettempdir()) / "intranet_post_preview"
-    out.mkdir(exist_ok=True)
-    (out / "body.html").write_text(rendered.body_html, encoding="utf-8")
-    (out / "preview.html").write_text(build_preview_html(rendered), encoding="utf-8")
-    print(f"렌더만 했습니다 (업로드/요청 없음). board={rendered.board} images={len(rendered.images)}")
-    print(f"미리보기: {out / 'preview.html'}")
-    for warning in rendered.warnings:
-        print(f"경고: {warning}")
-
-
-async def publish(doc: dict, args: argparse.Namespace) -> int:
+async def publish(post: dict, assets: dict[str, bytes], args: argparse.Namespace) -> int:
     from dotenv import load_dotenv
 
     load_dotenv(ROOT / ".env")
@@ -76,12 +76,9 @@ async def publish(doc: dict, args: argparse.Namespace) -> int:
     publisher = get_publisher()
     try:
         try:
-            result = await publisher.publish_post(
-                doc,
-                assets=sample_assets(doc),
-                recipients=args.recipients,
-                thread_id="intranet-publish-script",
-            )
+            for image in post["images"]:  # what upload_intranet_image does for an agent
+                await publisher.blob.upload(f"intranet-board/{post['post_key']}/{image['filename']}", assets[image["key"]], "image/png")
+            result = await publisher.publish_post(post, recipients=args.recipients, thread_id="intranet-publish-script")
         except PublishError as exc:
             print(f"요청 전 중단: {exc.code} {exc.message}")
             if exc.details:
@@ -110,31 +107,40 @@ async def publish(doc: dict, args: argparse.Namespace) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--doc", type=Path, default=SAMPLE, help="게시 문서 JSON (기본: 샘플)")
+    parser.add_argument("--html", type=Path, help="본문 HTML 파일 (기본: 내장 샘플)")
+    parser.add_argument("--title", default="인트라넷 HTML 게시 샘플")
     parser.add_argument("--board", choices=["work", "genai"], default="work")
     parser.add_argument("--recipients", type=lambda s: [x for x in s.split(",") if x.strip()], default=None,
                         help="쉼표로 구분한 이름 (work 전용)")
-    parser.add_argument("--post-key", help="post_key 덮어쓰기 (같은 글을 다시 올릴 때)")
+    parser.add_argument("--post-key", default="sample-html-1", help="같은 글을 다시 올릴 때는 바꾸세요")
     parser.add_argument("--confirm", action="store_true", help="실제로 업로드하고 게시 요청")
     parser.add_argument("--confirm-public", action="store_true", help="공개 게시판(genai)에 올릴 때 필요")
     parser.add_argument("--wait", action="store_true", help="콜백 결과까지 기다림")
     parser.add_argument("--wait-minutes", type=float, default=12)
     args = parser.parse_args()
 
-    doc = json.loads(args.doc.read_text(encoding="utf-8"))
-    doc["board"] = args.board  # the file is not modified
-    if args.post_key:
-        doc["post_key"] = args.post_key
-    if not doc["title"].startswith("[테스트]"):  # samples are fake news; never look real on a shared board
-        doc["title"] = f"[테스트] {doc['title']}"
-
+    post, assets = build_post(args)
     if not args.confirm:
-        render_only(doc)
+        from pydantic import ValidationError
+
+        from integrations.intranet_publish.post import parse_post
+        from integrations.intranet_publish.safety import is_safe_html
+
+        try:
+            parsed = parse_post(post)
+        except ValidationError as exc:
+            for e in exc.errors():
+                print(f"입력 오류: {list(e.get('loc', ()))} {e.get('msg')}")
+            return 2
+        print(f"검사만 했습니다 (업로드/요청 없음). board={parsed.board} body={len(parsed.body_html)}자 images={len(parsed.images)}")
+        print(f"안전 검사: {'통과' if is_safe_html(parsed.body_html) else '실패 (금지된 태그/속성 포함)'}")
+        for warning in parsed.warnings:
+            print(f"경고: {warning}")
         return 0
     if args.board == "genai" and not args.confirm_public:
         print("genai는 전 직원 공개 게시판입니다. 정말 올리려면 --confirm-public을 같이 주세요.")
         return 2
-    return asyncio.run(publish(doc, args))
+    return asyncio.run(publish(post, assets, args))
 
 
 if __name__ == "__main__":

@@ -18,8 +18,6 @@ from integrations.intranet_publish.service import describe
 from integrations.intranet_publish.store import MemoryPublishStore
 from integrations.intranet_publish.validation import extract_reason, make_job_id
 
-ROOT = Path(__file__).resolve().parents[2]
-SAMPLE = ROOT / "integrations" / "intranet_post" / "samples" / "ai_weekly_sample.json"
 
 PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
 JPG = b"\xff\xd8\xff\xe0" + b"\x00" * 32
@@ -30,24 +28,52 @@ def run(coro):
     return asyncio.run(coro)
 
 
+SAMPLE_BODY = (
+    '<div style="font-family:sans-serif;font-size:14px">'
+    '<div><img src="{{img:header}}" alt="header" style="max-width:100%"></div>'
+    '<div>본문</div>'
+    '<div><img src="{{img:issue1}}" alt="issue" style="max-width:100%"></div>'
+    '<div><img src="{{img:chart-keywords}}" alt="chart" style="max-width:100%"></div>'
+    "</div>"
+)
+SAMPLE_IMAGES = [
+    {"key": "header", "filename": "header.png"},
+    {"key": "issue1", "filename": "issue1.png"},
+    {"key": "chart-keywords", "filename": "chart-keywords.png"},
+]
+
+
 def sample(board="genai", **changes):
-    doc = json.loads(SAMPLE.read_text(encoding="utf-8"))
-    doc["board"] = board
+    doc = {
+        "post_key": "ai-weekly-2026-W42",
+        "board": board,
+        "title": "[AI 위클리] 10월 3주차 (샘플)",
+        "body_html": SAMPLE_BODY,
+        "images": [dict(i) for i in SAMPLE_IMAGES],
+    }
     doc.update(changes)
     return doc
 
 
 def assets_for(doc):
-    return {a["key"]: (JPG if a["filename"].endswith((".jpg", ".jpeg")) else PNG) for a in doc["assets"]}
+    return {a["key"]: (JPG if a["filename"].endswith((".jpg", ".jpeg")) else PNG) for a in doc["images"]}
 
 
 class FakeBlob:
+    """files = what is in Blob; uploads = only what the publisher itself uploaded (must stay empty)."""
+
     def __init__(self):
         self.uploads = {}
+        self.files = {}
         self.minted = 0
 
     async def upload(self, path, data, content_type):
         self.uploads[path] = (data, content_type)
+        self.files[path] = data
+
+    async def head(self, path, length=16):
+        data = self.files.get(path)
+        return None if data is None else (len(data), bytes(data[:length]) if isinstance(data, (bytes, bytearray)) else b"")
 
     def read_url(self, path, ttl):
         self.minted += 1
@@ -106,8 +132,12 @@ def env():
 
 def publish(env, doc=None, **kw):
     doc = doc or sample()
-    if "assets" not in kw:
-        kw["assets"] = assets_for(doc)
+    assets = kw.pop("assets", None)
+    if assets is None:
+        assets = assets_for(doc)
+    for key, data in assets.items():  # what the image upload tool would have put into Blob
+        image = next(i for i in doc["images"] if i["key"] == key)
+        env.blob.files[f"intranet-board/{doc['post_key']}/{image['filename']}"] = data
     kw.setdefault("thread_id", "user@widemobile.com")
     return run(env.publisher.publish_post(doc, **kw))
 
@@ -132,13 +162,12 @@ def _callback_and_drain(env, cb):
 
 
 # ------------------------------------------------------------------ request shape
-def test_publish_uploads_images_and_sends_the_agreed_request(env):
+def test_publish_checks_images_in_blob_and_sends_the_agreed_request(env):
     result = publish(env)
     doc = sample()
     assert result.status == "pending"
     assert result.job_id == "intranet-genai-ai-weekly-2026-W42"
-    assert set(env.blob.uploads) == {f"intranet-board/ai-weekly/2026-W42/{a['filename']}" for a in doc["assets"]}
-    assert {ct for _, ct in env.blob.uploads.values()} == {"image/png"}
+    assert env.blob.uploads == {}  # the publisher never uploads; the image upload tool did
 
     (req,) = env.device.requests
     assert req["job_id"] == req["parameters"]["job_id"] == result.job_id
@@ -148,8 +177,8 @@ def test_publish_uploads_images_and_sends_the_agreed_request(env):
     assert params["board"] == "genai" and params["mode"] == "create"
     assert "board_url" not in params and "recipients" not in params
     assert "{{img:header}}" in params["body_html"]
-    assert all(i["blob_url"].startswith("https://acct.blob.core.windows.net/wm-device-agent-ai/intranet-board/") for i in params["images"])
-    assert {i["key"] for i in params["images"]} == {a["key"] for a in doc["assets"]}
+    assert all(i["blob_url"].startswith("https://acct.blob.core.windows.net/wm-device-agent-ai/intranet-board/ai-weekly-2026-W42/") for i in params["images"])
+    assert {i["key"] for i in params["images"]} == {a["key"] for a in doc["images"]}
 
     record = run(env.store.get(result.job_id))
     assert record["status"] == "pending" and record["attempt"] == 1
@@ -167,8 +196,8 @@ def test_work_board_sends_normalised_recipients(env):
 
 def test_post_without_images(env):
     doc = sample("work")
-    doc["assets"] = []
-    doc["blocks"] = [b for b in doc["blocks"] if b["type"] != "image" and "image_key" not in b]
+    doc["images"] = []
+    doc["body_html"] = "<div>이미지 없는 글</div>"
     publish(env, doc, assets={})
     assert env.device.requests[0]["parameters"]["images"] == []
     assert env.blob.uploads == {}
@@ -245,18 +274,73 @@ def test_invalid_document(env):
     _rejected(env, "INVALID_DOCUMENT", {"title": "x"}, assets={})
 
 
-def test_unsafe_body_is_never_sent(env, monkeypatch):
-    import integrations.intranet_publish.service as service
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "<script>alert(1)</script>",
+        "<style>td{color:red}</style>",
+        '<div onclick="x()">a</div>',
+        '<a href="javascript:alert(1)">a</a>',
+        "<iframe src=x></iframe>",
+        "<form></form>",
+    ],
+)
+def test_unsafe_body_is_never_sent(env, bad):
+    doc = sample()
+    doc["body_html"] += bad
+    _rejected(env, "UNSAFE_BODY", doc)
 
-    real = service.render_post
 
-    def evil(doc):
-        rendered = real(doc)
-        rendered.body_html += "<script>alert(1)</script>"
-        return rendered
+@pytest.mark.parametrize(
+    "body",
+    [
+        '<img src="https://evil.example/x.png">',
+        '<img src="data:image/png;base64,AAAA">',
+        '<img alt="x">',
+        '<div>{{img:unknown}}</div>',
+        "   ",
+    ],
+)
+def test_body_image_rules(env, body):
+    doc = sample()
+    doc["body_html"] = body
+    doc["images"] = []
+    _rejected(env, "INVALID_DOCUMENT", doc, assets={})
 
-    monkeypatch.setattr(service, "render_post", evil)
-    _rejected(env, "UNSAFE_BODY", sample())
+
+def test_undeclared_placeholder_is_rejected(env):
+    doc = sample()
+    doc["body_html"] += '<img src="{{img:other}}">'
+    _rejected(env, "INVALID_DOCUMENT", doc)
+
+
+def test_body_size_limit(env):
+    doc = sample()
+    doc["body_html"] = "<div>" + "가" * 300_000 + "</div>"
+    _rejected(env, "INVALID_DOCUMENT", doc)
+
+
+def test_unused_image_is_uploaded_with_a_warning(env):
+    doc = sample()
+    doc["body_html"] = '<div><img src="{{img:header}}" alt="h"></div>'
+    result = publish(env, doc)
+    assert any("issue1" in w for w in result.warnings)
+    assert len(env.device.requests[0]["parameters"]["images"]) == 3
+
+
+def test_duplicate_image_keys_or_files_are_rejected(env):
+    doc = sample()
+    doc["images"].append({"key": "header", "filename": "other.png"})
+    _rejected(env, "INVALID_DOCUMENT", doc)
+    doc = sample()
+    doc["images"].append({"key": "other", "filename": "header.png"})
+    _rejected(env, "INVALID_DOCUMENT", doc)
+
+
+def test_unknown_fields_are_rejected(env):
+    doc = sample()
+    doc["theme"] = "default"
+    _rejected(env, "INVALID_DOCUMENT", doc)
 
 
 # ------------------------------------------------------------------ submit errors
@@ -460,10 +544,10 @@ CONN = f"DefaultEndpointsProtocol=https;AccountName=acct;AccountKey={KEY};Endpoi
 def test_sas_is_read_only_https_and_short_lived():
     store = AzureImageBlobStore(CONN, "wm-device-agent-ai")
     assert store.host == "acct.blob.core.windows.net"
-    url = store.read_url("intranet-board/ai-weekly/2026-W42/header.png", timedelta(hours=1))
+    url = store.read_url("intranet-board/ai-weekly-2026-W42/header.png", timedelta(hours=1))
     parts = urlsplit(url)
     assert parts.scheme == "https" and parts.hostname == "acct.blob.core.windows.net"
-    assert parts.path == "/wm-device-agent-ai/intranet-board/ai-weekly/2026-W42/header.png"
+    assert parts.path == "/wm-device-agent-ai/intranet-board/ai-weekly-2026-W42/header.png"
     query = parse_qs(parts.query)
     assert query["sp"] == ["r"] and query["spr"] == ["https"]
     expiry = datetime.strptime(query["se"][0], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)

@@ -1,7 +1,8 @@
-"""PostDocument -> rendered HTML -> Blob images -> Device Job -> callback -> stored result.
+"""AI-written HTML -> checks -> Blob images -> Device Job -> callback -> stored result.
 
 Every BOA feature that posts to the intranet goes through ``IntranetPublisher.publish_post``.
-Agents produce only the PostDocument JSON; HTML always comes from the shared renderer.
+The HTML-writing agent follows ``agents/common/intranet_html_agent/skills/intranet-html/SKILL.md``; this module only validates
+what it wrote (see ``post.py``) and never rewrites it.
 """
 from __future__ import annotations
 
@@ -15,12 +16,13 @@ import httpx
 from pydantic import ValidationError
 
 from integrations.device_job.schemas import DeviceJobRequest
-from integrations.intranet_post import PostDocument, RenderedPost, RenderError, is_safe_html, render_post
 
 from .blob import BlobConfigError, BlobUploadError, ImageBlobStore
+from .post import IntranetPost, ValidationError, parse_post
+from .safety import is_safe_html
 from .config import FINAL_REASONS, JOB_ID_PREFIX, MANUAL_CHECK_REASONS, RETRYABLE_REASONS, PublishSettings
 from .store import PublishStore
-from .validation import PublishError, check_board, check_image, extract_reason, make_job_id, normalize_recipients
+from .validation import PublishError, check_board, check_image_meta, extract_reason, make_job_id, normalize_recipients
 
 logger = logging.getLogger(__name__)
 
@@ -114,26 +116,24 @@ class IntranetPublisher:
     # ------------------------------------------------------------------ publish
     async def publish_post(
         self,
-        doc: PostDocument | dict[str, Any],
+        post: IntranetPost | dict[str, Any],
         *,
-        assets: dict[str, bytes] | None = None,
         recipients: list[str] | None = None,
         thread_id: str,
         context: dict[str, Any] | None = None,
         notify: dict[str, str] | None = None,
     ) -> PublishResult:
-        """Validate, render, upload images, and send the device job. Returns once the job is accepted;
+        """Validate the HTML post, check its images in Blob, and send the device job. Returns once the job is accepted;
         the final outcome arrives through the device callback (see ``handle_callback``).
 
         ``notify`` = {"space_id": ..., "thread_name": ...} sends the outcome to Google Chat.
-        Raises ``PublishError`` before anything is uploaded or sent when the input is invalid.
+        Raises ``PublishError`` before anything is sent when the input is invalid.
         """
-        rendered = self._render(doc)
+        rendered = self._parse(post)
         board = check_board(rendered.board, self.settings.boards)
         names = normalize_recipients(recipients, board)
         if not is_safe_html(rendered.body_html):
             raise PublishError("UNSAFE_BODY", "본문에 허용되지 않는 HTML이 있습니다.")
-        uploads = self._check_assets(rendered, assets or {})
 
         job_id = make_job_id(board.name, rendered.post_key)
         await self.expire_stale()
@@ -152,19 +152,13 @@ class IntranetPublisher:
                 )
             # FAILED: nothing was submitted on the board, the same job_id may be used again.
 
-        for item in uploads:
-            try:
-                await self.blob.upload(item["blob_path"], item.pop("data"), item["content_type"])
-            except (BlobUploadError, BlobConfigError) as exc:
-                raise PublishError("BLOB_FAILED", str(exc)) from None
+        uploads = await self._check_images(rendered)
 
         now = self._clock()
         record = {
             "job_id": job_id,
             "thread_id": thread_id,
             "post_key": rendered.post_key,
-            "series": rendered.series,
-            "period": rendered.period,
             "board": board.name,
             "title": rendered.title,
             "body_html": rendered.body_html,
@@ -188,36 +182,41 @@ class IntranetPublisher:
         await self._submit(record)
         return self._result(record, rendered, PENDING)
 
-    def _render(self, doc: PostDocument | dict[str, Any]) -> RenderedPost:
+    @staticmethod
+    def _parse(post: IntranetPost | dict[str, Any]) -> IntranetPost:
         try:
-            return render_post(doc)
+            return parse_post(post)
         except ValidationError as exc:
             errors = [{"loc": list(e.get("loc", ())), "msg": e.get("msg")} for e in exc.errors()[:20]]
-            raise PublishError("INVALID_DOCUMENT", "게시 문서가 규격에 맞지 않습니다.", errors) from None
-        except RenderError as exc:
-            raise PublishError("RENDER_FAILED", str(exc)) from None
+            raise PublishError("INVALID_DOCUMENT", "게시 입력이 규격에 맞지 않습니다.", errors) from None
 
-    @staticmethod
-    def _check_assets(rendered: RenderedPost, assets: dict[str, bytes]) -> list[dict[str, Any]]:
-        missing = [image.key for image in rendered.images if image.key not in assets]
+    async def _check_images(self, post: IntranetPost) -> list[dict[str, Any]]:
+        """Every declared image must already be in Blob at intranet-board/{post_key}/{filename}
+        (put there by the image upload tool). Nothing outside that folder can be referenced."""
+        found: list[dict[str, Any]] = []
+        missing: list[str] = []
+        for image in post.images:
+            path = post.blob_path(image.filename)
+            try:
+                info = await self.blob.head(path)
+            except (BlobUploadError, BlobConfigError) as exc:
+                raise PublishError("BLOB_FAILED", str(exc)) from None
+            if info is None:
+                missing.append(image.key)
+                continue
+            size, head = info
+            content_type = check_image_meta(image.key, image.filename, size, head)
+            found.append({"key": image.key, "filename": image.filename, "blob_path": path, "content_type": content_type})
         if missing:
-            raise PublishError("MISSING_ASSET", f"이미지 데이터가 없습니다: {', '.join(missing)}", {"keys": missing})
-        uploads = []
-        for image in rendered.images:
-            content_type = check_image(image.key, image.filename, assets[image.key])
-            uploads.append(
-                {
-                    "key": image.key,
-                    "filename": image.filename,
-                    "blob_path": rendered.blob_path(image.filename),
-                    "content_type": content_type,
-                    "data": bytes(assets[image.key]),
-                }
+            raise PublishError(
+                "MISSING_ASSET",
+                f"Blob에 이미지가 없습니다: {', '.join(missing)}. 먼저 이미지 업로드 Tool로 올리세요.",
+                {"keys": missing},
             )
-        return uploads
+        return found
 
     @staticmethod
-    def _result(record: dict[str, Any], rendered: RenderedPost, status: str) -> PublishResult:
+    def _result(record: dict[str, Any], rendered: IntranetPost, status: str) -> PublishResult:
         return PublishResult(
             job_id=record["job_id"],
             status=status,

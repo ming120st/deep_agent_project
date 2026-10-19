@@ -1,16 +1,21 @@
 # intranet_publish — 인트라넷 게시 공통 파이프라인
 
 ```
-에이전트 → PostDocument(JSON) → render_post() → Blob 업로드 → SAS(읽기, 1시간) → Device Job → /device-callback → 결과 저장/알림
+(이미지 업로드 Tool → Blob) → HTML 작성 에이전트 → 게시 Tool: 입력 검사 + Blob 이미지 확인 → SAS(읽기, 1시간) → Device Job → /device-callback → 결과 저장/알림
 ```
 
 ```python
 from integrations.intranet_publish import get_publisher, PublishError
 
 result = await get_publisher().publish_post(
-    doc,                                   # PostDocument 또는 dict
-    assets={"header": png_bytes},          # 글에 쓰인 모든 이미지의 bytes
-    recipients=["홍길동"],                  # work 전용, 이름 정확 일치
+    {                                      # IntranetPost 또는 dict (post.py)
+        "post_key": "ai-weekly-2026-W42",  # 글 고유 ID (job_id의 일부)
+        # 이미지는 Blob intranet-board/{post_key}/ 에 저장
+        "board": "genai", "title": "...",
+        "body_html": "<div>... {{img:header}} ...</div>",   # AI가 작성한 HTML
+        "images": [{"key": "header", "filename": "header.png"}],
+    },
+    recipients=["홍길동"],                  # 업무게시판 전용, 이름 정확 일치
     thread_id=thread_id,
     notify={"space_id": "...", "thread_name": "..."},  # 선택: 결과를 Google Chat으로
 )
@@ -18,6 +23,16 @@ result = await get_publisher().publish_post(
 
 `publish_post`는 요청이 접수되면 `status="pending"`으로 바로 돌아옵니다. 최종 결과는 콜백으로 오고
 `boa_intranet_posts` 컬렉션에 저장됩니다(`get_publisher().get_status(job_id)`).
+
+## 본문 HTML
+
+이 모듈은 HTML을 만들거나 고치지 않고 **검사만** 합니다. 작성 규칙은 `agents/common/intranet_html_agent/skills/intranet-html/SKILL.md`에 있습니다.
+본문에 쓸 수 있는 이미지는 `{{img:키}}` 자리표시자뿐이고, 키는 `images`에 선언합니다. 선언만 하고 안 쓴 이미지는 그대로 전달되며 `warnings`로 알려줍니다.
+
+## 이미지
+
+게시 함수는 이미지를 업로드하지 않습니다. 이미지는 **먼저** Blob의 `intranet-board/{post_key}/{filename}`에 올라가 있어야 하고(에이전트는 `upload_intranet_image` Tool, 주소를 내려받아 메모리에서 바로 업로드), 게시할 때 파일이 있는지/형식/10MB를 확인합니다. 글마다 자기 `post_key` 폴더의 파일만 참조할 수 있습니다.
+내려받기는 http(s) 80/443만, 내부/비공개 주소와 리다이렉트 대상까지 차단합니다. `MISSING_ASSET`은 "Blob에 없음"입니다.
 
 ## 게시판
 
@@ -30,8 +45,8 @@ URL은 device_agent가 가지고 있고 BOA는 이름만 보냅니다.
 
 ## 요청 전 거부 (`PublishError.code`, 업로드·전송 없음)
 
-`INVALID_DOCUMENT`, `RENDER_FAILED`, `INVALID_BOARD`, `INVALID_RECIPIENTS`, `MISSING_ASSET`, `INVALID_IMAGE`(png/jpg/jpeg/gif, 내용이 확장자와 일치, 10MB 이하),
-`UNSAFE_BODY`, `IN_PROGRESS`(같은 글 게시 중), `NEEDS_MANUAL_CHECK`(이전 시도가 올라갔을 수 있음), `BLOB_FAILED`,
+`INVALID_DOCUMENT`(필드 규격, 본문 300,000자 초과, `<img>`가 `{{img:키}}`가 아님, 선언 안 된 키), `INVALID_BOARD`, `INVALID_RECIPIENTS`, `MISSING_ASSET`, `INVALID_IMAGE`(png/jpg/jpeg/gif, 내용이 확장자와 일치, 10MB 이하), `INVALID_IMAGE_URL`/`IMAGE_DOWNLOAD_FAILED`(업로드 Tool),
+`UNSAFE_BODY`(script/style/on*=/javascript: 등, device_agent와 같은 규칙), `IN_PROGRESS`(같은 글 게시 중), `NEEDS_MANUAL_CHECK`(이전 시도가 올라갔을 수 있음), `BLOB_FAILED`,
 `DEVICE_REQUEST_FAILED`(device_agent 연결 불가), `DEVICE_REQUEST_REJECTED`(4xx)
 
 ## 상태와 재시도
@@ -69,7 +84,7 @@ SAS URL·연결문자열·Job 키는 로그/DB/예외 메시지에 남기지 않
 ## 수동 확인
 
 ```
-python scripts/publish_intranet_sample.py                                   # 렌더만
+python scripts/publish_intranet_sample.py                                   # 검사만 (--html 파일 지정 가능)
 python scripts/publish_intranet_sample.py --board work --recipients "본인이름" --confirm --wait
 ```
 콜백은 device_agent의 `BOA_CALLBACK_URL` 서버로 가므로, 그 서버에 이 코드가 배포돼 있어야 결과가 기록됩니다.
