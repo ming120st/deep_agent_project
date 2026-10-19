@@ -17,7 +17,7 @@ def run(coro):
     return asyncio.run(coro)
 
 
-# ----------------------------------------------------------------- URL guard
+# ----------------------------------------------------------------- URL 검증 (내부 주소 차단)
 @pytest.mark.parametrize(
     "url",
     [
@@ -87,12 +87,12 @@ def test_fetch_limits(public):
     with pytest.raises(PublishError) as info:
         run(get(lambda r: httpx.Response(404)))
     assert info.value.code == "IMAGE_DOWNLOAD_FAILED"
-    with pytest.raises(PublishError) as info:  # redirect loop
+    with pytest.raises(PublishError) as info:  # 리다이렉트 무한 루프
         run(get(lambda r: httpx.Response(302, headers={"location": "https://img.example/a.png"})))
     assert info.value.code == "IMAGE_DOWNLOAD_FAILED"
 
 
-# ----------------------------------------------------------------- tools
+# ----------------------------------------------------------------- Tool 동작 검증
 class FakeBlob:
     def __init__(self):
         self.files = {}
@@ -141,7 +141,7 @@ def publish(**kw):
     kw.setdefault("post_key", "p-1")
     kw.setdefault("board", "genai")
     kw.setdefault("title", "제목")
-    kw.setdefault("body_html", '<div><img src="{{img:header}}" alt="h"></div>')
+    kw.setdefault("body_html", '<div><img src="{{img:header.png}}" alt="h"></div>')
     return run(tool_mod.publish_intranet_post.ainvoke(kw, config=CFG))
 
 
@@ -151,22 +151,22 @@ def test_upload_then_publish_with_images(env):
     assert list(env.blob.files) == ["intranet-board/p-1/header.png"]
     assert env.blob.files["intranet-board/p-1/header.png"][1] == "image/png"
 
-    out = publish(images=[{"key": "header", "filename": "header.png"}])
+    out = publish(images=["header.png"])
     assert out["success"] is True and out["status"] == "pending"
     (req,) = env.device.requests
     (image,) = req["parameters"]["images"]
-    assert image["key"] == "header" and "intranet-board/p-1/header.png" in image["blob_url"]
+    assert image["filename"] == "header.png" and "intranet-board/p-1/header.png" in image["blob_url"]
 
 
 def test_publish_without_upload_returns_missing_asset_result(env):
-    out = publish(images=[{"key": "header", "filename": "header.png"}])
+    out = publish(images=["header.png"])
     assert out["success"] is False and out["error"]["code"] == "MISSING_ASSET"
     assert "업로드 Tool" in out["error"]["message"] and env.device.requests == []
 
 
 def test_publish_cannot_point_at_another_posts_images(env):
     upload(post_key="other-post")
-    out = publish(post_key="p-1", images=[{"key": "header", "filename": "header.png"}])
+    out = publish(post_key="p-1", images=["header.png"])
     assert out["error"]["code"] == "MISSING_ASSET"
 
 
@@ -177,7 +177,7 @@ def test_publish_cannot_point_at_another_posts_images(env):
         ({"filename": "x.svg"}, "INVALID_DOCUMENT"),
         ({"filename": "../x.png"}, "INVALID_DOCUMENT"),
         ({"post_key": "a/b"}, "INVALID_DOCUMENT"),
-        ({"filename": "x.jpg"}, "INVALID_IMAGE"),  # png content with a jpg name
+        ({"filename": "x.jpg"}, "INVALID_IMAGE"),  # jpg 파일명에 png 파일 내용
     ],
 )
 def test_upload_failures_are_tool_results(env, kw, code):
@@ -188,8 +188,8 @@ def test_upload_failures_are_tool_results(env, kw, code):
 
 def test_already_posted_post_is_not_blocked_by_expired_images(env):
     upload()
-    first = publish(images=[{"key": "header", "filename": "header.png"}])
+    first = publish(images=["header.png"])
     run(env.handle_callback({"job_id": first["job_id"], "status": "success", "result": {"post_id": "1"}}))
-    env.blob.files.clear()  # Blob lifecycle rule removed the images
-    again = publish(images=[{"key": "header", "filename": "header.png"}])
+    env.blob.files.clear()  # Blob 수명 주기 규칙에 의해 이미지가 삭제된 상황 시뮬레이션
+    again = publish(images=["header.png"])
     assert again["success"] is True and again["status"] == "succeeded"

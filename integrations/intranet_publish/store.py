@@ -1,11 +1,11 @@
-"""Where publish records live. One record per job_id (= one post on one board).
+"""게시 이력 레코드가 저장되는 저장소. job_id(=특정 게시판의 특정 글)당 하나의 레코드가 생성됩니다.
 
-Record fields: job_id, thread_id, post_key, board, title, body_html,
-images[{key, filename, blob_path, content_type}], recipients, context, notify,
+레코드 필드: job_id, thread_id, post_key, board, title, body_html,
+images[{filename, blob_path, content_type}], recipients, context, notify,
 status, attempt, reason, result, created_at, updated_at.
 
-status: pending (sent, waiting for the callback) | retry_wait | succeeded | failed | needs_check
-Blob SAS URLs are never stored (only blob paths); they are minted fresh for every send.
+status: pending(전송 완료 후 콜백 대기 중) | retry_wait | succeeded | failed | needs_check
+Blob SAS URL은 절대 저장되지 않으며(blob 경로만 저장), 매 전송마다 새로 발급됩니다.
 """
 from __future__ import annotations
 
@@ -24,15 +24,15 @@ class PublishStore(Protocol):
     async def transition(
         self, job_id: str, statuses: list[str], update: dict[str, Any], *, reason: str | None = None
     ) -> dict[str, Any] | None:
-        """Atomically apply ``update`` only if the record's status is in ``statuses``
-        (and, when given, its reason equals ``reason``). Returns the updated record or None."""
+        """레코드의 status가 ``statuses``에 포함되어 있을 때만(그리고 ``reason``이 주어지면 일치할 때만)
+        원자적(atomic)으로 ``update``를 적용합니다. 갱신된 레코드 또는 None을 반환합니다."""
         ...
 
     async def stale(self, statuses: list[str], before: datetime) -> list[dict[str, Any]]: ...
 
 
 class MemoryPublishStore:
-    """For tests and local dry runs. No awaits inside the methods, so each call is atomic."""
+    """테스트 및 로컬 실행용 인메모리 저장소. 메서드 내에 await가 없어 각 호출이 원자적으로 동작합니다."""
 
     def __init__(self) -> None:
         self._records: dict[str, dict[str, Any]] = {}
@@ -60,7 +60,7 @@ class MemoryPublishStore:
 class MongoPublishStore:
     def __init__(self, collection=None) -> None:
         if collection is None:
-            from core.database.mongo import mongo_db  # imported lazily: needs MONGODB_URI
+            from core.database.mongo import mongo_db  # 지연 임포트: MONGODB_URI 필요
 
             collection = mongo_db[COLLECTION]
         self._col = collection

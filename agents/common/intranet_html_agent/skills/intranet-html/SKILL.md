@@ -24,7 +24,7 @@ description: 와이드모바일 인트라넷 게시판(생성형AI게시판, 업
 | `board` | `genai`(생성형AI게시판, 전 직원 공개) 또는 `work`(업무게시판) |
 | `title` | 게시글 제목 (200자 이하, 한 줄). 제목은 본문에 다시 쓰지 않아도 됩니다 |
 | `body_html` | 아래 규칙으로 쓴 본문 HTML (300,000자 이하) |
-| `images` | 본문에 쓴 이미지 목록 `[{"key": "header", "filename": "header.png"}]` |
+| `images` | 본문에 쓴 이미지 파일명 목록 `["header.png", "issue1.png"]` |
 
 ## 1. 가장 중요한 규칙 (어기면 게시가 거부되거나 화면이 깨짐)
 
@@ -34,21 +34,21 @@ description: 와이드모바일 인트라넷 게시판(생성형AI게시판, 업
 3. **`<th>`를 쓰지 않습니다.** 표 머리글도 `<td>`로 만들고 배경색과 굵기를 직접 줍니다.
 4. **`<p>`와 `<hr>`를 쓰지 않습니다.** 문단은 `<div>`, 구분선은 테두리만 있는 `<div>`를 씁니다(페이지 CSS가 여백을 바꿔 놓음).
 5. **제목(`h2`, `h3`)과 목록(`ul`, `ol`)에는 크기와 여백을 항상 직접** 씁니다. 안 쓰면 페이지 기본값(h2는 30px 등)이 적용됩니다.
-6. **이미지는 `{{img:키}}` 자리표시자만** 씁니다. 실제 주소를 쓰지 않습니다(7장).
+6. **이미지는 `{{img:파일명}}` 자리표시자만** 씁니다. 실제 주소를 쓰지 않습니다(7장).
 7. 본문에 들어가는 **모든 글자는 HTML 이스케이프**합니다. `&` → `&amp;`, `<` → `&lt;`, `>` → `&gt;`, `"` → `&quot;`.
    제목, 본문, 링크 글자에 이 문자가 있으면 반드시 바꿉니다.
 8. 전체를 **하나의 바깥 `<div>`(wrapper)로 감쌉니다**(3장).
 
 ## 2. 사용 가능한 태그와 속성
 
-- 태그: `div`, `span`, `h2`, `h3`, `ul`, `ol`, `li`, `table`, `tr`, `td`, `a`, `img`, `b`, `br`
-- 속성: `style`, `href`, `target`, `rel`, `src`, `alt`
+- 태그: `div`, `span`, `h2`, `h3`, `ul`, `ol`, `li`, `table`, `tr`, `td`, `a`, `img`, `b`, `br`, `iframe`(유튜브 영상 전용, 4-12)
+- 속성: `style`, `href`, `target`, `rel`, `src`, `alt`, (`iframe`만) `width`, `height`, `frameborder`, `allow`, `allowfullscreen`
 
 그 밖의 태그와 속성은 쓰지 않습니다. 특히 아래는 **게시 모듈과 device_agent가 거부**합니다(게시 자체가 실패).
 
 | 금지 | 이유 |
 |---|---|
-| `<script>`, `<style>`, `<iframe>`, `<frame>`, `<object>`, `<embed>`, `<form>`, `<input>`, `<button>`, `<link>`, `<meta>`, `<base>` | 실행/외부 로딩/페이지 변경 위험 |
+| `<script>`, `<style>`, `<frame>`, `<object>`, `<embed>`, `<form>`, `<input>`, `<button>`, `<link>`, `<meta>`, `<base>` | 실행/외부 로딩/페이지 변경 위험 |
 | `onclick=`, `onerror=` 등 `on`으로 시작하는 모든 속성 | 스크립트 실행 |
 | `href`, `src`, `action`에 `javascript:`, `vbscript:` | 스크립트 실행 |
 
@@ -132,7 +132,19 @@ description: 와이드모바일 인트라넷 게시판(생성형AI게시판, 업
 ### 4-8. 이미지 (7장 참고)
 
 ```html
-<div style="margin:0 0 14px 0;text-align:center"><img src="{{img:[[키]]}}" alt="[[이미지 설명]]" style="max-width:100%;height:auto;border:0;vertical-align:middle"><div style="margin:6px 0 0 0;font-size:12px;line-height:1.5;color:#6b7280;text-align:center">[[캡션(생략 가능)]]</div></div>
+<div style="margin:0 0 14px 0;text-align:center"><img src="{{img:[[파일명.png]]}}" alt="[[이미지 설명]]" style="max-width:100%;height:auto;border:0;vertical-align:middle"><div style="margin:6px 0 0 0;font-size:12px;line-height:1.5;color:#6b7280;text-align:center">[[캡션(생략 가능)]]</div></div>
+```
+
+### 4-12. 유튜브 영상 (iframe)
+
+유튜브 링크가 있고 영상을 글 안에서 바로 보여주면 좋을 때만 `iframe`으로 넣습니다. 주소는 반드시 아래 형식으로 바꿉니다. 다른 사이트의 `iframe`은 쓰지 않습니다.
+
+- 영상 ID를 뽑습니다: `https://www.youtube.com/watch?v=ID`, `https://youtu.be/ID`, `https://www.youtube.com/shorts/ID`의 `ID`(11자 영문·숫자·`-`·`_`).
+- `src`는 `https://www.youtube.com/embed/ID`로 씁니다. 재생목록이나 채널 링크, ID를 알 수 없는 링크는 `iframe` 대신 4-7의 일반 링크로 씁니다.
+- 영상 아래에 원본 링크(4-7)도 함께 적습니다.
+
+```html
+<div style="margin:0 0 14px 0;text-align:center"><iframe src="https://www.youtube.com/embed/[[영상ID]]" width="560" height="315" frameborder="0" allow="accelerometer; encrypted-media; gyroscope; picture-in-picture" allowfullscreen style="max-width:100%;border:0"></iframe><div style="margin:6px 0 0 0;font-size:12px;line-height:1.5;color:#6b7280;text-align:center">[[영상 설명]] <a href="[[https://원본 링크]]" target="_blank" rel="noopener noreferrer" style="color:#2b5fab;text-decoration:underline">유튜브에서 보기</a></div></div>
 ```
 
 ### 4-9. 구분선
@@ -200,20 +212,20 @@ description: 와이드모바일 인트라넷 게시판(생성형AI게시판, 업
 
 ## 7. 이미지 규칙
 
-- 본문에서는 `src="{{img:키}}"` 형태로만 이미지를 가리킵니다. 키는 소문자 영문/숫자/하이픈(`header`, `issue1`, `chart-keywords`).
-- 본문에 쓴 키는 모두 `images`에 `{"key": "키", "filename": "파일명.png"}`로 선언합니다. 선언하지 않은 키가 본문에 있으면 게시 전에 거부됩니다.
-- 파일명은 소문자 영문/숫자/`.`/`_`/`-`만, 확장자는 png/jpg/jpeg/gif입니다. 키와 파일명은 글 안에서 중복되지 않아야 합니다.
-- 실제 이미지 파일은 HTML에 넣지 않습니다. 호출한 쪽이 `intranet-board/{post_key}/파일명`에 미리 올려 두며, `images`의 `filename`은 올려 둔 파일명과 같아야 합니다. 올려 둔 파일이 없으면 게시 전에 거부됩니다.
+- 본문에서는 `src="{{img:파일명}}"` 형태로만 이미지를 가리킵니다(예: `{{img:header.png}}`).
+- 파일명은 소문자 영문/숫자/`.`/`_`/`-`만, 확장자는 png/jpg/jpeg/gif이며 글 안에서 중복되지 않아야 합니다.
+- 본문에 쓴 파일명은 모두 `images`에 적습니다. 적지 않은 파일명이 본문에 있으면 게시 전에 거부됩니다.
+- 실제 이미지 파일은 HTML에 넣지 않습니다. 호출한 쪽이 `intranet-board/{post_key}/파일명`에 미리 올려 두며, 올려 둔 파일이 없으면 게시 전에 거부됩니다.
 - 이미지 너비가 정해져 있으면 `style`의 `max-width:100%;`를 `width:480px;max-width:100%;`처럼 바꿀 수 있습니다.
 - 인터넷의 이미지 주소를 그대로 `src`에 쓰면 거부됩니다. 필요하면 먼저 내려받아 파일로 만든 뒤 위 방식으로 넘깁니다.
 
 ## 8. 제출 전 점검표
 
 1. 가장 바깥이 wrapper `<div>` 하나이고 태그가 모두 닫혀 있다.
-2. `<style>`, `<script>`, `<th>`, `<p>`, `<hr>`, class, `on...=`, `javascript:`가 없다.
+2. `<style>`, `<script>`, 유튜브(4-12) 외의 `<iframe>`, `<th>`, `<p>`, `<hr>`, class, `on...=`, `javascript:`가 없다.
 3. 모든 `<td>`에 글꼴, 크기, 색, 배경, 테두리, 여백이 있다. `h2`, `h3`, `ul`, `ol`에도 크기와 여백이 있다.
 4. 링크는 모두 `http(s)`이고 `target="_blank" rel="noopener noreferrer"`가 있다.
-5. `<img>`는 모두 `src="{{img:키}}"`이고, 쓴 키가 전부 `images`에 선언돼 있다.
+5. `<img>`는 모두 `src="{{img:파일명}}"`이고, 쓴 파일명이 전부 `images`에 있다.
 6. 제목, 본문 등 모든 글자에서 `& < > "`를 이스케이프했다.
 7. 숫자는 천 단위 쉼표, 날짜는 `YYYY-MM-DD`로 통일했다.
 8. 제목(`title`)은 한 줄이고, `board`가 의도한 게시판이다.

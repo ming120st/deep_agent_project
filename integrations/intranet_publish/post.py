@@ -1,10 +1,11 @@
-"""The post an agent hands to the publisher: metadata + the HTML it wrote.
+"""에이전트가 게시자(publisher)에게 전달하는 게시글 데이터: 메타데이터 + 작성된 HTML.
 
-Agents write ``body_html`` following ``agents/common/intranet_html_agent/skills/intranet-html/SKILL.md``. This module only
-checks it; it never rewrites the HTML.
+에이전트는 ``agents/common/intranet_html_agent/skills/intranet-html/SKILL.md`` 규칙에 따라 ``body_html``을 작성합니다.
+본 모듈은 검증만 수행하며, HTML 내용을 직접 수정하지 않습니다.
 
-- ``{{img:key}}`` is the only allowed ``<img src>``; every key must be declared in ``images``.
-- Declared but unused images are allowed and reported as warnings (they are still uploaded).
+- ``<img src>``에는 ``{{img:파일명}}`` 형태만 허용되며, 모든 파일명은 ``images``에 선언되어 있어야 합니다
+  (이미지는 Blob의 ``intranet-board/{post_key}/`` 경로에 미리 업로드되어 있어야 함).
+- 선언되었으나 본문에서 사용되지 않은 이미지는 허용되며 경고(warnings)로 보고됩니다(업로드는 정상 진행됨).
 """
 from __future__ import annotations
 
@@ -23,7 +24,7 @@ FILENAME_PATTERN = r"^[a-z0-9][a-z0-9._-]{0,80}\.(?:png|jpe?g|gif)$"
 
 _PLACEHOLDER = re.compile(r"\{\{img:([^{}]*)\}\}")
 _IMG_TAG = re.compile(r"<\s*img\b[^>]*>", re.IGNORECASE)
-_IMG_SRC_OK = re.compile(r"""\ssrc\s*=\s*(["'])\{\{img:[a-z0-9][a-z0-9-]{0,63}\}\}\1""", re.IGNORECASE)
+_IMG_SRC_OK = re.compile(r"""\ssrc\s*=\s*(["'])\{\{img:[a-z0-9][a-z0-9._-]{0,80}\.(?:png|jpe?g|gif)\}\}\1""", re.IGNORECASE)
 _CTRL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 _WS = re.compile(r"\s+")
 
@@ -39,53 +40,43 @@ class _Strict(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-class ImageSpec(_Strict):
-    key: Annotated[str, Field(pattern=KEY_PATTERN)]
-    filename: Annotated[str, Field(pattern=FILENAME_PATTERN)]  # png/jpg/jpeg/gif only
-    alt: str | None = None
-
-
 class IntranetPost(_Strict):
-    post_key: Annotated[str, Field(pattern=POST_KEY_PATTERN)]  # stable id, e.g. ai-weekly-2026-W42
-    board: Annotated[str, Field(pattern=KEY_PATTERN)]          # board name (genai | work), never a URL
+    post_key: Annotated[str, Field(pattern=POST_KEY_PATTERN)]  # 고유 ID (예: ai-weekly-2026-W42)
+    board: Annotated[str, Field(pattern=KEY_PATTERN)]          # 게시판 이름 (genai | work), URL 형태 불가
     title: Annotated[str, Field(max_length=200), AfterValidator(_clean_title)]
     body_html: Annotated[str, Field(min_length=1, max_length=MAX_BODY_CHARS)]
-    images: Annotated[list[ImageSpec], Field(max_length=MAX_IMAGES)] = Field(default_factory=list)
+    images: Annotated[list[Annotated[str, Field(pattern=FILENAME_PATTERN)]], Field(max_length=MAX_IMAGES)] = Field(default_factory=list)  # 이미지 파일명 목록
 
     @model_validator(mode="after")
     def _check_images(self):
-        keys = [i.key for i in self.images]
-        if len(set(keys)) != len(keys):
-            raise ValueError("image keys must be unique")
-        names = [i.filename for i in self.images]
-        if len(set(names)) != len(names):
+        if len(set(self.images)) != len(self.images):
             raise ValueError("image filenames must be unique")
         if not self.body_html.strip():
             raise ValueError("body_html must not be empty")
         for tag in _IMG_TAG.findall(self.body_html):
             if not _IMG_SRC_OK.search(tag):
-                raise ValueError('every <img> must use src="{{img:key}}" (no external or inline images)')
-        unknown = sorted({k for k in _PLACEHOLDER.findall(self.body_html) if k not in set(keys)})
+                raise ValueError('every <img> must use src="{{img:filename}}" (no external or inline images)')
+        unknown = sorted(set(_PLACEHOLDER.findall(self.body_html)) - set(self.images))
         if unknown:
             raise ValueError(f"image placeholder(s) not declared in images: {', '.join(unknown)}")
         return self
 
     @property
-    def used_keys(self) -> set[str]:
+    def used_images(self) -> set[str]:
         return set(_PLACEHOLDER.findall(self.body_html))
 
     @property
     def warnings(self) -> list[str]:
-        return [f"image {i.key!r} is declared but not used in the body" for i in self.images if i.key not in self.used_keys]
+        return [f"image {name!r} is listed but not used in the body" for name in self.images if name not in self.used_images]
 
     def blob_path(self, filename: str) -> str:
-        """Blob folder convention: intranet-board/{post_key}/{filename}."""
+        """Blob 저장 경로 규칙: intranet-board/{post_key}/{filename}"""
         return f"{BLOB_PREFIX}/{self.post_key}/{filename}"
 
 
 def parse_post(post: "IntranetPost | dict[str, Any]") -> IntranetPost:
-    """Validate a dict (or pass an IntranetPost through). Raises ``pydantic.ValidationError``."""
+    """dict 입력을 검증합니다(IntranetPost 인스턴스는 그대로 반환). 실패 시 ``pydantic.ValidationError``를 발생시킵니다."""
     return post if isinstance(post, IntranetPost) else IntranetPost.model_validate(post)
 
 
-__all__ = ["IntranetPost", "ImageSpec", "ValidationError", "parse_post", "MAX_BODY_CHARS", "BLOB_PREFIX"]
+__all__ = ["IntranetPost", "ValidationError", "parse_post", "MAX_BODY_CHARS", "BLOB_PREFIX"]

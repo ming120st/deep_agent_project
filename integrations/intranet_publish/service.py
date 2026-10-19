@@ -1,8 +1,8 @@
-"""AI-written HTML -> checks -> Blob images -> Device Job -> callback -> stored result.
+"""AI가 작성한 HTML -> 유효성 검증 -> Blob 이미지 -> Device Job -> 콜백 -> 결과 저장.
 
-Every BOA feature that posts to the intranet goes through ``IntranetPublisher.publish_post``.
-The HTML-writing agent follows ``agents/common/intranet_html_agent/skills/intranet-html/SKILL.md``; this module only validates
-what it wrote (see ``post.py``) and never rewrites it.
+인트라넷에 게시하는 모든 BOA 기능은 ``IntranetPublisher.publish_post``를 거칩니다.
+HTML 작성 에이전트는 ``agents/common/intranet_html_agent/skills/intranet-html/SKILL.md``를 따르며,
+본 모듈은 작성된 내용만 검증하고(``post.py`` 참고) 내용을 직접 다시 작성하지는 않습니다.
 """
 from __future__ import annotations
 
@@ -32,7 +32,7 @@ CALLBACK_TIMEOUT = "CALLBACK_TIMEOUT"
 RETRY_INTERRUPTED = "RETRY_INTERRUPTED"
 DEVICE_REQUEST_REJECTED = "DEVICE_REQUEST_REJECTED"
 
-# result keys kept from the device_agent callback (everything else is dropped)
+# device_agent 콜백에서 유지할 결과 키 목록 (그 외는 제거됨)
 _RESULT_KEYS = ("post_id", "post_url", "image_urls", "recipient_count", "recipient_errors", "deduplicated", "warnings", "reason")
 
 
@@ -46,7 +46,7 @@ Notifier = Callable[[dict[str, Any]], Awaitable[None]]
 @dataclass
 class PublishResult:
     job_id: str
-    status: str  # pending | succeeded (already posted earlier)
+    status: str  # pending | succeeded (이전에 이미 게시됨)
     board: str
     post_key: str
     title: str
@@ -63,7 +63,7 @@ def _now() -> datetime:
 
 
 def _as_utc(value: datetime) -> datetime:
-    return value if value.tzinfo else value.replace(tzinfo=timezone.utc)  # Mongo returns naive UTC
+    return value if value.tzinfo else value.replace(tzinfo=timezone.utc)  # MongoDB는 타임존 정보 없는 naive UTC를 반환함
 
 
 class IntranetPublisher:
@@ -87,11 +87,11 @@ class IntranetPublisher:
         self._clock = clock
         self._tasks: set[asyncio.Task] = set()
 
-    # ------------------------------------------------------------------ helpers
+    # ------------------------------------------------------------------ 헬퍼
     @property
     def blob(self) -> ImageBlobStore:
         if callable(self._blob) and not hasattr(self._blob, "upload"):
-            self._blob = self._blob()  # lazy: callbacks without retries never need Blob config
+            self._blob = self._blob()  # 지연 로딩: 재시도가 필요 없는 콜백 처리는 Blob 설정이 필요하지 않음
         return self._blob  # type: ignore[return-value]
 
     @staticmethod
@@ -109,11 +109,11 @@ class IntranetPublisher:
         return {k: record.get(k) for k in ("job_id", "status", "reason", "attempt", "board", "post_key", "title", "result")}
 
     async def drain(self) -> None:
-        """Wait for scheduled retries (tests and scripts)."""
+        """예약된 재시도 작업들이 완료될 때까지 대기합니다(테스트 및 스크립트용)."""
         while self._tasks:
             await asyncio.gather(*list(self._tasks), return_exceptions=True)
 
-    # ------------------------------------------------------------------ publish
+    # ------------------------------------------------------------------ 게시
     async def publish_post(
         self,
         post: IntranetPost | dict[str, Any],
@@ -123,11 +123,11 @@ class IntranetPublisher:
         context: dict[str, Any] | None = None,
         notify: dict[str, str] | None = None,
     ) -> PublishResult:
-        """Validate the HTML post, check its images in Blob, and send the device job. Returns once the job is accepted;
-        the final outcome arrives through the device callback (see ``handle_callback``).
+        """HTML 게시글을 검증하고, Blob의 이미지를 확인한 뒤 device job을 전송합니다.
+        작업이 접수되면 즉시 반환되며, 최종 결과는 디바이스 콜백(``handle_callback`` 참고)을 통해 수신됩니다.
 
-        ``notify`` = {"space_id": ..., "thread_name": ...} sends the outcome to Google Chat.
-        Raises ``PublishError`` before anything is sent when the input is invalid.
+        ``notify`` = {"space_id": ..., "thread_name": ...}는 처리 결과를 Google Chat으로 전송합니다.
+        입력값이 올바르지 않은 경우 전송하기 전에 ``PublishError``를 발생시킵니다.
         """
         rendered = self._parse(post)
         board = check_board(rendered.board, self.settings.boards)
@@ -150,7 +150,7 @@ class IntranetPublisher:
                     "이전 시도가 실제로 게시됐을 수 있습니다. 게시판을 확인한 뒤 새 post_key로 다시 요청하세요.",
                     {"job_id": job_id, "reason": previous.get("reason")},
                 )
-            # FAILED: nothing was submitted on the board, the same job_id may be used again.
+            # FAILED: 게시판에 실제로 게시되지 않았으므로 동일한 job_id를 다시 사용할 수 있습니다.
 
         uploads = await self._check_images(rendered)
 
@@ -163,7 +163,7 @@ class IntranetPublisher:
             "title": rendered.title,
             "body_html": rendered.body_html,
             "images": uploads,
-            "recipients": names,  # needed to resend on retry; never logged
+            "recipients": names,  # 재시도 시 재전송에 필요하며 로그에는 기록되지 않음
             "context": context or {},
             "notify": notify or {},
             "warnings": list(rendered.warnings),
@@ -191,27 +191,27 @@ class IntranetPublisher:
             raise PublishError("INVALID_DOCUMENT", "게시 입력이 규격에 맞지 않습니다.", errors) from None
 
     async def _check_images(self, post: IntranetPost) -> list[dict[str, Any]]:
-        """Every declared image must already be in Blob at intranet-board/{post_key}/{filename}
-        (put there by the image upload tool). Nothing outside that folder can be referenced."""
+        """선언된 모든 이미지는 반드시 Blob의 intranet-board/{post_key}/{filename} 경로에 이미 존재해야 합니다
+        (이미지 업로드 도구를 통해 업로드됨). 해당 폴더 외부의 이미지는 참조할 수 없습니다."""
         found: list[dict[str, Any]] = []
         missing: list[str] = []
-        for image in post.images:
-            path = post.blob_path(image.filename)
+        for name in post.images:
+            path = post.blob_path(name)
             try:
                 info = await self.blob.head(path)
             except (BlobUploadError, BlobConfigError) as exc:
                 raise PublishError("BLOB_FAILED", str(exc)) from None
             if info is None:
-                missing.append(image.key)
+                missing.append(name)
                 continue
             size, head = info
-            content_type = check_image_meta(image.key, image.filename, size, head)
-            found.append({"key": image.key, "filename": image.filename, "blob_path": path, "content_type": content_type})
+            content_type = check_image_meta(name, size, head)
+            found.append({"filename": name, "blob_path": path, "content_type": content_type})
         if missing:
             raise PublishError(
                 "MISSING_ASSET",
                 f"Blob에 이미지가 없습니다: {', '.join(missing)}. 먼저 이미지 업로드 Tool로 올리세요.",
-                {"keys": missing},
+                {"filenames": missing},
             )
         return found
 
@@ -228,15 +228,15 @@ class IntranetPublisher:
             warnings=list(rendered.warnings),
         )
 
-    # ------------------------------------------------------------------ sending
+    # ------------------------------------------------------------------ 전송
     def _build_request(self, record: dict[str, Any]) -> DeviceJobRequest:
         parameters: dict[str, Any] = {
-            "job_id": record["job_id"],  # the dispatcher does not pass the top-level job_id to the handler
+            "job_id": record["job_id"],  # 디스패처가 최상위 job_id를 핸들러에 직접 전달하지 않음
             "board": record["board"],
             "title": record["title"],
             "body_html": record["body_html"],
             "images": [
-                {"key": i["key"], "filename": i["filename"], "blob_url": self.blob.read_url(i["blob_path"], self.settings.sas_ttl)}
+                {"key": i["filename"], "filename": i["filename"], "blob_url": self.blob.read_url(i["blob_path"], self.settings.sas_ttl)}
                 for i in record.get("images") or []
             ],
             "mode": "create",
@@ -252,12 +252,12 @@ class IntranetPublisher:
         )
 
     async def _submit(self, record: dict[str, Any]) -> None:
-        """POST /device-job. Retries only when the request certainly did not arrive.
+        """POST /device-job을 호출합니다. 요청이 확실히 전달되지 않은 경우에만 재시도합니다.
 
-        - connection could not be made / 503: retry, then FAILED (nothing ran)
-        - other 4xx: FAILED (rejected, nothing ran)
-        - timeouts after connecting, other 5xx: stay PENDING; the callback or the timeout decides,
-          because the device_agent may already be working on it.
+        - 연결 실패 / 503: 재시도 후 FAILED 처리 (실행된 작업 없음)
+        - 그 외 4xx: FAILED 처리 (요청 거절됨, 실행된 작업 없음)
+        - 연결 후 타임아웃, 그 외 5xx: PENDING 상태 유지. device_agent가 이미 작업을 진행 중일 수 있으므로
+          콜백 수신 또는 만료 타임아웃으로 최종 결정합니다.
         """
         job_id = record["job_id"]
         try:
@@ -286,7 +286,7 @@ class IntranetPublisher:
             except httpx.HTTPError as exc:
                 logger.warning("[IntranetPublish] %s submit outcome unknown (%s); waiting for callback", job_id, type(exc).__name__)
                 return
-            except RuntimeError as exc:  # DEVICE_JOB_URL missing / client not initialised
+            except RuntimeError as exc:  # DEVICE_JOB_URL 누락 또는 클라이언트 미초기화
                 await self._finish(job_id, [PENDING], FAILED, "DEVICE_REQUEST_FAILED", None)
                 raise PublishError("DEVICE_REQUEST_FAILED", str(exc)) from None
             logger.warning("[IntranetPublish] %s submit attempt %d/%d failed (%s)", job_id, attempt, attempts, problem)
@@ -295,9 +295,9 @@ class IntranetPublisher:
         await self._finish(job_id, [PENDING], FAILED, "DEVICE_REQUEST_FAILED", None)
         raise PublishError("DEVICE_REQUEST_FAILED", "device_agent에 연결하지 못했습니다.")
 
-    # ------------------------------------------------------------------ callback
+    # ------------------------------------------------------------------ 콜백
     async def handle_callback(self, callback: dict[str, Any]) -> dict[str, Any]:
-        """Called by /device-callback for jobs that ``owns_job``. Idempotent."""
+        """``owns_job``에 해당하는 작업에 대해 /device-callback에서 호출됩니다. 멱등성을 보장합니다."""
         await self.expire_stale()
         job_id = callback.get("job_id", "")
         status = callback.get("status")
@@ -305,7 +305,7 @@ class IntranetPublisher:
         kept = {k: result[k] for k in _RESULT_KEYS if k in result}
 
         if status == "success":
-            # a late success after a timeout is still recorded
+            # 타임아웃 이후에 뒤늦게 도착한 성공 결과도 기록함
             record = await self._finish(job_id, [PENDING], SUCCEEDED, None, kept) or await self._finish(
                 job_id, [NEEDS_CHECK], SUCCEEDED, None, kept, only_reason=CALLBACK_TIMEOUT
             )
@@ -319,7 +319,7 @@ class IntranetPublisher:
         if current is None:
             return {"status": "duplicate", "job_id": job_id}
         if current.get("status") == NEEDS_CHECK and current.get("reason") == CALLBACK_TIMEOUT:
-            # late failure after we gave up waiting: record it, never retry automatically
+            # 대기를 포기한 뒤 뒤늦게 도착한 실패: 기록만 하고 자동 재시도는 하지 않음
             final = FAILED if reason in FINAL_REASONS or reason in RETRYABLE_REASONS else NEEDS_CHECK
             record = await self._finish(job_id, [NEEDS_CHECK], final, reason, kept, only_reason=CALLBACK_TIMEOUT)
             return {"status": final if record else "duplicate", "job_id": job_id, "reason": reason}
@@ -341,9 +341,9 @@ class IntranetPublisher:
             return {"status": RETRY_WAIT, "job_id": job_id, "reason": reason}
 
         if reason in FINAL_REASONS or reason in RETRYABLE_REASONS:
-            final = FAILED  # input problem, or retries used up; nothing was submitted on the board
+            final = FAILED  # 입력 문제이거나 재시도 횟수를 모두 소진함: 게시판에 실제로 게시되지 않음
         else:
-            final = NEEDS_CHECK  # MANUAL_CHECK_REASONS and anything unknown: someone has to look
+            final = NEEDS_CHECK  # 수동 확인 사유(MANUAL_CHECK_REASONS) 및 알 수 없는 사유: 담당자 확인 필요
         record = await self._finish(job_id, [PENDING], final, reason, kept)
         if record is None:
             return {"status": "duplicate", "job_id": job_id}
@@ -362,7 +362,7 @@ class IntranetPublisher:
                 {"status": PENDING, "attempt": current.get("attempt", 1) + 1, "updated_at": self._clock()},
             )
             if record is not None:
-                await self._submit(record)  # fresh SAS URLs are minted here
+                await self._submit(record)  # 여기서 새로 갱신된 SAS URL이 생성됨
         except PublishError as exc:
             logger.error("[IntranetPublish] %s retry failed: %s", job_id, exc.code)
         except Exception as exc:
@@ -395,10 +395,10 @@ class IntranetPublisher:
         except Exception as exc:
             logger.warning("[IntranetPublish] notify failed for %s (%s)", record.get("job_id"), type(exc).__name__)
 
-    # ------------------------------------------------------------------ timeouts
+    # ------------------------------------------------------------------ 타임아웃
     async def expire_stale(self) -> int:
-        """PENDING longer than the callback timeout -> NEEDS_CHECK (it may have been posted).
-        RETRY_WAIT that never resumed (process restarted) -> FAILED (nothing was posted)."""
+        """콜백 대기 시간을 초과한 PENDING -> NEEDS_CHECK (이미 게시되었을 가능성 있음).
+        재개되지 못한 RETRY_WAIT (프로세스 재시작 등) -> FAILED (게시된 내용 없음)."""
         before = self._clock() - self.settings.callback_timeout
         changed = 0
         for record in await self.store.stale([PENDING, RETRY_WAIT], before):
@@ -413,7 +413,7 @@ class IntranetPublisher:
 
 
 def describe(record: dict[str, Any]) -> str:
-    """Short Korean summary for chat notifications (no recipient names, no URLs with secrets)."""
+    """채팅 알림용 짧은 한국어 요약문 생성 (수신자 이름 및 보안 URL 미포함)."""
     title = record.get("title", "")
     status = record.get("status")
     result = record.get("result") or {}

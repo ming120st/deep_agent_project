@@ -13,7 +13,7 @@ result = await get_publisher().publish_post(
         # 이미지는 Blob intranet-board/{post_key}/ 에 저장
         "board": "genai", "title": "...",
         "body_html": "<div>... {{img:header}} ...</div>",   # AI가 작성한 HTML
-        "images": [{"key": "header", "filename": "header.png"}],
+        "images": ["header.png"],
     },
     recipients=["홍길동"],                  # 업무게시판 전용, 이름 정확 일치
     thread_id=thread_id,
@@ -27,7 +27,7 @@ result = await get_publisher().publish_post(
 ## 본문 HTML
 
 이 모듈은 HTML을 만들거나 고치지 않고 **검사만** 합니다. 작성 규칙은 `agents/common/intranet_html_agent/skills/intranet-html/SKILL.md`에 있습니다.
-본문에 쓸 수 있는 이미지는 `{{img:키}}` 자리표시자뿐이고, 키는 `images`에 선언합니다. 선언만 하고 안 쓴 이미지는 그대로 전달되며 `warnings`로 알려줍니다.
+본문에 쓸 수 있는 이미지는 `{{img:파일명}}` 자리표시자뿐이고, 파일명은 `images`에 적습니다. 적기만 하고 안 쓴 이미지는 그대로 전달되며 `warnings`로 알려줍니다.
 
 ## 이미지
 
@@ -45,7 +45,7 @@ URL은 device_agent가 가지고 있고 BOA는 이름만 보냅니다.
 
 ## 요청 전 거부 (`PublishError.code`, 업로드·전송 없음)
 
-`INVALID_DOCUMENT`(필드 규격, 본문 300,000자 초과, `<img>`가 `{{img:키}}`가 아님, 선언 안 된 키), `INVALID_BOARD`, `INVALID_RECIPIENTS`, `MISSING_ASSET`, `INVALID_IMAGE`(png/jpg/jpeg/gif, 내용이 확장자와 일치, 10MB 이하), `INVALID_IMAGE_URL`/`IMAGE_DOWNLOAD_FAILED`(업로드 Tool),
+`INVALID_DOCUMENT`(필드 규격, 본문 300,000자 초과, `<img>`가 `{{img:파일명}}`이 아님, `images`에 없는 파일명), `INVALID_BOARD`, `INVALID_RECIPIENTS`, `MISSING_ASSET`, `INVALID_IMAGE`(png/jpg/jpeg/gif, 내용이 확장자와 일치, 10MB 이하), `INVALID_IMAGE_URL`/`IMAGE_DOWNLOAD_FAILED`(업로드 Tool),
 `UNSAFE_BODY`(script/style/on*=/javascript: 등, device_agent와 같은 규칙), `IN_PROGRESS`(같은 글 게시 중), `NEEDS_MANUAL_CHECK`(이전 시도가 올라갔을 수 있음), `BLOB_FAILED`,
 `DEVICE_REQUEST_FAILED`(device_agent 연결 불가), `DEVICE_REQUEST_REJECTED`(4xx)
 

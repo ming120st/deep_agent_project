@@ -1,4 +1,4 @@
-"""Checks done in BOA before anything is uploaded or sent (pure functions)."""
+"""업로드 및 전송 전에 BOA 내부에서 수행하는 유효성 검사 함수 모음 (순수 함수)."""
 from __future__ import annotations
 
 import re
@@ -8,9 +8,9 @@ from .config import JOB_ID_PREFIX, MAX_IMAGE_BYTES, MAX_RECIPIENT_CHARS, MAX_REC
 
 
 class PublishError(Exception):
-    """Raised by publish_post. ``code`` is stable and meant for callers; ``message`` is Korean text.
+    """publish_post에서 발생하는 예외. ``code``는 호출자가 구분할 수 있는 고정 코드이며, ``message``는 한글 안내 메시지입니다.
 
-    Messages never contain SAS URLs, connection strings, keys or recipient names.
+    메시지에는 SAS URL, 연결 문자열, 비밀키 또는 수신자 이름이 절대 포함되지 않습니다.
     """
 
     def __init__(self, code: str, message: str, details: Any = None):
@@ -38,7 +38,7 @@ CONTENT_TYPES = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg", 
 
 
 def make_job_id(board: str, post_key: str) -> str:
-    """Deterministic: retries of the same post reuse it (device_agent's ledger is keyed by it)."""
+    """결정론적 생성: 같은 글의 재시도 시 동일한 ID가 재사용됩니다 (device_agent의 원장에 키로 사용됨)."""
     return f"{JOB_ID_PREFIX}{board}-{post_key}"
 
 
@@ -50,7 +50,7 @@ def check_board(board: str, boards: dict[str, BoardSpec]) -> BoardSpec:
 
 
 def normalize_recipients(recipients: Any, board: BoardSpec) -> list[str]:
-    """Same rules as the device_agent adapter. Errors refer to positions, never to names."""
+    """device_agent 어댑터와 동일한 규칙. 오류 발생 시 수신자 이름 대신 인덱스 번호만 참조합니다."""
     if recipients is None:
         return []
     if not isinstance(recipients, (list, tuple)):
@@ -82,32 +82,32 @@ def extension(filename: str) -> str:
     return filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
 
 
-def check_image_meta(key: str, filename: str, size: int, head: bytes) -> str:
-    """Check size and file signature (first bytes). Return the content type, or raise INVALID_IMAGE."""
+def check_image_meta(filename: str, size: int, head: bytes) -> str:
+    """크기와 파일 시그니처(첫 바이트)를 검사합니다. content-type을 반환하거나 INVALID_IMAGE 예외를 발생시킵니다."""
     ext = extension(filename)
     if ext not in _SIGNATURES:
-        raise PublishError("INVALID_IMAGE", f"이미지 '{key}': png/jpg/jpeg/gif만 가능합니다.", {"key": key})
+        raise PublishError("INVALID_IMAGE", f"이미지 '{filename}': png/jpg/jpeg/gif만 가능합니다.", {"filename": filename})
     if not size or not head:
-        raise PublishError("INVALID_IMAGE", f"이미지 '{key}': 내용이 비어 있습니다.", {"key": key})
+        raise PublishError("INVALID_IMAGE", f"이미지 '{filename}': 내용이 비어 있습니다.", {"filename": filename})
     if size > MAX_IMAGE_BYTES:
-        raise PublishError("INVALID_IMAGE", f"이미지 '{key}': 10MB를 넘습니다.", {"key": key})
+        raise PublishError("INVALID_IMAGE", f"이미지 '{filename}': 10MB를 넘습니다.", {"filename": filename})
     if not any(bytes(head[: len(sig)]) == sig for sig in _SIGNATURES[ext]):
-        raise PublishError("INVALID_IMAGE", f"이미지 '{key}': 파일 내용이 확장자({ext})와 다릅니다.", {"key": key})
+        raise PublishError("INVALID_IMAGE", f"이미지 '{filename}': 파일 내용이 확장자({ext})와 다릅니다.", {"filename": filename})
     return CONTENT_TYPES[ext]
 
 
-def check_image(key: str, filename: str, data: Any) -> str:
-    """Same checks for bytes held in memory (used by the image upload tool)."""
+def check_image(filename: str, data: Any) -> str:
+    """메모리에 있는 bytes 데이터에 대한 동일한 검사 (이미지 업로드 도구에서 사용)."""
     if not isinstance(data, (bytes, bytearray)):
-        raise PublishError("INVALID_IMAGE", f"이미지 '{key}': bytes가 아닙니다.", {"key": key})
-    return check_image_meta(key, filename, len(data), bytes(data[:16]))
+        raise PublishError("INVALID_IMAGE", f"이미지 '{filename}': bytes가 아닙니다.", {"filename": filename})
+    return check_image_meta(filename, len(data), bytes(data[:16]))
 
 
 _REASON_TOKEN = re.compile(r"^[A-Z][A-Z_]{2,63}$")
 
 
 def extract_reason(callback: dict[str, Any]) -> str:
-    """device_agent puts the code in result.reason and error_message; exceptions only fill error_message."""
+    """device_agent는 사유 코드를 result.reason 또는 error_message에 기록합니다. 예외 발생 시에는 error_message만 채워집니다."""
     result = callback.get("result") or {}
     for candidate in (result.get("reason"), callback.get("error_message")):
         if isinstance(candidate, str) and _REASON_TOKEN.match(candidate.strip()):

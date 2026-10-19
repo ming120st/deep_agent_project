@@ -1,14 +1,14 @@
-"""Publish a sample post (manual end-to-end check). The body is plain HTML written by hand or by an agent.
+"""샘플 게시글 게시 (수동 종단간 검증용 스크립트). 본문은 직접 작성하거나 에이전트가 작성한 순수 HTML입니다.
 
-    python scripts/publish_intranet_sample.py                       # check only, nothing uploaded or sent
-    python scripts/publish_intranet_sample.py --html my_body.html   # check your own body
+    python scripts/publish_intranet_sample.py                       # 검사만 수행 (업로드 및 전송 없음)
+    python scripts/publish_intranet_sample.py --html my_body.html   # 직접 작성한 본문 HTML 검사
     python scripts/publish_intranet_sample.py --board work --recipients "홍길동" --confirm --wait
     python scripts/publish_intranet_sample.py --board genai --confirm --confirm-public --wait
 
-Without --confirm the post is only validated (same checks as the publisher). With --confirm the
-images are put into Blob (like the image upload tool does) and the device job is sent. Every ``{{img:key}}`` in the body gets a generated
-solid-colour PNG named ``key.png``. The callback goes to the BOA server named in the device_agent's
-BOA_CALLBACK_URL, so that server must run this code and use the same MongoDB as this script for --wait.
+--confirm 옵션이 없으면 게시글 유효성만 검사합니다 (게시 모듈과 동일한 검사).
+--confirm 옵션을 주면 이미지를 Blob에 업로드하고 (이미지 업로드 도구와 동일) device job을 전송합니다.
+본문의 모든 ``{{img:name.png}}``에 대해 해당 이름의 단색 PNG 이미지가 생성됩니다.
+콜백은 device_agent의 BOA_CALLBACK_URL에 지정된 BOA 서버로 전송되므로, --wait 사용 시 해당 서버가 동일한 MongoDB를 사용해야 합니다.
 """
 from __future__ import annotations
 
@@ -28,16 +28,16 @@ sys.path.insert(0, str(ROOT))
 COLOURS = [(43, 95, 171), (32, 140, 110), (200, 120, 30), (120, 80, 160)]
 FONT = "font-family:'Malgun Gothic','Apple SD Gothic Neo',sans-serif"
 SAMPLE_BODY = f"""<div style="{FONT};font-size:14px;line-height:1.6;color:#222222;max-width:860px">
-<div style="margin:0 0 14px 0;text-align:center"><img src="{{{{img:header}}}}" alt="헤더" style="max-width:100%;height:auto;border:0;vertical-align:middle"></div>
+<div style="margin:0 0 14px 0;text-align:center"><img src="{{{{img:header.png}}}}" alt="헤더" style="max-width:100%;height:auto;border:0;vertical-align:middle"></div>
 <div style="margin:0 0 14px 0;padding:12px 16px;background:#e8f1fb;border:1px solid #b8d3f0;border-left:5px solid #2b5fab;border-radius:6px;color:#174a7e;font-size:14px;line-height:1.65"><div style="margin:0 0 4px 0;font-weight:700;font-size:14px">샘플 게시글</div><div style="margin:0">HTML 직접 게시 확인용 글입니다.</div></div>
 <h2 style="margin:30px 0 14px 0;padding:0 0 8px 0;{FONT};font-size:20px;line-height:1.35;font-weight:700;color:#1d457f;border-bottom:2px solid #2b5fab">이미지 확인</h2>
-<div style="margin:0 0 14px 0;text-align:center"><img src="{{{{img:issue1}}}}" alt="이슈 1" style="max-width:100%;height:auto;border:0;vertical-align:middle"></div>
-<div style="margin:0 0 14px 0;text-align:center"><img src="{{{{img:chart}}}}" alt="차트" style="max-width:100%;height:auto;border:0;vertical-align:middle"></div>
+<div style="margin:0 0 14px 0;text-align:center"><img src="{{{{img:issue1.png}}}}" alt="이슈 1" style="max-width:100%;height:auto;border:0;vertical-align:middle"></div>
+<div style="margin:0 0 14px 0;text-align:center"><img src="{{{{img:chart.png}}}}" alt="차트" style="max-width:100%;height:auto;border:0;vertical-align:middle"></div>
 </div>"""
 
 
 def solid_png(width: int, height: int, rgb: tuple[int, int, int]) -> bytes:
-    """Minimal PNG encoder so the script needs no image library."""
+    """별도의 이미지 라이브러리 없이 동작하도록 만든 최소형 PNG 인코더."""
     row = b"\x00" + bytes(rgb) * width
     raw = row * height
 
@@ -50,7 +50,7 @@ def solid_png(width: int, height: int, rgb: tuple[int, int, int]) -> bytes:
 
 def build_post(args: argparse.Namespace) -> tuple[dict, dict[str, bytes]]:
     body = args.html.read_text(encoding="utf-8") if args.html else SAMPLE_BODY
-    keys = list(dict.fromkeys(re.findall(r"\{\{img:([a-z0-9-]+)\}\}", body)))
+    names = list(dict.fromkeys(re.findall(r"\{\{img:([a-z0-9._-]+)\}\}", body)))
     title = args.title
     if args.board == "work" and not title.startswith("[테스트]"):
         title = f"[테스트] {title}"
@@ -59,9 +59,9 @@ def build_post(args: argparse.Namespace) -> tuple[dict, dict[str, bytes]]:
         "board": args.board,
         "title": title,
         "body_html": body,
-        "images": [{"key": k, "filename": f"{k}.png"} for k in keys],
+        "images": names,
     }
-    assets = {k: solid_png(*((1200, 240) if k == "header" else (800, 400)), COLOURS[i % len(COLOURS)]) for i, k in enumerate(keys)}
+    assets = {n: solid_png(*((1200, 240) if n.startswith("header") else (800, 400)), COLOURS[i % len(COLOURS)]) for i, n in enumerate(names)}
     return post, assets
 
 
@@ -76,8 +76,8 @@ async def publish(post: dict, assets: dict[str, bytes], args: argparse.Namespace
     publisher = get_publisher()
     try:
         try:
-            for image in post["images"]:  # what upload_intranet_image does for an agent
-                await publisher.blob.upload(f"intranet-board/{post['post_key']}/{image['filename']}", assets[image["key"]], "image/png")
+            for name in post["images"]:  # 에이전트의 upload_intranet_image 역할 수행
+                await publisher.blob.upload(f"intranet-board/{post['post_key']}/{name}", assets[name], "image/png")
             result = await publisher.publish_post(post, recipients=args.recipients, thread_id="intranet-publish-script")
         except PublishError as exc:
             print(f"요청 전 중단: {exc.code} {exc.message}")

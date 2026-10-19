@@ -1,24 +1,24 @@
-"""Publish intranet posts through the device_agent.
+"""device_agent를 통해 인트라넷 게시글을 게시합니다.
 
     from integrations.intranet_publish import get_publisher, PublishError
 
     result = await get_publisher().publish_post(
-        post,                                # IntranetPost or dict: metadata + body_html (written by the HTML agent)
-        images=[{"key": "header", "filename": "header.png"}],  # uploaded first with upload_intranet_image
-        recipients=["홍길동"],                # work board only
+        post,                                # IntranetPost 또는 dict: 메타데이터 + body_html (HTML 작성 에이전트가 작성)
+        images=["header.png"],  # upload_intranet_image로 먼저 업로드된 이미지 파일명
+        recipients=["홍길동"],                # 업무게시판(work) 전용
         thread_id=thread_id,
-        notify={"space_id": space, "thread_name": thread},  # optional Google Chat notice of the outcome
+        notify={"space_id": space, "thread_name": thread},  # 선택 사항: Google Chat 결과 알림
     )
-    result.job_id, result.status             # "pending": the callback will finish it
+    result.job_id, result.status             # "pending": 콜백을 통해 최종 완료됨
 
-The device callback route calls ``try_handle_callback`` before the generic resume logic.
+디바이스 콜백 라우트는 일반 재개 로직 이전에 ``try_handle_callback``을 호출합니다.
 """
 from __future__ import annotations
 
 import logging
 from typing import Any
 
-from .post import ImageSpec, IntranetPost
+from .post import IntranetPost
 from .config import BOARDS, PublishSettings, blob_connection_string
 from .service import IntranetPublisher, PublishResult, describe
 from .validation import PublishError
@@ -27,7 +27,6 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     "BOARDS",
-    "ImageSpec",
     "IntranetPost",
     "IntranetPublisher",
     "PublishError",
@@ -51,7 +50,7 @@ async def google_chat_notifier(record: dict[str, Any]) -> None:
 
 
 def get_publisher() -> IntranetPublisher:
-    """Process-wide publisher (Mongo store, Azure Blob, existing DeviceJobClient)."""
+    """프로세스 전역 publisher (Mongo 저장소, Azure Blob, 기존 DeviceJobClient)."""
     global _publisher
     if _publisher is None:
         from integrations.device_job.client import DeviceJobClient
@@ -71,7 +70,7 @@ def get_publisher() -> IntranetPublisher:
 
 
 async def try_handle_callback(callback: Any) -> dict[str, Any] | None:
-    """Return a response if the callback belongs to an intranet publish job, else None."""
+    """콜백이 인트라넷 게시 작업에 해당하면 응답을 반환하고, 그렇지 않으면 None을 반환합니다."""
     payload = callback.model_dump() if hasattr(callback, "model_dump") else dict(callback)
     if not IntranetPublisher.owns_job_id(payload.get("job_id", "")):
         return None

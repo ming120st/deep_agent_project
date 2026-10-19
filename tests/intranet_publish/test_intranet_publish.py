@@ -1,4 +1,4 @@
-"""IntranetPublisher with in-memory store, fake Blob and fake device client (no network, no Mongo)."""
+"""인메모리 저장소, Fake Blob, Fake 디바이스 클라이언트를 사용한 IntranetPublisher 단위 테스트 (네트워크 및 Mongo 미사용)."""
 import asyncio
 import base64
 import json
@@ -30,17 +30,13 @@ def run(coro):
 
 SAMPLE_BODY = (
     '<div style="font-family:sans-serif;font-size:14px">'
-    '<div><img src="{{img:header}}" alt="header" style="max-width:100%"></div>'
+    '<div><img src="{{img:header.png}}" alt="header" style="max-width:100%"></div>'
     '<div>본문</div>'
-    '<div><img src="{{img:issue1}}" alt="issue" style="max-width:100%"></div>'
-    '<div><img src="{{img:chart-keywords}}" alt="chart" style="max-width:100%"></div>'
+    '<div><img src="{{img:issue1.png}}" alt="issue" style="max-width:100%"></div>'
+    '<div><img src="{{img:chart-keywords.png}}" alt="chart" style="max-width:100%"></div>'
     "</div>"
 )
-SAMPLE_IMAGES = [
-    {"key": "header", "filename": "header.png"},
-    {"key": "issue1", "filename": "issue1.png"},
-    {"key": "chart-keywords", "filename": "chart-keywords.png"},
-]
+SAMPLE_IMAGES = ["header.png", "issue1.png", "chart-keywords.png"]
 
 
 def sample(board="genai", **changes):
@@ -49,18 +45,18 @@ def sample(board="genai", **changes):
         "board": board,
         "title": "[AI 위클리] 10월 3주차 (샘플)",
         "body_html": SAMPLE_BODY,
-        "images": [dict(i) for i in SAMPLE_IMAGES],
+        "images": list(SAMPLE_IMAGES),
     }
     doc.update(changes)
     return doc
 
 
 def assets_for(doc):
-    return {a["key"]: (JPG if a["filename"].endswith((".jpg", ".jpeg")) else PNG) for a in doc["images"]}
+    return {n: (JPG if n.endswith((".jpg", ".jpeg")) else PNG) for n in doc["images"]}
 
 
 class FakeBlob:
-    """files = what is in Blob; uploads = only what the publisher itself uploaded (must stay empty)."""
+    """files = Blob에 존재하는 파일; uploads = publisher가 직접 업로드한 파일(비어 있어야 함)."""
 
     def __init__(self):
         self.uploads = {}
@@ -135,9 +131,8 @@ def publish(env, doc=None, **kw):
     assets = kw.pop("assets", None)
     if assets is None:
         assets = assets_for(doc)
-    for key, data in assets.items():  # what the image upload tool would have put into Blob
-        image = next(i for i in doc["images"] if i["key"] == key)
-        env.blob.files[f"intranet-board/{doc['post_key']}/{image['filename']}"] = data
+    for name, data in assets.items():  # 이미지 업로드 도구가 Blob에 저장했을 데이터 시뮬레이션
+        env.blob.files[f"intranet-board/{doc['post_key']}/{name}"] = data
     kw.setdefault("thread_id", "user@widemobile.com")
     return run(env.publisher.publish_post(doc, **kw))
 
@@ -151,7 +146,7 @@ def callback(job_id, status="error", reason=None, result=None, error_message=Non
 
 
 def _callback_and_drain(env, cb):
-    """Retries are background tasks, so the callback and the wait must share one event loop."""
+    """재시도는 백그라운드 태스크이므로 콜백 처리와 대기가 동일한 이벤트 루프를 공유해야 합니다."""
 
     async def go():
         response = await env.publisher.handle_callback(cb)
@@ -161,13 +156,13 @@ def _callback_and_drain(env, cb):
     return run(go())
 
 
-# ------------------------------------------------------------------ request shape
+# ------------------------------------------------------------------ 요청 형태 검증
 def test_publish_checks_images_in_blob_and_sends_the_agreed_request(env):
     result = publish(env)
     doc = sample()
     assert result.status == "pending"
     assert result.job_id == "intranet-genai-ai-weekly-2026-W42"
-    assert env.blob.uploads == {}  # the publisher never uploads; the image upload tool did
+    assert env.blob.uploads == {}  # publisher는 직접 업로드하지 않음 (이미지 업로드 도구가 수행)
 
     (req,) = env.device.requests
     assert req["job_id"] == req["parameters"]["job_id"] == result.job_id
@@ -176,14 +171,14 @@ def test_publish_checks_images_in_blob_and_sends_the_agreed_request(env):
     params = req["parameters"]
     assert params["board"] == "genai" and params["mode"] == "create"
     assert "board_url" not in params and "recipients" not in params
-    assert "{{img:header}}" in params["body_html"]
+    assert "{{img:header.png}}" in params["body_html"]
     assert all(i["blob_url"].startswith("https://acct.blob.core.windows.net/wm-device-agent-ai/intranet-board/ai-weekly-2026-W42/") for i in params["images"])
-    assert {i["key"] for i in params["images"]} == {a["key"] for a in doc["images"]}
+    assert {i["filename"] for i in params["images"]} == set(doc["images"])
 
     record = run(env.store.get(result.job_id))
     assert record["status"] == "pending" and record["attempt"] == 1
-    assert "SECRETSIG" not in json.dumps(record, default=str)  # SAS never stored
-    assert all("data" not in i for i in record["images"])  # bytes never stored
+    assert "SECRETSIG" not in json.dumps(record, default=str)  # SAS 토큰은 절대 저장하지 않음
+    assert all("data" not in i for i in record["images"])  # 원본 bytes 데이터는 저장하지 않음
 
 
 def test_work_board_sends_normalised_recipients(env):
@@ -208,7 +203,7 @@ def test_job_id_fits_the_device_agent_rule():
     assert re.fullmatch(r"[A-Za-z0-9_-]{1,100}", job_id)
 
 
-# ------------------------------------------------------------------ input checks (nothing uploaded or sent)
+# ------------------------------------------------------------------ 입력 유효성 검사 (업로드 및 전송 없음)
 def _rejected(env, code, *args, **kw):
     with pytest.raises(PublishError) as info:
         publish(env, *args, **kw)
@@ -250,23 +245,23 @@ def test_recipient_rules(env, recipients):
 def test_missing_asset(env):
     doc = sample()
     assets = assets_for(doc)
-    assets.pop("header")
+    assets.pop("header.png")
     error = _rejected(env, "MISSING_ASSET", doc, assets=assets)
-    assert error.details == {"keys": ["header"]}
+    assert error.details == {"filenames": ["header.png"]}
 
 
 @pytest.mark.parametrize("data", [JPG, b"", b"GIF89a....", "not bytes", PNG[:4]])
 def test_image_signature_must_match_extension(env, data):
     doc = sample()
     assets = assets_for(doc)
-    assets["header"] = data
+    assets["header.png"] = data
     _rejected(env, "INVALID_IMAGE", doc, assets=assets)
 
 
 def test_image_too_large(env):
     doc = sample()
     assets = assets_for(doc)
-    assets["header"] = PNG + b"\x00" * (10 * 1024 * 1024)
+    assets["header.png"] = PNG + b"\x00" * (10 * 1024 * 1024)
     _rejected(env, "INVALID_IMAGE", doc, assets=assets)
 
 
@@ -281,7 +276,7 @@ def test_invalid_document(env):
         "<style>td{color:red}</style>",
         '<div onclick="x()">a</div>',
         '<a href="javascript:alert(1)">a</a>',
-        "<iframe src=x></iframe>",
+        "<object data=x></object>",
         "<form></form>",
     ],
 )
@@ -310,7 +305,7 @@ def test_body_image_rules(env, body):
 
 def test_undeclared_placeholder_is_rejected(env):
     doc = sample()
-    doc["body_html"] += '<img src="{{img:other}}">'
+    doc["body_html"] += '<img src="{{img:other.png}}">'
     _rejected(env, "INVALID_DOCUMENT", doc)
 
 
@@ -322,18 +317,15 @@ def test_body_size_limit(env):
 
 def test_unused_image_is_uploaded_with_a_warning(env):
     doc = sample()
-    doc["body_html"] = '<div><img src="{{img:header}}" alt="h"></div>'
+    doc["body_html"] = '<div><img src="{{img:header.png}}" alt="h"></div>'
     result = publish(env, doc)
-    assert any("issue1" in w for w in result.warnings)
+    assert any("issue1.png" in w for w in result.warnings)
     assert len(env.device.requests[0]["parameters"]["images"]) == 3
 
 
-def test_duplicate_image_keys_or_files_are_rejected(env):
+def test_duplicate_image_files_are_rejected(env):
     doc = sample()
-    doc["images"].append({"key": "header", "filename": "other.png"})
-    _rejected(env, "INVALID_DOCUMENT", doc)
-    doc = sample()
-    doc["images"].append({"key": "other", "filename": "header.png"})
+    doc["images"].append("header.png")
     _rejected(env, "INVALID_DOCUMENT", doc)
 
 
@@ -343,7 +335,7 @@ def test_unknown_fields_are_rejected(env):
     _rejected(env, "INVALID_DOCUMENT", doc)
 
 
-# ------------------------------------------------------------------ submit errors
+# ------------------------------------------------------------------ 전송 오류 처리
 def test_connection_errors_are_retried_then_fail(env):
     env.device.errors = [httpx.ConnectError("down")] * 3
     with pytest.raises(PublishError):
@@ -372,10 +364,10 @@ def test_rejected_request_fails_without_retry(env):
 def test_ambiguous_submit_waits_for_the_callback(env, error):
     env.device.errors = [error]
     assert publish(env).status == "pending"
-    assert len(env.device.requests) == 1  # never re-sent: the device_agent may be running it
+    assert len(env.device.requests) == 1  # 재전송하지 않음: device_agent가 이미 작업을 실행 중일 수 있음
 
 
-# ------------------------------------------------------------------ callbacks
+# ------------------------------------------------------------------ 콜백 처리
 def test_success_callback_is_recorded_once(env):
     job_id = publish(env).job_id
     cb = callback(job_id, "success", result={"success": True, "post_id": "526400", "post_url": "https://intra/x?Num=526400", "secret": "drop"})
@@ -396,7 +388,7 @@ def test_retryable_failures_are_resent_with_fresh_sas_then_give_up(env, reason):
     assert _callback_and_drain(env, callback(job_id, reason=reason))["status"] == "retry_wait"
     assert len(env.device.requests) == 2
     second = env.device.requests[1]
-    assert second["job_id"] == job_id  # same job id: the ledger stays consistent
+    assert second["job_id"] == job_id  # 동일한 job_id 유지: 원장의 일관성 보장
     assert [i["blob_url"] for i in second["parameters"]["images"]] != first_urls
     assert run(env.store.get(job_id))["attempt"] == 2
 
@@ -467,7 +459,7 @@ def test_callback_timeout_then_late_pre_click_failure(env):
     run(env.publisher.handle_callback(callback(job_id, reason="LOGIN_REQUIRED")))
     record = run(env.store.get(job_id))
     assert (record["status"], record["reason"]) == ("failed", "LOGIN_REQUIRED")
-    assert len(env.device.requests) == 1  # no automatic retry after a timeout
+    assert len(env.device.requests) == 1  # 타임아웃 이후에는 자동 재시도하지 않음
 
 
 def test_not_timed_out_yet(env):
@@ -476,7 +468,7 @@ def test_not_timed_out_yet(env):
     assert run(env.publisher.expire_stale()) == 0
 
 
-# ------------------------------------------------------------------ publishing the same post again
+# ------------------------------------------------------------------ 동일 게시글 재게시 처리
 def test_republish_after_success_does_not_send(env):
     job_id = publish(env).job_id
     run(env.publisher.handle_callback(callback(job_id, "success", result={"success": True})))
@@ -499,7 +491,7 @@ def test_republish_after_input_failure_is_allowed(env):
     assert run(env.store.get(job_id))["attempt"] == 1
 
 
-# ------------------------------------------------------------------ secrets in logs
+# ------------------------------------------------------------------ 로그 내 민감 정보 누출 검증
 def test_no_secrets_or_names_in_logs(env, caplog):
     caplog.set_level(logging.DEBUG)
     job_id = publish(env, sample("work"), recipients=NAMES).job_id
@@ -512,7 +504,7 @@ def test_no_secrets_or_names_in_logs(env, caplog):
     assert job_id in caplog.text
 
 
-# ------------------------------------------------------------------ misc
+# ------------------------------------------------------------------ 기타 기능 검증
 def test_extract_reason():
     assert extract_reason({"result": {"reason": "LOGIN_REQUIRED"}}) == "LOGIN_REQUIRED"
     assert extract_reason({"result": {}, "error_message": "VERIFY_FAILED"}) == "VERIFY_FAILED"
@@ -536,7 +528,7 @@ def test_try_handle_callback_routes_owned_jobs(env, monkeypatch):
     assert response["status"] == "succeeded"
 
 
-# ------------------------------------------------------------------ Azure SAS (offline: SAS is computed locally)
+# ------------------------------------------------------------------ Azure SAS (오프라인: SAS는 로컬에서 연산됨)
 KEY = base64.b64encode(b"k" * 64).decode()
 CONN = f"DefaultEndpointsProtocol=https;AccountName=acct;AccountKey={KEY};EndpointSuffix=core.windows.net"
 
