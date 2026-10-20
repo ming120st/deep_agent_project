@@ -18,6 +18,17 @@ class SearchProfile(BaseModel):
     min_quality_score: float = Field(default=0.55, ge=0, le=1)  # 검색 결과 최소 품질 점수 임계값 (0.0~1.0, 미달 시 추가 검색 트리거)
     search_depth: Literal["basic", "advanced", "fast", "ultra-fast"] = "basic"  # Tavily 검색 깊이 ("basic": 기본, "advanced": 심층)
     allow_additional_search: bool = True                        # 결과 품질이 낮거나 부족할 때 1회 추가 보완 검색 허용 여부
+    enabled_providers: list[
+        Literal[
+            "tavily",
+            "naver",
+        ]
+    ] = Field(
+        default_factory=lambda: [
+            "tavily",
+            "naver",
+        ]
+    )
 
     @field_validator("preferred_domains", "excluded_domains")
     @classmethod
@@ -33,7 +44,7 @@ class SearchProfile(BaseModel):
 
 
 class SearchQuery(BaseModel):
-    """실제 검색 엔진(Tavily)에 전달되는 개별 검색 쿼리 모델."""
+    """실제 검색 Provider에 전달되는 개별 검색 쿼리 모델."""
 
     query: str                   # 검색 키워드/질의문
     category: str = "general"    # 쿼리 분류/목적 (예: "general", "official", "follow_up" 등)
@@ -47,11 +58,12 @@ class SearchPlan(BaseModel):
     freshness_important: bool = False                      # 최신 정보 조회가 필수적인지 여부
     official_sources_first: bool = False                   # 공공기관/공식 문서 우선 여부
     scope: Literal["domestic", "international", "both"] = "both"  # 검색 범위 ("domestic": 국내, "international": 해외, "both": 전체)
+    providers:list[Literal["tavily","naver",]]  = Field(default_factory=lambda:["tavily"]) # 이번 검색에서 llm 이 선택한 Provider 목록
     perspectives: list[str] = Field(default_factory=list)  # 다각도 조회를 위한 관점 목록
     queries: list[SearchQuery] = Field(min_length=1, max_length=5)  # 실행할 세부 쿼리 목록 (최소 1개, 최대 5개)
     include_domains: list[str] = Field(default_factory=list)  # 검색 대상에 포함/우선할 도메인 목록
     exclude_domains: list[str] = Field(default_factory=list)  # 검색 대상에서 제외할 도메인 목록
-    topic: Literal["general", "news", "finance"] = "general"  # Tavily 검색 토픽 카테고리
+    topic: Literal["general", "news", "finance"] = "general"  # 검색 토픽 카테고리
 
 
 class SearchResult(BaseModel):
@@ -64,6 +76,7 @@ class SearchResult(BaseModel):
     source_domain: str            # 출처 도메인 (예: "naver.com", "bbc.com")
     query: str                    # 해당 결과를 가져온 검색 쿼리
     category: str                 # 쿼리 카테고리
+    provider: Literal["tavily", "naver"]
     score: float = Field(ge=0, le=1)  # 결과 관련도 및 품질 평가 점수 (0.0 ~ 1.0)
 
 

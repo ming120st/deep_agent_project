@@ -41,7 +41,10 @@ from tools.common.planning.skill import (
     get_planning_skills,
     get_planning_skill,
 )
-
+from tools.common.intranet_publish.tool import (
+    publish_saved_intranet_post,
+    check_intranet_post_status,
+)
 import os
 
 
@@ -77,6 +80,12 @@ async def create_deep_agent():
 
             # 특정 Planning Skill 본문 조회
             get_planning_skill,
+            
+            # MongoDB에 저장된 HTML 게시
+            publish_saved_intranet_post,
+
+            # 인트라넷 게시 상태 확인
+            check_intranet_post_status,
         ],
         system_prompt=system_prompt,
         state_schema=MainDeepAgentState,

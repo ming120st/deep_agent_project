@@ -15,6 +15,9 @@ from core.deep_agent.agent_config import (
 from core.llm.model_service import (
     model_service,
 )
+from core.prompt.prompt_service import (
+    prompt_service,
+)
 
 # 코드에 등록한 Agent 정의를 메모리에 저장
 AGENT_REGISTRY: dict[
@@ -198,41 +201,14 @@ async def get_planning_skill_refs() -> list[
     dict[str, str]
 ]:
     """
-    활성화된 Agent 중 Planning Skill이 등록된
-    Agent와 Skill 이름을 반환한다.
+    MongoDB에 등록된 활성 Planning Skill 목록을
+    동적으로 조회한다.
+
+    Main Agent와 SubAgent의 Planning Skill을
+    구분하지 않고 조회한다.
     """
 
-    result = []
-
-    for agent in AGENT_REGISTRY.values():
-        agent_id = agent["name"]
-
-        enabled = await is_agent_enabled(
-            agent_id
-        )
-
-        if not enabled:
-            continue
-
-        agent_config = await get_agent_config(
-            agent_id
-        )
-
-        if agent_config is None:
-            continue
-
-        planning_skill = agent_config.get(
-            "planning_skill"
-        )
-
-        if not planning_skill:
-            continue
-
-        result.append(
-            {
-                "agent": agent_id,
-                "skill_name": planning_skill,
-            }
-        )
-
-    return result
+    return await (
+        prompt_service
+        .get_active_planning_skill_refs()
+    )

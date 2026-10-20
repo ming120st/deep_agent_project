@@ -16,6 +16,23 @@ from agents.marketing.agent import (
 from agents.common.search_agent.agent import (
     register_search_agent,
 )
+from agents.common.html_agent.agent import (
+    register_html_agent,
+)
+
+
+AGENT_LOADERS = {
+    "bigquery": register_bigquery_agent,
+    "notion": register_notion_agent,
+    "google_workspace": register_drive_agent,
+    "esim_replacement": (
+        register_esim_replacement_agent
+    ),
+    "meta_ads": register_meta_ads_agent,
+    "web_search": register_search_agent,
+    "html_agent":register_html_agent,
+}
+
 
 
 AGENT_LOADERS = {

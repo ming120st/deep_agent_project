@@ -159,6 +159,61 @@ class PromptRepository:
         return document.get(
             "version"
         )
+<<<<<<< Updated upstream
+=======
+    
+    async def get_active_planning_skill_refs(
+        self,
+    ) -> list[dict[str, str]]:
+        """
+        활성화된 Planning Skill의
+        Agent 및 Skill 식별자 목록을 조회한다.
+
+        동일 Skill의 여러 버전이 존재해도
+        하나의 참조만 반환한다.
+        """
+
+        cursor = self.collection.find(
+            {
+                "prompt_type": "skill",
+                "skill_category": "planning",
+                "enabled": True,
+            },
+            {
+                "_id": 0,
+                "agent": 1,
+                "skill_name": 1,
+            },
+        )
+
+        documents = await cursor.to_list(
+            length=None
+        )
+
+        seen = set()
+        result = []
+
+        for document in documents:
+            agent = document.get("agent")
+            skill_name = document.get("skill_name")
+
+            if not agent or not skill_name:
+                continue
+
+            key = (agent, skill_name)
+
+            if key in seen:
+                continue
+
+            seen.add(key)
+
+            result.append({
+                "agent": agent,
+                "skill_name": skill_name,
+            })
+
+        return result
+>>>>>>> Stashed changes
 prompt_repository = PromptRepository(
     mongo_db
 )

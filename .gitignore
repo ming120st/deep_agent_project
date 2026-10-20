@@ -33,3 +33,7 @@ yh_memo.md
 
 # 로컬 인증서
 certs/
+
+# 대시보드
+*.html
+*.json

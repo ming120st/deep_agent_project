@@ -391,6 +391,22 @@ class PromptService:
             )
 
         return version
+<<<<<<< Updated upstream
+=======
+    
+    async def get_active_planning_skill_refs(
+        self,
+    ) -> list[dict[str, str]]:
+        """
+        MongoDB에서 활성 Planning Skill의
+        참조 목록을 조회한다.
+        """
+
+        return await (
+            self.repository
+            .get_active_planning_skill_refs()
+        )
+>>>>>>> Stashed changes
         
 # 애플리케이션 전역 PromptService
 prompt_service = PromptService(
