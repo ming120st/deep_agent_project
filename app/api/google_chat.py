@@ -29,7 +29,9 @@ from integrations.google_chat.client import (
 from integrations.google_chat.event_parser import (
     parse_google_chat_event,
 )
-
+from core.deep_agent.reload_manager import (
+    agent_reload_manager,
+)
 
 router = APIRouter()
 logger = get_logger(
@@ -76,14 +78,10 @@ async def _process_google_chat(
         chat_message.user_name,
     )
 
-    thread_id = (
-        session_manager
-        .get_or_create(
-            user_id=chat_message.user_id,
-            space_id=chat_message.space_id,
-        )
+    thread_id = await session_manager.get_or_create(
+        user_id=chat_message.user_id,
+        space_id=chat_message.space_id,
     )
-
     try:
         task_id = await _resolve_task_id(
             deep_agent=deep_agent,
@@ -107,61 +105,98 @@ async def _process_google_chat(
                 ),
             },
         )
+        config = {
+            "configurable": {
+                "thread_id": thread_id,
+            }
+        }
 
-        # =====================================================
-        # DeepAgent 실행
-        # =====================================================
+        before = await deep_agent.aget_state(config)
+
+        logger.info(
+            "[MEMORY_BEFORE] thread=%s count=%d",
+            thread_id,
+            len(before.values.get("messages", [])),
+        )
+
         result = await deep_agent.ainvoke(
             {
                 "messages": [
                     {
                         "role": "user",
-                        "content": (
-                            chat_message.text
-                        ),
+                        "content": chat_message.text,
                     }
                 ],
-                "user_id": (
-                    chat_message.user_email
-                    or chat_message.user_id
-                ),
-                "user_email": (
-                    chat_message.user_email
-                ),
-                "session_id": (
-                    thread_id
-                ),
-                "task_id": (
-                    task_id
-                ),
+                "user_id": chat_message.user_email or chat_message.user_id,
+                "user_email": chat_message.user_email,
+                "session_id": thread_id,
+                "task_id": task_id,
             },
-            config={
-                "configurable": {
-                    "thread_id": (
-                        thread_id
-                    ),
-                    "user_id": (
-                        chat_message.user_email
-                        or chat_message.user_id
-                    ),
-                    "user_email": (
-                        chat_message.user_email
-                    ),
-                    "google_user_id": (
-                        chat_message.user_id
-                    ),
-                    "task_id": (
-                        task_id
-                    ),
-                    "space_id": (
-                        chat_message.space_id
-                    ),
-                    "google_thread_name": (
-                        google_thread_name
-                    ),
-                }
-            },
+            config=config,
         )
+
+        after = await deep_agent.aget_state(config)
+
+        logger.info(
+            "[MEMORY_AFTER] thread=%s count=%d",
+            thread_id,
+            len(after.values.get("messages", [])),
+        )
+
+        # # =====================================================
+        # # DeepAgent 실행
+        # # =====================================================
+        # result = await deep_agent.ainvoke(
+        #     {
+        #         "messages": [
+        #             {
+        #                 "role": "user",
+        #                 "content": (
+        #                     chat_message.text
+        #                 ),
+        #             }
+        #         ],
+        #         "user_id": (
+        #             chat_message.user_email
+        #             or chat_message.user_id
+        #         ),
+        #         "user_email": (
+        #             chat_message.user_email
+        #         ),
+        #         "session_id": (
+        #             thread_id
+        #         ),
+        #         "task_id": (
+        #             task_id
+        #         ),
+        #     },
+        #     config={
+        #         "configurable": {
+        #             "thread_id": (
+        #                 thread_id
+        #             ),
+        #             "user_id": (
+        #                 chat_message.user_email
+        #                 or chat_message.user_id
+        #             ),
+        #             "user_email": (
+        #                 chat_message.user_email
+        #             ),
+        #             "google_user_id": (
+        #                 chat_message.user_id
+        #             ),
+        #             "task_id": (
+        #                 task_id
+        #             ),
+        #             "space_id": (
+        #                 chat_message.space_id
+        #             ),
+        #             "google_thread_name": (
+        #                 google_thread_name
+        #             ),
+        #         }
+        #     },
+        # )
 
         # =====================================================
         # Agent 응답 추출
@@ -368,7 +403,13 @@ async def google_chat(
         await request.json()
     )
 
-    # Request 자체는 background task에 넘기지 않는다.
+    # SubAgent Prompt version 변경 여부 확인
+    await agent_reload_manager.refresh_if_needed(
+        request.app
+    )
+
+    # 변경이 있었다면 최신 DeepAgent 객체를 가져온다.
+    # 이번 요청에서는 이 객체를 끝까지 사용한다.
     deep_agent = (
         request.app.state.deep_agent
     )

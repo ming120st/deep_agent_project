@@ -1,50 +1,86 @@
-# Google Chat 사용자별 대화 세션을 생성하고,
-# 마지막 활동 시간을 기준으로 세션 만료 및 재사용을 관리한다.
 
-import uuid
-from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from __future__ import annotations
 
-SESSION_TIMEOUT = timedelta(hours=1)
+from uuid import uuid4
 
-@dataclass
-class SessionInfo:
-    session_id: str
-    last_active_at: datetime
+from core.database.redis import (
+    get_redis_client,
+)
+
+SESSION_TTL_SECONDS = 3600
 
 
 class SessionManager:
-    def __init__(self):
-        self._sessions: dict[str, SessionInfo] = {}
 
-    def get_or_create(
+    @staticmethod
+    def _session_key(
+        user_id: str,
+        space_id: str,
+    ) -> str:
+        return (
+            f"boa:session:"
+            f"{space_id}:{user_id}"
+        )
+
+    async def get_or_create(
         self,
         user_id: str,
         space_id: str,
     ) -> str:
-        key = f"{space_id}:{user_id}"
-        now = datetime.now(timezone.utc)
+        client = await get_redis_client()
 
-        session = self._sessions.get(key)
+        key = self._session_key(
+            user_id=user_id,
+            space_id=space_id,
+        )
 
-        if session is None:
-            session = SessionInfo(
-                session_id=str(uuid.uuid4()),
-                last_active_at=now,
+        # 기존 세션 조회
+        thread_id = await client.get(key)
+
+        if thread_id is not None:
+            if isinstance(thread_id, bytes):
+                thread_id = thread_id.decode("utf-8")
+
+            # 마지막 활동 기준 TTL 갱신
+            await client.expire(
+                key,
+                SESSION_TTL_SECONDS,
             )
-            self._sessions[key] = session
-            return session.session_id
 
-        if now - session.last_active_at > SESSION_TIMEOUT:
-            session = SessionInfo(
-                session_id=str(uuid.uuid4()),
-                last_active_at=now,
+            return thread_id
+
+        # 신규 세션 생성
+        new_thread_id = str(uuid4())
+
+        # 동시 요청에서 서로 다른 ID가
+        # 덮어쓰이지 않도록 NX 사용
+        created = await client.set(
+            key,
+            new_thread_id,
+            ex=SESSION_TTL_SECONDS,
+            nx=True,
+        )
+
+        if created:
+            return new_thread_id
+
+        # 다른 요청이 먼저 생성한 경우
+        thread_id = await client.get(key)
+
+        if thread_id is None:
+            raise RuntimeError(
+                "Session creation race detected."
             )
-            self._sessions[key] = session
-            return session.session_id
 
-        session.last_active_at = now
-        return session.session_id
+        if isinstance(thread_id, bytes):
+            thread_id = thread_id.decode("utf-8")
+
+        await client.expire(
+            key,
+            SESSION_TTL_SECONDS,
+        )
+
+        return thread_id
 
 
 session_manager = SessionManager()

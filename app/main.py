@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import asyncio
-from contextlib import asynccontextmanager
+from contextlib import (
+    asynccontextmanager,
+    AsyncExitStack,
+)
 
 from dotenv import load_dotenv
 from fastapi import FastAPI
@@ -22,6 +25,9 @@ from core.deep_agent.agent import (
 from core.database.redis import (
     close_redis_client,
 )
+from core.state.mongo_checkpointer import (
+    create_mongo_checkpointer,
+)
 from integrations.device_job.client import (
     close_device_job_client,
     init_device_job_client,
@@ -38,6 +44,9 @@ from tools.integrations.meta_ads_mcp.runtime import (
 from app.api.device_callback import (
     router as device_job_router,
 )
+from core.deep_agent.reload_manager import (
+    agent_reload_manager,
+)
 
 
 @asynccontextmanager
@@ -49,45 +58,62 @@ async def lifespan(
     device_job_started = False
 
     app.state.background_tasks = set()
-    try:
-        # 1. 외부 리소스 시작
-        await meta_ads_runtime.start()
-        meta_ads_started = True
 
-        await google_workspace_runtime.start()
-        google_workspace_started = True
+    async with AsyncExitStack() as stack:
+        try:
+            # 1. 외부 리소스 시작
+            await meta_ads_runtime.start()
+            meta_ads_started = True
 
-        await init_device_job_client()
-        device_job_started = True
+            await google_workspace_runtime.start()
+            google_workspace_started = True
 
-        # 2. Agent 등록
-        # =====================================================
-        await register_all_agents()
+            await init_device_job_client()
+            device_job_started = True
 
-        # =====================================================
-        # 3. Agent / Tool 정보를 DB와 동기화
-        # =====================================================
-        await sync_agents_to_db()
+            # 2. SubAgent 등록
+            await register_all_agents()
 
-        # 4. DeepAgent 생성
-        app.state.deep_agent = (
-            await create_deep_agent()
-        )
+            await sync_agents_to_db()
 
-        yield
+            # 3. MongoDB Checkpointer 초기화
+            checkpointer = stack.enter_context(
+                create_mongo_checkpointer()
+            )
 
-    finally:
-        # 역순으로 종료
-        if device_job_started:
-            await close_device_job_client()
+            # Agent 재생성 시 재사용
+            app.state.checkpointer = checkpointer
 
-        await close_redis_client()
+            # 4. Prompt / Skill version 초기화
+            await agent_reload_manager.initialize()
 
-        if google_workspace_started:
-            await google_workspace_runtime.stop()
+            # 5. Deep Agent 생성
+            app.state.deep_agent = (
+                await create_deep_agent(
+                    checkpointer=checkpointer,
+                )
+            )
 
-        if meta_ads_started:
-            await meta_ads_runtime.stop()
+            yield
+
+        finally:
+            # 6. 외부 리소스 종료
+            try:
+                if device_job_started:
+                    await close_device_job_client()
+            finally:
+                try:
+                    if google_workspace_started:
+                        await google_workspace_runtime.stop()
+                finally:
+                    try:
+                        if meta_ads_started:
+                            await meta_ads_runtime.stop()
+                    finally:
+                        await close_redis_client()
+
+            # AsyncExitStack 종료 시
+            # MongoDBSaver 연결 자동 종료
 
 
 app = FastAPI(

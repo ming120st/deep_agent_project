@@ -7,10 +7,9 @@ from langchain.agents.middleware import (
 from deepagents.backends.filesystem import (
     FilesystemBackend,
 )
-from langgraph.checkpoint.memory import (
-    InMemorySaver,
+from langgraph.checkpoint.base import (
+    BaseCheckpointSaver,
 )
-
 from core.llm.model_service import (
     model_service,
 )
@@ -41,7 +40,10 @@ from tools.common.planning.skill import (
     get_planning_skills,
     get_planning_skill,
 )
-
+from tools.common.intranet_publish.tool import (
+    publish_saved_intranet_post,
+    check_intranet_post_status,
+)
 import os
 
 
@@ -50,7 +52,9 @@ logger = get_logger(
 )
 
 
-async def create_deep_agent():
+async def create_deep_agent(
+    checkpointer: BaseCheckpointSaver,
+):
     system_prompt = await prompt_service.render(
         "deep_agent.main.system",
     )
@@ -77,10 +81,16 @@ async def create_deep_agent():
 
             # 특정 Planning Skill 본문 조회
             get_planning_skill,
+            
+            # MongoDB에 저장된 HTML 게시
+            publish_saved_intranet_post,
+
+            # 인트라넷 게시 상태 확인
+            check_intranet_post_status,
         ],
         system_prompt=system_prompt,
         state_schema=MainDeepAgentState,
-        checkpointer=InMemorySaver(),
+        checkpointer=checkpointer,
         backend=FilesystemBackend(
             root_dir=os.environ[
                 "DEEP_AGENT_ROOT_DIR"
