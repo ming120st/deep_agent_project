@@ -33,3 +33,8 @@ yh_memo.md
 
 # 로컬 인증서
 certs/
+
+# output
+*.html
+*.zip
+*.json
