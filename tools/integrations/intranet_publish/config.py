@@ -73,5 +73,5 @@ class PublishSettings:
 
 
 def blob_connection_string() -> str:
-    """BOA's .env uses AZURE_BLOB_CONNECTION_STRING; AZURE_STORAGE_CONNECTION_STRING is accepted too."""
-    return os.getenv("AZURE_BLOB_CONNECTION_STRING") or os.getenv("AZURE_STORAGE_CONNECTION_STRING") or ""
+    """BOA's .env uses AZURE_STORAGE_CONNECTION_STRING; AZURE_STORAGE_CONNECTION_STRING is accepted too."""
+    return os.getenv("AZURE_STORAGE_CONNECTION_STRING") or os.getenv("AZURE_STORAGE_CONNECTION_STRING") or ""

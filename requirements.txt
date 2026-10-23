@@ -19,8 +19,4 @@ tzdata==2026.3
 uv==0.12.10
 openpyxl
 tavily-python
-<<<<<<< Updated upstream
 azure-storage-blob==12.31.0
-=======
-httpx
->>>>>>> Stashed changes

@@ -172,8 +172,11 @@ class AgentReloadManager:
                 print(
                     "[DEEP_AGENT_RECREATE]"
                 )
+
                 app.state.deep_agent = (
-                    await create_deep_agent()
+                    await create_deep_agent(
+                        checkpointer=app.state.checkpointer,
+                    )
                 )
 
             return reloaded

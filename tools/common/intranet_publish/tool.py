@@ -16,10 +16,19 @@ from typing import Annotated, Any
 from langchain.tools import tool
 from langchain_core.runnables import RunnableConfig
 
-from integrations.intranet_publish import PublishError, get_publisher
-from integrations.intranet_publish.fetch import fetch_image
-from integrations.intranet_publish.post import IntranetPost
-from integrations.intranet_publish.validation import check_image
+from tools.integrations.intranet_publish import (
+    PublishError,
+    get_publisher,
+)
+from tools.integrations.intranet_publish.fetch import (
+    fetch_image,
+)
+from tools.integrations.intranet_publish.post import (
+    IntranetPost,
+)
+from tools.integrations.intranet_publish.validation import (
+    check_image,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -57,48 +66,118 @@ async def upload_intranet_image(
         return {"success": False, "error": {"code": "UNEXPECTED", "message": f"이미지 업로드 중 오류가 발생했습니다 ({type(exc).__name__})."}}
     return {"success": True, "filename": filename, "size": len(data)}
 
-
 @tool
-async def publish_intranet_post(
-    post_key: Annotated[str, "글 고유 ID. 영문/숫자/하이픈, 80자 이하. 같은 ID로 이미 올라간 글은 다시 올라가지 않는다. 예: ai-weekly-2026-W42"],
-    board: Annotated[str, "게시판 이름. genai(생성형AI게시판, 전 직원 공개) 또는 work(업무게시판)"],
-    title: Annotated[str, "게시글 제목. 한 줄, 200자 이하"],
-    body_html: Annotated[str, "인트라넷용으로 작성한 본문 HTML (intranet-html 스킬 규칙을 따른 것)"],
-    images: Annotated[list[str] | None, "본문에 쓴 이미지 파일명 목록. [\"header.png\"]. upload_intranet_image로 먼저 올린 파일만 가능"] = None,
-    recipients: Annotated[list[str] | None, "수신자 이름 목록. work 게시판에서만, 정확한 이름, 최대 20명"] = None,
-    config: RunnableConfig = None,
+async def publish_saved_intranet_post(
+    job_id: Annotated[
+        str,
+        "generate_weekly_html이 반환한 job_id"
+    ],
+    config: RunnableConfig,
 ) -> dict[str, Any]:
-    """인트라넷 게시판에 글을 올린다.
-
-    성공하면 {"success": True, "status": "pending", "job_id": ...}를 돌려준다.
-    pending은 요청이 접수됐다는 뜻이고 실제 게시 결과는 잠시 뒤 나온다
-    (check_intranet_post_status로 확인하거나 구글챗 알림으로 온다).
-    입력이 잘못되면 {"success": False, "error": {...}}를 돌려주니, message와 details를 읽고
-    본문이나 인자를 고쳐서 다시 호출한다. 게시는 되돌릴 수 없으니 호출 전에 내용을 확인한다.
     """
-    thread_id = _cfg(config, "thread_id") or _cfg(config, "session_id")
+    generate_weekly_html에서 MongoDB에 저장한
+    HTML을 조회하여 인트라넷에 게시한다.
+    """
+
+    publisher = get_publisher()
+
+    # MongoDB에서 저장된 게시글 조회
+    saved_post = await publisher.store.get(job_id)
+
+    if saved_post is None:
+        return {
+            "success": False,
+            "error": {
+                "code": "NOT_FOUND",
+                "message": "저장된 게시글을 찾을 수 없습니다.",
+            },
+        }
+
+    if saved_post.get("status") != "generated":
+        return {
+            "success": False,
+            "error": {
+                "code": "INVALID_STATUS",
+                "message": (
+                    "게시 가능한 generated 상태가 아닙니다. "
+                    f"현재 상태: {saved_post.get('status')}"
+                ),
+            },
+        }
+
+    body_html = saved_post.get("body_html")
+
+    if not isinstance(body_html, str) or not body_html.strip():
+        return {
+            "success": False,
+            "error": {
+                "code": "EMPTY_HTML",
+                "message": "저장된 HTML이 비어 있습니다.",
+            },
+        }
+
+    thread_id = (
+        _cfg(config, "thread_id")
+        or _cfg(config, "session_id")
+    )
+
     if not thread_id:
-        return {"success": False, "error": {"code": "NO_THREAD", "message": "thread_id를 찾을 수 없습니다."}}
+        return {
+            "success": False,
+            "error": {
+                "code": "NO_THREAD",
+                "message": "thread_id를 찾을 수 없습니다.",
+            },
+        }
+
+    space_id = _cfg(config, "space_id")
 
     notify = None
-    space_id = _cfg(config, "space_id")
+
     if space_id:
-        notify = {"space_id": space_id, "thread_name": _cfg(config, "google_thread_name")}
-
-    post = {"post_key": post_key, "board": board, "title": title, "body_html": body_html, "images": images or []}
+        notify = {
+            "space_id": space_id,
+            "thread_name": _cfg(
+                config,
+                "google_thread_name",
+            ),
+        }
     try:
-        result = await get_publisher().publish_post(
-            post, recipients=recipients, thread_id=thread_id, notify=notify
+        result = await publisher.publish_saved_post(
+            job_id=job_id,
+            thread_id=thread_id,
+            notify=notify,
         )
+
     except PublishError as exc:
-        logger.warning("[IntranetPublishTool] rejected: %s", exc.code)
-        return {"success": False, "error": exc.to_dict()}
-    except Exception as exc:  # 예기치 않은 오류: 모델에 내부 상세 정보를 노출하지 않음
-        logger.exception("[IntranetPublishTool] unexpected failure")
-        return {"success": False, "error": {"code": "UNEXPECTED", "message": f"게시 요청 중 오류가 발생했습니다 ({type(exc).__name__})."}}
-    return {"success": True, **result.to_dict()}
+        logger.warning(
+            "[IntranetPublishTool] saved publish rejected: %s",
+            exc.code,
+        )
+        return {
+            "success": False,
+            "error": exc.to_dict(),
+        }
 
+    except Exception as exc:
+        logger.exception(
+            "[IntranetPublishTool] saved publish failed"
+        )
+        return {
+            "success": False,
+            "error": {
+                "code": "UNEXPECTED",
+                "message": (
+                    "저장된 게시글 게시 중 오류가 발생했습니다 "
+                    f"({type(exc).__name__})."
+                ),
+            },
+        }
 
+    return {
+        "success": True,
+        **result.to_dict(),
+    }
 @tool
 async def check_intranet_post_status(
     job_id: Annotated[str, "publish_intranet_post가 돌려준 job_id"],
@@ -118,4 +197,4 @@ async def check_intranet_post_status(
     return {"success": True, **status}
 
 
-INTRANET_PUBLISH_TOOLS = [upload_intranet_image, publish_intranet_post, check_intranet_post_status]
+INTRANET_PUBLISH_TOOLS = [upload_intranet_image, publish_saved_intranet_post, check_intranet_post_status]

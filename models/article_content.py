@@ -15,7 +15,6 @@ class ContentSection(BaseModel):
         default_factory=list
     )
 
-
 class ArticleContent(BaseModel):
     """HTML 생성 전 확정된 콘텐츠."""
 
@@ -33,4 +32,9 @@ class ArticleContent(BaseModel):
 
     references: list[str] = Field(
         default_factory=list
+    )
+
+    youtube_videos: list[str] = Field(
+        default_factory=list,
+        description="HTML에서 iframe으로 출력할 YouTube URL 목록",
     )

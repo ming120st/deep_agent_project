@@ -159,8 +159,6 @@ class PromptRepository:
         return document.get(
             "version"
         )
-<<<<<<< Updated upstream
-=======
     
     async def get_active_planning_skill_refs(
         self,
@@ -213,7 +211,6 @@ class PromptRepository:
             })
 
         return result
->>>>>>> Stashed changes
 prompt_repository = PromptRepository(
     mongo_db
 )

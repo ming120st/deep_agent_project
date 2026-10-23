@@ -391,8 +391,6 @@ class PromptService:
             )
 
         return version
-<<<<<<< Updated upstream
-=======
     
     async def get_active_planning_skill_refs(
         self,
@@ -406,7 +404,6 @@ class PromptService:
             self.repository
             .get_active_planning_skill_refs()
         )
->>>>>>> Stashed changes
         
 # 애플리케이션 전역 PromptService
 prompt_service = PromptService(

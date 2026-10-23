@@ -6,7 +6,6 @@ from typing import (
 )
 
 from models.search_model import (
-    SearchPlan,
     SearchProfile,
     SearchQuery,
 )

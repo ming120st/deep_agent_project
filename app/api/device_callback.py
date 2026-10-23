@@ -19,7 +19,7 @@ from integrations.device_job.device_job_manager import (
 from integrations.device_job.schemas import (
     DeviceJobCallback,
 )
-from integrations.intranet_publish import (
+from tools.integrations.intranet_publish import (
     try_handle_callback as try_handle_intranet_publish_callback,
 )
 from integrations.google_chat.message_sender import (

@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
@@ -21,6 +20,9 @@ from agents.common.html_agent.html_generator import (
     HTMLGenerator,
 )
 from tools.integrations.intranet_publish.store import MongoPublishStore
+from tools.common.article_image.tool import (
+    upload_article_image,
+)
 import os
 
 KST = ZoneInfo("Asia/Seoul")
@@ -48,6 +50,8 @@ async def generate_weekly_html(
     search_id: str,
     board: Literal["genai", "work"] = "genai",
     post_key: str | None = None,
+    content_requirements: str = "",
+    youtube_urls: list[str] | None = None,
 ) -> dict:
     """
     MongoDB 검색 결과를 기반으로
@@ -88,6 +92,18 @@ async def generate_weekly_html(
 
     response = record.search_response
 
+    stored_youtube_urls = [
+        video.url
+        for video in record.youtube_results
+        if video.url
+    ]
+
+    resolved_youtube_urls = (
+        youtube_urls
+        if youtube_urls is not None
+        else stored_youtube_urls
+    )
+
     if not response.results:
         raise ValueError(
             "검색 결과가 없어 콘텐츠를 생성할 수 없습니다."
@@ -120,21 +136,56 @@ async def generate_weekly_html(
     writer = ContentWriter()
 
     article = await writer.write(
-        response=response
+        response=response,
+        content_requirements=content_requirements,
+        youtube_urls=resolved_youtube_urls,
     )
 
+    search_urls = {
+        item.url
+        for item in response.results
+        if item.url
+    }
+
+    selected_article_urls = list(
+        dict.fromkeys(
+            url
+            for section in article.sections
+            for url in section.source_urls
+            if url in search_urls
+        )
+    )
     # 4. 게시용 콘텐츠 MongoDB 저장
     await article_repository.save_article(
         search_id=search_id,
         post_key=post_key,
         article=article,
     )
+    # 5. 선정된 기사 이미지 자동 추출 및 Blob 업로드
+    uploaded_images = []
+    article_image_map = {}
 
-    # 5. SKILL 기반 HTML 생성
+    for article_url in selected_article_urls[:20]:
+        result = await upload_article_image.ainvoke({
+            "article_url": article_url,
+            "post_key": post_key,
+        })
+
+        if not result.get("success"):
+            continue
+
+        filename = result["filename"]
+
+        uploaded_images.append(filename)
+
+        article_image_map[article_url] = filename
+
+    # 6. SKILL 기반 HTML 생성
     generator = HTMLGenerator()
 
     html = await generator.generate(
-        article=article
+        article=article,
+        article_image_map=article_image_map,
     )
 
     if not html.strip():
@@ -142,7 +193,7 @@ async def generate_weekly_html(
             "HTML 생성 결과가 비어 있습니다."
         )
 
-    # 6. 게시용 데이터 구성
+    # 7. 게시용 데이터 구성
     now = datetime.now(KST)
 
     job_id = f"intranet-{board}-{post_key}"
@@ -154,10 +205,12 @@ async def generate_weekly_html(
         "board": board,
         "title": article.title,
         "body_html": html,
-        "images": [],
+        "images": uploaded_images,
         "recipients": [],
         "context": {
             "search_id": search_id,
+            "content_requirements": content_requirements,
+            "youtube_urls": article.youtube_videos,
         },
         "notify": {},
         "status": "generated",
@@ -168,7 +221,7 @@ async def generate_weekly_html(
         "updated_at": now,
     }
 
-    # 7. MongoDB 게시 레코드 저장
+    # 8. MongoDB 게시 레코드 저장
     publish_store = MongoPublishStore()
 
     existing = await publish_store.get(
@@ -191,7 +244,7 @@ async def generate_weekly_html(
         publish_record
     )
 
-    # 8. HTML 파일 저장
+    # 9. HTML 파일 저장
     root_dir = Path(
         os.environ["DEEP_AGENT_ROOT_DIR"]
     ).resolve()
@@ -213,7 +266,7 @@ async def generate_weekly_html(
         encoding="utf-8",
     )
 
-    # 9. 결과 반환
+    # 10. 결과 반환
     return {
         "success": True,
         "search_id": search_id,

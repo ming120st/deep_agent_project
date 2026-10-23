@@ -33,28 +33,30 @@ AGENT_LOADERS = {
     "html_agent":register_html_agent,
 }
 
-
-
-AGENT_LOADERS = {
-    "bigquery": register_bigquery_agent,
-    "notion": register_notion_agent,
-    "google_workspace": register_drive_agent,
-    "esim_replacement": (
-        register_esim_replacement_agent
-    ),
-    "meta_ads": register_meta_ads_agent,
-    "web_search": register_search_agent,
-}
-
-
 async def register_all_agents() -> None:
-    """
-    애플리케이션 시작 시
-    모든 SubAgent를 등록한다.
-    """
+    print(
+        "[DEBUG] register_all_agents 호출됨",
+        flush=True,
+    )
 
-    for loader in AGENT_LOADERS.values():
+    print(
+        "[DEBUG] 등록 대상:",
+        list(AGENT_LOADERS.keys()),
+        flush=True,
+    )
+
+    for agent_name, loader in AGENT_LOADERS.items():
+        print(
+            f"[DEBUG] 등록 시작: {agent_name}",
+            flush=True,
+        )
+
         await loader()
+
+        print(
+            f"[DEBUG] 등록 완료: {agent_name}",
+            flush=True,
+        )
 
 
 async def reload_agent(

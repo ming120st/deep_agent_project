@@ -6,6 +6,10 @@ from typing import Any
 import httpx
 from langchain_core.tools import tool
 
+from core.state.search_repository import (
+    search_repository,
+    YouTubeResult,
+)
 from core.tracing.logger import get_logger
 
 logger = get_logger("search.youtube")
@@ -209,20 +213,39 @@ _youtube_provider = (
 )
 
 
+
 @tool
 async def search_youtube_videos(
     query: str,
     max_results: int = 10,
+    search_id: str | None = None,
 ) -> list[dict[str, Any]]:
     """
-    YouTube에서 관련 영상을 검색한다.
+    YouTube 영상을 검색한다.
 
-    사용자가 한국어로 요청한 경우 한국어 검색어를 우선 사용한다.
+    search_id가 제공되면 해당 검색 기록에
+    결과를 추가 저장한다.
     """
 
-    return await (
-        _youtube_provider.search(
-            query=query,
-            max_results=max_results,
-        )
+    results = await _youtube_provider.search(
+        query=query,
+        max_results=max_results,
     )
+
+    if search_id is not None:
+        youtube_results = [
+            YouTubeResult.model_validate(item)
+            for item in results
+        ]
+
+        saved = await search_repository.save_youtube_results(
+            search_id=search_id,
+            youtube_results=youtube_results,
+        )
+
+        if not saved:
+            raise ValueError(
+                f"검색 기록을 찾을 수 없습니다: {search_id}"
+            )
+
+    return results

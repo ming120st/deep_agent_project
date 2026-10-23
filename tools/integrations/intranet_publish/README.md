@@ -70,7 +70,7 @@ URL은 device_agent가 가지고 있고 BOA는 이름만 보냅니다.
 
 | 이름 | 기본값 | |
 |---|---|---|
-| `AZURE_BLOB_CONNECTION_STRING` | (필수) | AccountKey 포함. `AZURE_STORAGE_CONNECTION_STRING`도 인식 |
+| `AZURE_STORAGE_CONNECTION_STRING` | (필수) | AccountKey 포함. `AZURE_STORAGE_CONNECTION_STRING`도 인식 |
 | `INTRANET_POST_BLOB_CONTAINER` | `wm-device-agent-ai` | |
 | `INTRANET_POST_DEVICE_TASK` | `post_intranet_board` | device_agent의 JOB_DISPATCH 이름 |
 | `INTRANET_POST_CALLBACK_TIMEOUT_MINUTES` | `10` | |

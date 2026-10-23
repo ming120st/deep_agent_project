@@ -6,6 +6,7 @@ from core.prompt.prompt_service import (
 from registry.agent_registry import (
     register_agent,
 )
+from tools.common.article_image.tool import upload_article_image
 from tools.common.html.generate_weekly_html import (
     generate_weekly_html,
 )
@@ -46,6 +47,7 @@ async def register_html_agent() -> None:
         prompt_key=HTML_AGENT_PROMPT_KEY,
 
         tools=[
+            upload_article_image,
             generate_weekly_html,
         ],
     )

@@ -31,7 +31,7 @@ class ImageBlobStore(Protocol):
 class AzureImageBlobStore:
     def __init__(self, connection_string: str, container: str) -> None:
         if not connection_string:
-            raise BlobConfigError("AZURE_BLOB_CONNECTION_STRING이 설정되지 않았습니다.")
+            raise BlobConfigError("AZURE_STORAGE_CONNECTION_STRING이 설정되지 않았습니다.")
         
         try:
             self._service = BlobServiceClient.from_connection_string(connection_string)

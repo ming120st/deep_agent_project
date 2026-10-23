@@ -21,7 +21,7 @@ from datetime import datetime, timezone
 from typing import Literal
 from uuid import uuid4
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from core.database.mongo import mongo_db
 from models.search_model import SearchResponse
@@ -33,6 +33,15 @@ SearchStatus = Literal[
     "failed",
 ]
 
+class YouTubeResult(BaseModel):
+    video_id: str
+    title: str
+    description: str = ""
+    channel_title: str = ""
+    published_at: str | None = None
+    thumbnail_url: str | None = None
+    url: str
+
 
 class SearchRecord(BaseModel):
     """MongoDB 검색 실행 기록."""
@@ -40,6 +49,9 @@ class SearchRecord(BaseModel):
     search_id: str
     status: SearchStatus
     search_response: SearchResponse
+    youtube_results: list[YouTubeResult] = Field(
+        default_factory=list
+    )
     created_at: datetime
     updated_at: datetime
 
@@ -51,6 +63,32 @@ class SearchRepository:
     def collection(self):
         """MongoDB 검색 결과 컬렉션."""
         return mongo_db[self.COLLECTION_NAME]
+
+    async def save_youtube_results(
+        self,
+        search_id: str,
+        youtube_results: list[YouTubeResult],
+    ) -> bool:
+        """
+        기존 search_id에 YouTube 검색 결과를 저장한다.
+        """
+
+        result = await self.collection.update_one(
+            {"_id": search_id},
+            {
+                "$set": {
+                    "youtube_results": [
+                        item.model_dump(mode="json")
+                        for item in youtube_results
+                    ],
+                    "updated_at": datetime.now(
+                        timezone.utc
+                    ),
+                }
+            },
+        )
+
+        return result.matched_count > 0
 
     async def save_search_response(
         self,
@@ -74,6 +112,7 @@ class SearchRepository:
                     mode="json"
                 )
             ),
+            "youtube_results": [],
             "created_at": now,
             "updated_at": now,
         }
@@ -105,15 +144,19 @@ class SearchRepository:
         return SearchRecord(
             search_id=document["_id"],
             status=document["status"],
-            search_response=(
-                SearchResponse.model_validate(
-                    document["search_response"]
-                )
+            search_response=SearchResponse.model_validate(
+                document["search_response"]
             ),
+            youtube_results=[
+                YouTubeResult.model_validate(item)
+                for item in document.get(
+                    "youtube_results", []
+                )
+            ],
             created_at=document["created_at"],
             updated_at=document["updated_at"],
         )
-
+    
     async def get_search_response(
         self,
         search_id: str,
