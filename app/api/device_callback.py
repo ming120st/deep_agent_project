@@ -106,7 +106,7 @@ async def device_callback(
 
     task_id = job_info.get("task_id")
     user_id = job_info.get("user_id")
-    configurable = {"thread_id": thread_id}
+    configurable = {"thread_id": thread_id, "session_id": thread_id}
     if task_id:
         configurable["task_id"] = task_id
     if user_id:
@@ -141,8 +141,8 @@ async def device_callback(
     )
 
     print(
-        "[DeviceCallback] resume result:",
-        result,
+        "[DeviceCallback] resume completed; job_id=",
+        callback.job_id,
     )
 
     # 5. Google Chat으로 에이전트 최종 응답 전송

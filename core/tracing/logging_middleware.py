@@ -16,6 +16,11 @@ from core.tracing.logger import (
 
 logger = get_logger("tool_logging")
 
+BROWSER_TOOLS = {
+    "start_browser", "browser_action", "get_browser_state", "close_browser",
+    "analyze_browser_screen", "execute_browser_task",
+}
+
 
 def _truncate_value(
     value: Any,
@@ -42,6 +47,8 @@ class ToolLoggingMiddleware(
         tool_name = tool_call["name"]
         tool_call_id = tool_call.get("id")
         args = tool_call.get("args", {})
+        sensitive = tool_name in BROWSER_TOOLS
+        logged_args = {"redacted": True} if sensitive else args
 
         session_id = (
             request.state.get(
@@ -50,12 +57,16 @@ class ToolLoggingMiddleware(
             if request.state
             else None
         )
+        if not session_id:
+            runtime = getattr(request, "runtime", None)
+            cfg = (getattr(runtime, "config", None) or {}).get("configurable", {})
+            session_id = cfg.get("session_id") or cfg.get("thread_id")
 
         logger.info(
             "[TOOL_CALL] id=%s name=%s args=%s",
             tool_call_id,
             tool_name,
-            _truncate_value(args),
+            _truncate_value(logged_args),
         )
 
         started_at = datetime.now(
@@ -86,11 +97,9 @@ class ToolLoggingMiddleware(
                         "type": "tool",
                         "tool_call_id": tool_call_id,
                         "tool_name": tool_name,
-                        "args": args,
+                        "args": logged_args,
                         "status": "success",
-                        "result": _truncate_value(
-                            result
-                        ),
+                        "result": "[browser result redacted]" if sensitive else _truncate_value(result),
                         "elapsed": elapsed,
                         "started_at": started_at,
                         "finished_at": datetime.now(
@@ -107,11 +116,12 @@ class ToolLoggingMiddleware(
                 - start
             )
 
-            logger.exception(
+            logger.error(
                 "[TOOL_ERROR] id=%s name=%s elapsed=%.2fs",
                 tool_call_id,
                 tool_name,
                 elapsed,
+                exc_info=not sensitive,
             )
 
             if session_id:
@@ -121,9 +131,9 @@ class ToolLoggingMiddleware(
                         "type": "tool",
                         "tool_call_id": tool_call_id,
                         "tool_name": tool_name,
-                        "args": args,
+                        "args": logged_args,
                         "status": "error",
-                        "error": str(exc),
+                        "error": type(exc).__name__ if sensitive else str(exc),
                         "elapsed": elapsed,
                         "started_at": started_at,
                         "finished_at": datetime.now(

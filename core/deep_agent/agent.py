@@ -58,6 +58,14 @@ async def create_deep_agent(
     system_prompt = await prompt_service.render(
         "deep_agent.main.system",
     )
+    system_prompt += (
+        "\n\n브라우저·마켓 관리자 로그인 요청은 market 서브에이전트에 위임하세요. "
+        "market은 설정된 서버 자격증명을 로그인 도구 내부에서 사용합니다. "
+        "위임 전에 사용자에게 ID·비밀번호를 요청하거나 직접 환경변수를 읽지 마세요. "
+        "자격증명 누락은 도구가 credentials_required를 반환한 경우에만 안내하며, "
+        "그때도 채팅으로 비밀번호를 받지 말고 서버 설정을 안내하세요. "
+        "인증 판정 설정 누락은 계정정보 누락과 구분하세요."
+    )
 
     subagents = await get_subagents()
 

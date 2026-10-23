@@ -14,6 +14,9 @@ from fastapi import (
     Request,
 )
 
+from integrations.device_job.device_job_manager import (
+    get_active_job_by_thread,
+)
 from core.state.session_manager import (
     session_manager,
 )
@@ -83,6 +86,28 @@ async def _process_google_chat(
         space_id=chat_message.space_id,
     )
     try:
+        # 진행 중인 device job이 있으면 새 요청을 받지 않는다.
+        # (이전 작업의 콜백이 새 run에 resume되어 결과가 섞이는 것을 방지)
+        active_job = await get_active_job_by_thread(
+            thread_id
+        )
+        if active_job:
+            logger.info(
+                "[ACTIVE_JOB_BLOCK] thread_id=%s job_id=%s status=%s",
+                thread_id,
+                active_job.get("job_id"),
+                active_job.get("status"),
+            )
+            await send_message(
+                space_name=chat_message.space_id,
+                message=(
+                    "이전 요청을 처리하는 중입니다. "
+                    "완료 안내가 올 때까지 기다린 뒤 다시 요청해 주세요."
+                ),
+                thread_name=google_thread_name,
+            )
+            return
+
         task_id = await _resolve_task_id(
             deep_agent=deep_agent,
             thread_id=thread_id,
@@ -105,9 +130,25 @@ async def _process_google_chat(
                 ),
             },
         )
+
+        # aget_state()용
         config = {
             "configurable": {
                 "thread_id": thread_id,
+            }
+        }
+
+        # 실행(ainvoke)용
+        run_config = {
+            "configurable": {
+                "thread_id": thread_id,
+                "session_id": thread_id,
+                "user_id": chat_message.user_email or chat_message.user_id,
+                "user_email": chat_message.user_email,
+                "google_user_id": chat_message.user_id,
+                "task_id": task_id,
+                "space_id": chat_message.space_id,
+                "google_thread_name": google_thread_name,
             }
         }
 
@@ -132,7 +173,7 @@ async def _process_google_chat(
                 "session_id": thread_id,
                 "task_id": task_id,
             },
-            config=config,
+            config=run_config,
         )
 
         after = await deep_agent.aget_state(config)
@@ -335,30 +376,14 @@ async def _resolve_task_id(
     deep_agent: Any,
     thread_id: str,
 ) -> str:
-    snapshot = await deep_agent.aget_state(
-        {
-            "configurable": {
-                "thread_id": (
-                    thread_id
-                ),
-            }
-        }
-    )
+    """
+    새 사용자 메시지(=새 run)마다 새 task_id를 발급한다.
 
-    existing_task_id = (
-        snapshot
-        .values
-        .get(
-            "task_id"
-        )
-    )
-
-    return (
-        existing_task_id
-        or str(
-            uuid4()
-        )
-    )
+    resume은 /device-callback에서 job 문서의 task_id를 그대로 사용하므로
+    이 함수를 거치지 않는다. 이전 turn의 task_id를 재사용하면
+    get_job_id_by_task_id가 '__already_done__'을 반환해 PC 요청이 전송되지 않는다.
+    """
+    return str(uuid4())
 
 
 def _on_background_task_done(

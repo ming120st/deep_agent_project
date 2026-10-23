@@ -47,6 +47,7 @@ from app.api.device_callback import (
 from core.deep_agent.reload_manager import (
     agent_reload_manager,
 )
+from tools.computer_use.service import computer_use_service
 
 
 @asynccontextmanager
@@ -60,6 +61,7 @@ async def lifespan(
     app.state.background_tasks = set()
 
     async with AsyncExitStack() as stack:
+        stack.push_async_callback(computer_use_service.shutdown)
         try:
             # 1. 외부 리소스 시작
             await meta_ads_runtime.start()

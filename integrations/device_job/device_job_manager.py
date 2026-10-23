@@ -59,7 +59,7 @@ async def get_job_info_by_job(job_id: str) -> dict | None:
     """job_id로 job 상세 정보(thread_id, is_cs_api 등) 조회."""
     doc = await boa_device_jobs_collection.find_one(
         {"job_id": job_id},
-        {"thread_id": 1, "status": 1, "is_cs_api": 1, "agent_name": 1, "task_id": 1, "space_id": 1, "google_thread_name": 1}
+        {"thread_id": 1, "status": 1, "is_cs_api": 1, "agent_name": 1, "task_id": 1, "space_id": 1, "google_thread_name": 1, "user_id": 1}
     )
     if not doc:
         print(f"[DeviceJob] job_id 없음: {job_id}")
@@ -68,6 +68,22 @@ async def get_job_info_by_job(job_id: str) -> dict | None:
         print(f"[DeviceJob] 이미 처리된/만료된 job: {job_id}, status={doc.get('status')}")
         return None
     return doc
+
+
+async def get_active_job_by_thread(thread_id: str) -> dict | None:
+    """
+    thread_id에 아직 끝나지 않은(pending/callback_received, 만료 전) job이 있으면 반환.
+    진행 중 작업이 있는 thread에 새 요청이 들어와 콜백이 엉뚱한 run에 resume되는 것을 막는 용도.
+    """
+    return await boa_device_jobs_collection.find_one(
+        {
+            "thread_id": thread_id,
+            "status": {"$in": ["pending", "callback_received"]},
+            "expires_at": {"$gt": datetime.utcnow()},
+        },
+        {"job_id": 1, "status": 1, "created_at": 1, "expires_at": 1},
+        sort=[("created_at", -1)],
+    )
 
 
 async def get_thread_id_by_job(job_id: str) -> str | None:

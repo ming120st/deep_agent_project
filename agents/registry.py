@@ -19,6 +19,9 @@ from agents.common.search_agent.agent import (
 from agents.common.html_agent.agent import (
     register_html_agent,
 )
+from agents.market.agent import (
+    register_market_agent,
+)
 
 
 AGENT_LOADERS = {
@@ -31,6 +34,7 @@ AGENT_LOADERS = {
     "meta_ads": register_meta_ads_agent,
     "web_search": register_search_agent,
     "html_agent":register_html_agent,
+    "market" : register_market_agent,
 }
 
 async def register_all_agents() -> None:

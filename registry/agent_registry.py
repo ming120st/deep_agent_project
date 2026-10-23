@@ -54,6 +54,8 @@ def _raw_subagent(
         ),
         "model": model,
         "tools": tools,
+        "middleware": agent.get("middleware", []),
+        "skills": agent.get("skills", []),
     }
 
 def register_agent(
